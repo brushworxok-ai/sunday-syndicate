@@ -221,7 +221,7 @@ export function createDemoLeague() {
   const settledBet = sideBets.find((bet) => bet.settlementStatus === 'settled');
   const finalText = [
     `Marcus Reed wins Week ${WEEK} at 12–2, one point ahead of Jordan Lee. Taylor Brooks finishes 8–6, while Chris Morgan closes at 7–7. Marcus also makes the biggest climb, moving from third to first.`,
-    `Side bet settled: Marcus defeated Jordan 12–11 and earned 25 virtual Badguy tokens. ${moderation.allowed[0].text}`,
+    `Side bet settled: Marcus defeated Jordan 12–11 and earned 25 virtual Badguy tokens. ${moderation.allowed[0]?.text ?? ''}`,
     'Commissioner’s note: All 14 game results are verified; next week’s picks lock Thursday at 7:15 PM CT.',
   ].join('\n\n');
   const recap = {
@@ -237,7 +237,7 @@ export function createDemoLeague() {
       winnerScore: winner.score,
       rankings: leaderboard.map(({ playerId, rank, score }) => ({ playerId, rank, score })),
       biggestRisePlayerId: biggestRise.playerId,
-      settledSideBetId: settledBet.id,
+      settledSideBetId: settledBet?.id ?? null,
     },
     moderationStatus: moderation.blocked.length ? 'passed_with_edits' : 'passed',
     moderation,
@@ -261,7 +261,7 @@ export function createDemoLeague() {
     { at: recap.adminApproval.approvedAt, event: 'recap.approved', detail: 'Commissioner approved edited message' },
     { at: broadcast.sentAt, event: 'broadcast.started', detail: '3 consented SMS recipients; 1 suppressed before provider call' },
     { at: '2025-11-24T05:49:00.000Z', event: 'delivery.fallback', detail: 'Jordan SMS failed; in-app fallback delivered' },
-    { at: settledBet.settledAt, event: 'side_bet.settled', detail: '25 virtual tokens awarded to Marcus from verified standings' },
+    { at: settledBet?.settledAt ?? broadcast.sentAt, event: 'side_bet.settled', detail: '25 virtual tokens awarded to Marcus from verified standings' },
   ];
 
   return {
