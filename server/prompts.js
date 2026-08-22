@@ -109,48 +109,6 @@ export const PROMPTS = {
     };
   },
 
-  weeklyRoast(payload = {}) {
-    const name = cleanText(payload.playerName, 40) || 'Player';
-    const roastLevel = ['clean', 'pg13', 'explicit', 'target'].includes(payload.roastLevel) ? payload.roastLevel : 'clean';
-    const isWinner = payload.isWinner === true;
-    const score = `${cleanNumber(payload.weekScore) ?? 0}/${cleanNumber(payload.weekTotal) ?? 0}`;
-    const rank = cleanNumber(payload.weekRank) ?? 0;
-    const memory = payload.seasonMemory ?? {};
-    const adultTier = ['explicit', 'target'].includes(roastLevel);
-
-    const voiceBase = [
-      'You are Jack, the AI commissioner of a private NFL pick-em league.',
-      'Your voice is barbershop-meets-sports-desk: confident, funny, urban, with natural slang like bruh, dawg, that boy cooked, no cap.',
-    ];
-
-    const voiceAdult = adultTier ? [
-      'This player has opted into adult language in a private, age-gated space.',
-      'You can use profanity naturally: "shit", "damn", "hell", "ass" flow freely.',
-      roastLevel === 'target' ? 'At this level you can say "nigga" as a term of camaraderie, like friends in the barbershop. Never as a slur or with hostility.' : '',
-    ].filter(Boolean) : [
-      'Keep language clean. No profanity. Be funny without cursing.',
-    ];
-
-    const rules = [
-      isWinner
-        ? `${name} WON the week. Celebrate them hard. Gas them up. No roast — only love for the champ.`
-        : `Write a short, pointed roast of ${name} who went ${score} this week (rank #${rank}).`,
-      'Use only the supplied facts. Never invent stats, injuries, or game results.',
-      'Never cross into slurs, threats, sexual content, or attacks on race, religion, sexuality, disability, family, health, appearance, or finances.',
-      'Return only the roast text with no quotation marks or preamble.',
-      'Maximum 40 words.',
-    ];
-
-    const memoryContext = memory.winPercentage != null
-      ? `Season stats: ${memory.winPercentage}% win rate, ${memory.correct ?? 0}/${memory.totalPicks ?? 0} all-time. Current streak: ${memory.currentStreak?.type ?? 'none'} x${memory.currentStreak?.length ?? 0}. Best week: ${memory.bestWeek?.correct ?? '?'} correct (Wk ${memory.bestWeek?.week ?? '?'}).`
-      : 'No prior season stats available.';
-
-    return {
-      systemInstruction: [...voiceBase, ...voiceAdult, ...rules].join(' '),
-      prompt: `Player: ${name}\nWeek score: ${score}\nRank: #${rank}\nWinner: ${isWinner}\n${memoryContext}`,
-    };
-  },
-
   assistant(payload = {}) {
     const supplied = payload.context ?? {};
     const context = {
@@ -264,6 +222,41 @@ export const PROMPTS = {
         'Use plain language, short paragraphs, and no more than 140 words.',
       ].join(' '),
       prompt: `League assistant request:\n${JSON.stringify(context)}`,
+    };
+  },
+
+  weeklyRoast(payload = {}) {
+    const playerName = cleanText(payload.playerName, 40) || 'A player';
+    const roastLevel = ['clean', 'pg13', 'explicit', 'target'].includes(payload.roastLevel) ? payload.roastLevel : 'clean';
+    const isWinner = payload.isWinner === true;
+    const weekScore = cleanNumber(payload.weekScore) ?? 0;
+    const weekTotal = cleanNumber(payload.weekTotal) ?? 0;
+    const weekRank = cleanNumber(payload.weekRank) ?? 0;
+    const memory = payload.seasonMemory;
+
+    const memoryLine = memory ? `Season stats: ${memory.correct ?? 0}/${memory.totalPicks ?? 0} correct (${memory.winPercentage ?? 0}%), streak ${memory.currentStreak?.type ?? 'none'} ${memory.currentStreak?.length ?? 0}, best week ${memory.bestWeek?.correct ?? '?'}/${memory.bestWeek?.total ?? '?'}.` : '';
+
+    const toneGuide = {
+      clean: 'Keep it G-rated. No swearing, no innuendo. Sports-only humor.',
+      pg13: 'Mild adult humor is fine. Light swearing (damn, hell). No slurs or personal attacks.',
+      explicit: 'Adult language is allowed (shit, ass, etc.). Keep it game-related. No slurs, threats, or protected-trait attacks.',
+      target: 'Go hard — full roast mode. Adult language allowed. Stay game-related. Never cross into slurs, threats, health, family, appearance, finances, or protected traits.',
+    }[roastLevel] ?? 'Keep it G-rated.';
+
+    return {
+      systemInstruction: [
+        'You are Jack, the AI commissioner of the 405 BADGUYS PARLAY NFL pick-em league.',
+        isWinner
+          ? `${playerName} WON this week. Celebrate them. Never roast a weekly winner — they earned their crown. Keep it hype and respectful.`
+          : `Write a pointed one-liner roast for ${playerName} based ONLY on their supplied pick results and season stats.`,
+        `Tone level: ${roastLevel}. ${toneGuide}`,
+        'Generate original jokes. Do not copy comedian routines, catchphrases, or copyrighted material.',
+        'Never cross into protected traits, real-life personal problems, family, health, appearance, finances, or threats.',
+        'Use only supplied facts. Do not invent scores, injuries, odds, or outcomes.',
+        'Return only the roast line, no quotation marks or preamble.',
+        'Maximum 35 words.',
+      ].join(' '),
+      prompt: `Player: ${playerName}. Week score: ${weekScore}/${weekTotal}. Rank: #${weekRank}. Winner: ${isWinner}. ${memoryLine}`,
     };
   },
 };

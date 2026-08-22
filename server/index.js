@@ -35,7 +35,8 @@ import {
   respondToSideBet,
   settleSideBetFromLeague,
 } from './leagueService.js';
-import { applyDeliveryStatus, createSmsProvider, sendApprovedRecap, sendJackBroadcast } from './messagingService.js';
+import { applyDeliveryStatus, createSmsProvider, sendTextBeltRaw, sendApprovedRecap, sendJackBroadcast } from './messagingService.js';
+import { randomInt } from 'node:crypto';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
@@ -78,7 +79,90 @@ app.get('/api/health', (_request, response) => {
         ? Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_MESSAGING_SERVICE_SID)
         : true,
     adminConfigured: Boolean(process.env.ADMIN_PASSWORD || !isProduction),
+    ttsProvider: String(process.env.JACK_TTS_PROVIDER ?? 'browser').toLowerCase(),
+    ttsConfigured: String(process.env.JACK_TTS_PROVIDER ?? '').toLowerCase() === 'elevenlabs'
+      ? Boolean(process.env.JACK_TTS_API_KEY && process.env.JACK_TTS_VOICE_ID)
+      : false,
   });
+});
+
+/* ── OTP verification (TextBelt) ── */
+const OTP_STORE = new Map(); // key: phoneE164, value: { code, expiresAt, attempts }
+const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_COOLDOWN_MS = 60 * 1000; // 1 minute between sends
+const OTP_LAST_SENT = new Map(); // rate-limit per phone
+
+// Clean expired OTPs every 2 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of OTP_STORE) {
+    if (now > entry.expiresAt) OTP_STORE.delete(key);
+  }
+  for (const [key, ts] of OTP_LAST_SENT) {
+    if (now - ts > OTP_COOLDOWN_MS * 2) OTP_LAST_SENT.delete(key);
+  }
+}, 120_000);
+
+app.post('/api/otp/send', asyncRoute(async (request, response) => {
+  let digits = String(request.body?.phone ?? '').replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  if (digits.length !== 10) return response.status(422).json({ error: 'Enter a valid 10-digit US phone number.' });
+  const phoneE164 = `+1${digits}`;
+
+  // Rate limit: 1 send per phone per minute
+  const lastSent = OTP_LAST_SENT.get(phoneE164);
+  if (lastSent && Date.now() - lastSent < OTP_COOLDOWN_MS) {
+    const waitSec = Math.ceil((OTP_COOLDOWN_MS - (Date.now() - lastSent)) / 1000);
+    return response.status(429).json({ error: `Wait ${waitSec}s before requesting another code.` });
+  }
+
+  // Generate 6-digit code
+  const code = String(randomInt(100000, 999999));
+  OTP_STORE.set(phoneE164, { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0 });
+  OTP_LAST_SENT.set(phoneE164, Date.now());
+
+  // Send via TextBelt (or skip in demo mode)
+  if (process.env.SMS_PROVIDER === 'textbelt' && process.env.TEXTBELT_API_KEY) {
+    try {
+      await sendTextBeltRaw({ phone: phoneE164, text: `405 BadGuys Parlay: Your verification code is ${code}. Expires in 5 min.`, apiKey: process.env.TEXTBELT_API_KEY });
+    } catch (error) {
+      console.error('OTP send error:', error.message);
+      OTP_STORE.delete(phoneE164);
+      return response.status(502).json({ error: 'Failed to send verification code. Try again.' });
+    }
+  } else {
+    // Demo mode — log the code for testing
+    console.log(`[DEMO OTP] ${phoneE164}: ${code}`);
+  }
+
+  return response.json({ sent: true, expiresIn: OTP_TTL_MS / 1000 });
+}));
+
+app.post('/api/otp/verify', (request, response) => {
+  let digits = String(request.body?.phone ?? '').replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  if (digits.length !== 10) return response.status(422).json({ error: 'Invalid phone number.' });
+  const phoneE164 = `+1${digits}`;
+  const code = String(request.body?.code ?? '').replace(/\D/g, '');
+
+  const entry = OTP_STORE.get(phoneE164);
+  if (!entry) return response.status(410).json({ error: 'No code found for this number. Request a new one.' });
+  if (Date.now() > entry.expiresAt) {
+    OTP_STORE.delete(phoneE164);
+    return response.status(410).json({ error: 'Code expired. Request a new one.' });
+  }
+  entry.attempts += 1;
+  if (entry.attempts > OTP_MAX_ATTEMPTS) {
+    OTP_STORE.delete(phoneE164);
+    return response.status(429).json({ error: 'Too many attempts. Request a new code.' });
+  }
+  if (entry.code !== code) {
+    return response.status(401).json({ error: `Wrong code. ${OTP_MAX_ATTEMPTS - entry.attempts} attempts left.` });
+  }
+  // Success — mark phone as verified
+  OTP_STORE.delete(phoneE164);
+  return response.json({ verified: true, phoneE164 });
 });
 
 app.post('/api/auth/admin', (request, response) => auth.login(request, response));
@@ -179,17 +263,16 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
     return response.status(409).json({ error: 'That name is taken in this league. Add a last initial or nickname.' });
   }
 
+  // OTP must have been verified for this phone before registration completes
+  const otpVerified = request.body?.otpVerified === true;
   const at = new Date().toISOString();
   const player = {
     id: `player-${randomUUID()}`,
     name,
     phone: `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`,
     phoneE164,
-    // Private friends league: the player entered their own number and consented
-    // at signup. STOP via SMS always opts them back out. A production public
-    // launch should replace this with OTP verification (Twilio Verify).
-    phoneVerifiedAt: at,
-    messaging: { smsConsent: 'opted_in', consentedAt: at, resultsChannel: 'sms_and_in_app' },
+    phoneVerifiedAt: otpVerified ? at : null,
+    messaging: { smsConsent: otpVerified ? 'opted_in' : 'pending', consentedAt: otpVerified ? at : null, resultsChannel: 'sms_and_in_app' },
     trashTalk: {
       level: 'competitive', // maps to the league's explicit default
       updatedAt: at,

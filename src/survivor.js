@@ -16,6 +16,32 @@ export function findTeamGame(games, team) {
  * Derive the full survivor pool state from raw picks, players, and results.
  * This is a pure function — no mutations, no storage.
  */
+/**
+ * Validate a survivor pick before saving.
+ * Returns { ok: true } or { ok: false, error: 'reason' }.
+ */
+export function validateSurvivorPick({ playerId, week, team, survivorPicks = [], results = {}, players = [], isWeekLocked }) {
+  if (!team || !TEAMS[team]) return { ok: false, error: `${team || '(empty)'} is not a valid NFL team.` };
+  if (typeof isWeekLocked === 'function' && isWeekLocked(week)) return { ok: false, error: `Week ${week} is locked — picks are due before the first kickoff.` };
+
+  // Check the team actually plays this week
+  const weekGames = getGames(week);
+  const game = findTeamGame(weekGames, team);
+  if (!game) return { ok: false, error: `${TEAMS[team] || team} doesn't play in Week ${week}. Pick a team that's on the schedule.` };
+
+  // Check player is still alive
+  const pool = deriveSurvivorPool({ survivorPicks, players, results });
+  const entry = pool.entries.find((e) => e.playerId === playerId);
+  if (entry && !entry.alive) return { ok: false, error: `You were eliminated in Week ${entry.eliminatedWeek}. Better luck next season.` };
+
+  // Check team hasn't been used already by this player
+  const playerPicks = survivorPicks.filter((p) => p.playerId === playerId);
+  const alreadyUsed = playerPicks.find((p) => p.team === team && p.week !== week);
+  if (alreadyUsed) return { ok: false, error: `You already used ${TEAMS[team] || team} in Week ${alreadyUsed.week}. Each team can only be picked once all season.` };
+
+  return { ok: true };
+}
+
 export function deriveSurvivorPool({ survivorPicks = [], players = [], results = {} }) {
   // Group picks by player
   const byPlayer = new Map();

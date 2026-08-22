@@ -68,7 +68,10 @@ function App() {
   const [signupTeam, setSignupTeam] = useState('');
   const [signupAvatar, setSignupAvatar] = useState('');
   const [signupAvatarFile, setSignupAvatarFile] = useState(null);
-  const [signupStep, setSignupStep] = useState(1); // 1: info, 2: team+avatar
+  const [signupStep, setSignupStep] = useState(1); // 1: info, 2: team+avatar, 3: OTP verify
+  const [signupOtp, setSignupOtp] = useState('');
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [picks, setPicks] = useState({});
@@ -142,6 +145,13 @@ function App() {
     apiRequest('/api/auth/player/status').then(setPlayerSession).catch(() => {});
     loadLeague();
   }, [loadLeague]);
+
+  // Auto-fill chat name from player session
+  useEffect(() => {
+    if (playerSession.authenticated && playerSession.name && !chatName) {
+      setChatName(playerSession.name);
+    }
+  }, [playerSession.authenticated, playerSession.name]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -490,6 +500,7 @@ function App() {
     try {
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify(playerLogin) });
       setPlayerSession(session);
+      if (session.name) setChatName(session.name);
       setBetForm((current) => ({ ...current, creatorId: session.playerId, opponentId: current.opponentId === session.playerId ? proofLeague.players.find((player) => player.id !== session.playerId)?.id ?? '' : current.opponentId }));
       setPlayerLogin((current) => ({ ...current, pin: '' }));
       notify(`Signed in as ${session.name}.`);
@@ -671,6 +682,27 @@ function App() {
     reader.readAsDataURL(file);
   };
 
+  const sendOtpCode = async () => {
+    setOtpSending(true);
+    try {
+      await apiRequest('/api/otp/send', { method: 'POST', body: JSON.stringify({ phone: signupPhone }) });
+      notify('Verification code sent! Check your texts.');
+    } catch (error) { notify(error.message); }
+    setOtpSending(false);
+  };
+
+  const verifyOtpCode = async () => {
+    try {
+      const result = await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: signupPhone, code: signupOtp }) });
+      if (result.verified) {
+        setOtpVerified(true);
+        notify('Phone verified!');
+        return true;
+      }
+    } catch (error) { notify(error.message); }
+    return false;
+  };
+
   const handleSignup = async (event) => {
     event.preventDefault();
     // Step 1 validation
@@ -680,21 +712,38 @@ function App() {
       if (signupPin.length < 4) return notify('Create a 4-digit PIN.');
       return setSignupStep(2);
     }
-    // Step 2 validation
-    if (!signupTeam) return notify('Pick your favorite team — Jack needs to know who to roast.');
-    if (!signupAvatar && !signupAvatarFile) return notify('Choose an avatar or upload a pic.');
+    // Step 2 validation → advance to OTP step
+    if (signupStep === 2) {
+      if (!signupTeam) return notify('Pick your favorite team — Jack needs to know who to roast.');
+      if (!signupAvatar && !signupAvatarFile) return notify('Choose an avatar or upload a pic.');
+      setSignupStep(3);
+      // Auto-send OTP when entering step 3
+      setOtpSending(true);
+      try {
+        await apiRequest('/api/otp/send', { method: 'POST', body: JSON.stringify({ phone: signupPhone }) });
+        notify('Verification code sent! Check your texts.');
+      } catch (error) { notify(error.message); }
+      setOtpSending(false);
+      return;
+    }
+    // Step 3: verify OTP then register
+    if (!signupOtp || signupOtp.length < 6) return notify('Enter the 6-digit code from your text.');
     setServerBusy('register');
     try {
+      // Verify OTP first
+      const otpResult = await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: signupPhone, code: signupOtp }) });
+      if (!otpResult.verified) { setServerBusy(null); return notify('Verification failed. Try again.'); }
+      // Now register with verified phone
       const registered = await apiRequest(`/api/leagues/${LEAGUE_ID}/players/register`, {
         method: 'POST',
-        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar }),
+        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified: true }),
       });
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify({ playerId: registered.playerId, pin: signupPin }) });
       setPlayerSession(session);
       await loadLeague();
       setName(registered.name);
       setChatName(registered.name);
-      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam(''); setSignupAvatar(''); setSignupAvatarFile(null); setSignupStep(1);
+      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam(''); setSignupAvatar(''); setSignupAvatarFile(null); setSignupStep(1); setSignupOtp(''); setOtpVerified(false);
       setShowWelcome(false);
       notify(`Welcome to the 405 BadGuys Parlay, ${registered.name}! You're signed in and opted in to Jack's texts (reply STOP anytime).`);
       // Jack greets the new player with the house rules
@@ -780,6 +829,8 @@ function App() {
                     <span className={`signup-step ${signupStep >= 1 ? 'active' : ''}`}>1 · Info</span>
                     <span className="signup-step-line" />
                     <span className={`signup-step ${signupStep >= 2 ? 'active' : ''}`}>2 · Identity</span>
+                    <span className="signup-step-line" />
+                    <span className={`signup-step ${signupStep >= 3 ? 'active' : ''}`}>3 · Verify</span>
                   </div>
 
                   {signupStep === 1 && (<>
@@ -817,7 +868,35 @@ function App() {
 
                     <div className="signup-btn-row">
                       <button type="button" className="button button-ghost" onClick={() => setSignupStep(1)}>← Back</button>
-                      <button className="button button-primary" disabled={serverBusy === 'register'}>{serverBusy === 'register' ? 'Creating…' : 'Join the league →'}</button>
+                      <button className="button button-primary">Next · Verify phone →</button>
+                    </div>
+                  </>)}
+
+                  {signupStep === 3 && (<>
+                    <div className="otp-verify-section">
+                      <div className="otp-icon">📱</div>
+                      <p className="otp-heading">Verify your number</p>
+                      <p className="otp-subtext">We sent a 6-digit code to <strong>{signupPhone}</strong></p>
+                      <label>Verification code
+                        <input
+                          value={signupOtp}
+                          onChange={(e) => setSignupOtp(e.target.value.replace(/\D/g, ''))}
+                          placeholder="000000"
+                          maxLength="6"
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          autoFocus
+                          className="otp-input"
+                        />
+                      </label>
+                      <button type="button" className="otp-resend" onClick={sendOtpCode} disabled={otpSending}>
+                        {otpSending ? 'Sending…' : 'Resend code'}
+                      </button>
+                    </div>
+                    <div className="signup-btn-row">
+                      <button type="button" className="button button-ghost" onClick={() => { setSignupStep(2); setSignupOtp(''); }}>← Back</button>
+                      <button className="button button-primary" disabled={serverBusy === 'register' || signupOtp.length < 6}>{serverBusy === 'register' ? 'Verifying…' : 'Join the league →'}</button>
                     </div>
                   </>)}
                 </form>
@@ -1325,7 +1404,7 @@ function App() {
                   {chatMsgs.length ? chatMsgs.map((message) => <article className={message.name === chatName ? 'mine' : ''} key={message.id}><div><strong>{message.name}</strong><time>{new Date(message.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></div><p>{message.msg}</p></article>) : <div className="empty-chat"><span>"</span><p>No messages yet. The group chat is showing remarkable restraint.</p></div>}
                 </div>
                 <div className="composer">
-                  <input className="name-input" value={chatName} onChange={(event) => setChatName(event.target.value)} placeholder="Your name" maxLength="40" />
+                  <input className="name-input" value={chatName} onChange={(event) => setChatName(event.target.value)} placeholder="Your name" maxLength="40" readOnly={playerSession.authenticated && Boolean(playerSession.name)} style={playerSession.authenticated ? { opacity: 0.6, cursor: 'default' } : {}} />
                   {showEmoji && <div className="emoji-row">{EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => setChatInput((current) => current + emoji)}>{emoji}</button>)}</div>}
                   <div className="message-input"><button type="button" onClick={() => setShowEmoji((current) => !current)}>☺</button><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && sendChat()} placeholder="Write something you can defend later…" maxLength="400" /><button className="send" type="button" onClick={sendChat}>Send ↑</button></div>
                 </div>

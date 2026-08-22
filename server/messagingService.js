@@ -47,12 +47,56 @@ export class TwilioSmsProvider {
   }
 }
 
+export class TextBeltSmsProvider {
+  constructor({ apiKey }) {
+    this.name = 'TextBelt';
+    this.apiKey = apiKey;
+  }
+  async send({ player, text }) {
+    if (!player.phoneE164) {
+      const error = new Error('No E.164 phone number is stored for this player.');
+      error.code = 'missing_destination';
+      throw error;
+    }
+    const response = await fetch('https://textbelt.com/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: player.phoneE164, message: text, key: this.apiKey }),
+    });
+    const result = await response.json();
+    if (!result.success) {
+      const error = new Error(result.error || 'TextBelt delivery failed');
+      error.code = result.error?.includes('quota') ? 'quota_exceeded' : 'delivery_failed';
+      throw error;
+    }
+    return { status: 'delivered', id: String(result.textId ?? randomUUID()) };
+  }
+}
+
+/** Send a raw SMS to an E.164 number (not a player object) via TextBelt. */
+export async function sendTextBeltRaw({ phone, text, apiKey }) {
+  const response = await fetch('https://textbelt.com/text', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, message: text, key: apiKey }),
+  });
+  const result = await response.json();
+  if (!result.success) throw new Error(result.error || 'TextBelt delivery failed');
+  return { textId: result.textId };
+}
+
 export function createSmsProvider(env = process.env) {
-  if (env.SMS_PROVIDER !== 'twilio') return new DemoSmsProvider({ failedPlayerId: env.DEMO_SMS_FAILURE_PLAYER_ID || 'player-jordan' });
-  const required = ['TWILIO_ACCOUNT_SID', 'TWILIO_API_KEY', 'TWILIO_API_SECRET', 'TWILIO_MESSAGING_SERVICE_SID'];
-  const missing = required.filter((key) => !env[key]);
-  if (missing.length) throw new Error(`Twilio provider is missing: ${missing.join(', ')}`);
-  return new TwilioSmsProvider({ accountSid: env.TWILIO_ACCOUNT_SID, apiKey: env.TWILIO_API_KEY, apiSecret: env.TWILIO_API_SECRET, messagingServiceSid: env.TWILIO_MESSAGING_SERVICE_SID, statusCallback: env.TWILIO_STATUS_CALLBACK_URL });
+  if (env.SMS_PROVIDER === 'textbelt') {
+    if (!env.TEXTBELT_API_KEY) throw new Error('TextBelt provider is missing TEXTBELT_API_KEY');
+    return new TextBeltSmsProvider({ apiKey: env.TEXTBELT_API_KEY });
+  }
+  if (env.SMS_PROVIDER === 'twilio') {
+    const required = ['TWILIO_ACCOUNT_SID', 'TWILIO_API_KEY', 'TWILIO_API_SECRET', 'TWILIO_MESSAGING_SERVICE_SID'];
+    const missing = required.filter((key) => !env[key]);
+    if (missing.length) throw new Error(`Twilio provider is missing: ${missing.join(', ')}`);
+    return new TwilioSmsProvider({ accountSid: env.TWILIO_ACCOUNT_SID, apiKey: env.TWILIO_API_KEY, apiSecret: env.TWILIO_API_SECRET, messagingServiceSid: env.TWILIO_MESSAGING_SERVICE_SID, statusCallback: env.TWILIO_STATUS_CALLBACK_URL });
+  }
+  return new DemoSmsProvider({ failedPlayerId: env.DEMO_SMS_FAILURE_PLAYER_ID || 'player-jordan' });
 }
 
 export async function sendApprovedRecap({ store, leagueId, recapId, provider, actor = 'commissioner' }) {
@@ -67,7 +111,7 @@ export async function sendApprovedRecap({ store, leagueId, recapId, provider, ac
       deliveries.push({ playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: 'phone_not_verified', fallback: { channel: 'in_app', status: 'available' } });
       continue;
     }
-    if ((player.messaging ?? {}).smsConsent !== 'opted_in') {
+    if (player.messaging.smsConsent !== 'opted_in') {
       deliveries.push({ playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: 'sms_consent_not_active', fallback: { channel: 'in_app', status: 'available' } });
       continue;
     }

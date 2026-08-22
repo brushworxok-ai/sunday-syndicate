@@ -25,6 +25,18 @@
 body { margin: 0; min-width: 320px; min-height: 100vh; min-height: 100dvh; background: var(--bg); }
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
+
+/* ── Global Select Styling ── */
+select {
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7' fill='none'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px !important;
+  cursor: pointer;
+}
+select:focus { border-color: var(--neon); box-shadow: 0 0 0 3px rgba(57,255,20,.1); }
+select option { background: #1e1e2e; color: #e8e8f0; padding: 8px; }
 button:focus-visible, input:focus-visible { outline: 2px solid rgba(57,255,20,.4); outline-offset: 2px; }
 
 /* ── Shell ── */
@@ -59,7 +71,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(57,255,20,.4
 .more-menu-item { display: flex; align-items: center; gap: 14px; border: 0; background: transparent; width: 100%; padding: 14px 12px; border-radius: 12px; cursor: pointer; text-align: left; color: var(--ink); font-size: 14px; font-weight: 600; transition: background .15s; }
 .more-menu-item:hover, .more-menu-item:active { background: var(--glass); }
 .more-menu-item .menu-icon { font-size: 20px; width: 28px; text-align: center; }
-.more-menu-item span:last-child { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: auto; }
+.more-menu-item span:last-child { color: rgba(255,255,255,.45); font-size: 12px; font-weight: 400; margin-left: auto; }
 @keyframes slide-up { from { transform: translateY(100%); } }
 
 /* ── Welcome / Account Creation ── */
@@ -71,7 +83,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(57,255,20,.4
 .welcome-form { width: min(380px, 100%); background: var(--card); border: 1px solid var(--glass-border); border-radius: 16px; padding: 28px; text-align: left; }
 .welcome-form h2 { font-size: 20px; margin: 0 0 20px; color: #fff; text-align: center; }
 .welcome-form label { display: block; margin-bottom: 16px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-.welcome-form input { display: block; width: 100%; margin-top: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 13px 14px; color: var(--ink); font-size: 15px; }
+.welcome-form input, .welcome-form select { display: block; width: 100%; margin-top: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 10px; padding: 13px 14px; color: var(--ink); font-size: 15px; }
 .welcome-form input::placeholder { color: #444; }
 .welcome-form input:focus { border-color: var(--neon); box-shadow: 0 0 0 3px rgba(57,255,20,.1); }
 .welcome-form .button { margin-top: 8px; }
@@ -80,10 +92,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(57,255,20,.4
 .welcome-tabs button.active { background: var(--neon); color: #0a0a12; }
 
 /* Signup steps */
-.signup-steps { display: flex; align-items: center; gap: 0; margin-bottom: 20px; }
-.signup-step { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(255,255,255,0.3); padding: 6px 12px; border-radius: 20px; transition: all .3s; white-space: nowrap; }
-.signup-step.active { color: var(--neon); background: rgba(57,255,20,0.1); }
-.signup-step-line { flex: 1; height: 1px; background: rgba(255,255,255,0.1); margin: 0 4px; }
+.signup-steps { display: flex; align-items: center; gap: 0; margin-bottom: 22px; padding: 4px 0; }
+.signup-step { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(255,255,255,0.3); padding: 7px 14px; border-radius: 20px; transition: all .3s; white-space: nowrap; border: 1px solid transparent; }
+.signup-step.active { color: var(--neon); background: rgba(57,255,20,0.1); border-color: rgba(57,255,20,0.2); }
+.signup-step-line { flex: 1; height: 2px; background: rgba(255,255,255,0.08); margin: 0 2px; border-radius: 1px; }
+.signup-step.active ~ .signup-step-line { background: rgba(255,255,255,0.06); }
+.signup-step.active ~ .signup-step { color: rgba(255,255,255,0.25); }
 .signup-team-preview { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin: -8px 0 14px; border-radius: 12px; background: rgba(255,255,255,0.04); border: 1px solid rgba(57,255,20,0.2); }
 .signup-team-preview img { width: 32px; height: 32px; object-fit: contain; }
 .signup-team-preview strong { font-size: 0.88rem; color: #fff; }
@@ -238,10 +252,10 @@ main { padding: 24px 0 40px; }
 .paid-pill { color: var(--neon); background: rgba(57,255,20,.1); border-radius: 6px; padding: 5px 8px; font-family: 'DM Mono'; font-size: 8px; text-align: center; }
 
 /* ── Empty State ── */
-.empty-state { min-height: 340px; display: grid; place-items: center; align-content: center; text-align: center; border: 1px solid var(--glass-border); border-radius: 14px; background: var(--card); }
-.empty-state > span { font-family: 'Newsreader'; font-size: 54px; color: var(--muted); }
+.empty-state { min-height: 340px; display: grid; place-items: center; align-content: center; text-align: center; border: 1px solid var(--glass-border); border-radius: 14px; background: var(--card); background-image: radial-gradient(circle at 50% 20%, rgba(57,255,20,.03) 0%, transparent 60%); padding: 40px 24px; }
+.empty-state > span { font-family: 'Newsreader'; font-size: 54px; color: rgba(255,255,255,.25); filter: drop-shadow(0 0 12px rgba(57,255,20,.1)); }
 .empty-state h2 { font-size: 26px; margin: 8px 0 5px; color: #fff; }
-.empty-state p { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+.empty-state p { color: rgba(255,255,255,.5); margin: 0 0 20px; font-size: 13px; max-width: 280px; line-height: 1.5; }
 
 /* ── Standings ── */
 .table-head, .standing-row { display: grid; grid-template-columns: 100px 1fr 140px 120px; align-items: center; }
@@ -1048,6 +1062,26 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); }
+
+/* ── OTP Verification Step ── */
+.otp-verify-section { text-align: center; padding: 12px 0 8px; }
+.otp-icon { font-size: 2.4rem; margin-bottom: 8px; }
+.otp-heading { font-size: 1.1rem; font-weight: 700; color: #fff; margin: 0 0 4px; }
+.otp-subtext { font-size: 0.78rem; color: rgba(255,255,255,.55); margin: 0 0 16px; }
+.otp-subtext strong { color: var(--neon); font-weight: 600; }
+.otp-input {
+  text-align: center; font-size: 1.6rem; letter-spacing: 0.5em; font-weight: 700;
+  font-variant-numeric: tabular-nums; padding: 14px 8px !important;
+  background: rgba(255,255,255,.06); border: 1.5px solid rgba(255,255,255,.15);
+  border-radius: 10px; color: #fff; caret-color: var(--neon);
+}
+.otp-input:focus { border-color: var(--neon); box-shadow: 0 0 12px rgba(57,255,20,.15); }
+.otp-resend {
+  background: none; border: none; color: rgba(255,255,255,.5); font-size: 0.75rem;
+  cursor: pointer; margin-top: 10px; text-decoration: underline; padding: 4px 8px;
+}
+.otp-resend:hover { color: var(--neon); }
+.otp-resend:disabled { opacity: .4; cursor: wait; }
 
 /* Reduced motion: strip all animations */
 @media (prefers-reduced-motion: reduce) {
