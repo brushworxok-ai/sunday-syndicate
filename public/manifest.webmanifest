@@ -1,0 +1,31 @@
+{
+  "name": "405 BADGUYS PARLAY",
+  "short_name": "405 BADGUYS",
+  "description": "Weekly NFL pick sheets, standings, recaps, and league chat.",
+  "start_url": "/?view=home",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#070814",
+  "theme_color": "#11152b",
+  "shortcuts": [
+    { "name": "Make picks", "short_name": "Picks", "url": "/?view=picks" },
+    { "name": "View scores", "short_name": "Scores", "url": "/?view=results" },
+    { "name": "Ask Jack", "short_name": "Jack", "url": "/?view=join" }
+  ],
+  "icons": [
+    {
+      "src": "/jack.jpg",
+      "sizes": "1024x1024",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/notification-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

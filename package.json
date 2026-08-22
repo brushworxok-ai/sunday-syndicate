@@ -1,0 +1,37 @@
+{
+  "name": "405-badguys-parlay",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n web,api -c cyan,magenta \"vite --configLoader runner\" \"node --watch server/index.js\"",
+    "dev:web": "vite --configLoader runner",
+    "dev:api": "node --watch server/index.js",
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.js",
+    "db:seed": "node --env-file-if-exists=.env.local scripts/seed.js",
+    "db:seed:reset": "node --env-file-if-exists=.env.local scripts/seed.js --force",
+    "build": "vite build --configLoader runner",
+    "start": "node server/index.js",
+    "check": "npm run build && node --test"
+  },
+  "dependencies": {
+    "@google/genai": "^1.30.0",
+    "@neondatabase/serverless": "^1.0.2",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.6.2",
+    "helmet": "^8.3.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "stripe": "^22.5.0",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "concurrently": "^9.2.1",
+    "vite": "^7.2.2"
+  }
+}

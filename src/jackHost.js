@@ -1,0 +1,225 @@
+export const JACK_ROAST_LEVELS = ['clean', 'pg13', 'explicit', 'target'];
+
+export const JACK_ROAST_LABELS = {
+  clean: 'Clean',
+  pg13: 'PG-13',
+  explicit: 'Explicit Adult',
+  target: 'Commissioner’s Target',
+};
+
+export const JACK_AVATAR_STATES = ['idle', 'listening', 'thinking', 'talking', 'roast', 'winner', 'shock', 'live', 'error'];
+
+export const DEFAULT_JACK_SETTINGS = Object.freeze({
+  enabled: true,
+  privateAdultSpace: true,
+  ageGateRequired: true,
+  globalRoastCap: 'target',
+  defaultRoastLevel: 'explicit',
+  profanityLevel: 'adult',
+  winnerCelebrations: true,
+  adminApprovalRequired: true,
+  voice: {
+    enabled: true,
+    autoplay: false,
+    volume: 0.82,
+    speed: 0.94,
+    pitch: 0.78,
+    captions: true,
+    reducedAudio: false,
+    textOnly: false,
+    language: 'en-US',
+    profile: 'deep-warm-original',
+  },
+  animation: { enabled: true, reducedMotion: false },
+});
+
+const legacyLevel = { none: 'clean', light: 'pg13', competitive: 'explicit', maximum: 'target' };
+const mildProfanity = /\b(damn|hell|crap)\b/i;
+const strongProfanity = /\b(shit|bullshit|fuck|fucking|ass|asshole)\b/i;
+const prohibitedPersonalTopics = /\b(slur|racial|religion|sexual|sex life|kill|die|threat|wife|husband|mother|father|family|diagnos|health|disab|appearance|weight|salary|job|house|car|bank|debt|money problem|private life)\b/i;
+
+function clone(value) {
+  return value == null ? value : structuredClone(value);
+}
+
+function validLevel(value, fallback = 'clean') {
+  return JACK_ROAST_LEVELS.includes(value) ? value : fallback;
+}
+
+function lowerLevel(...levels) {
+  return levels.map((level) => JACK_ROAST_LEVELS.indexOf(validLevel(level)))
+    .reduce((lowest, value) => Math.min(lowest, value), JACK_ROAST_LEVELS.length - 1);
+}
+
+export function normalizeJackSettings(settings = {}) {
+  const jack = settings.jack ?? settings;
+  return {
+    ...clone(DEFAULT_JACK_SETTINGS),
+    ...clone(jack),
+    globalRoastCap: validLevel(jack.globalRoastCap, DEFAULT_JACK_SETTINGS.globalRoastCap),
+    profanityLevel: ['off', 'mild', 'adult'].includes(jack.profanityLevel) ? jack.profanityLevel : DEFAULT_JACK_SETTINGS.profanityLevel,
+    voice: normalizeJackVoiceSettings(jack.voice),
+    animation: { ...DEFAULT_JACK_SETTINGS.animation, ...(jack.animation ?? {}) },
+  };
+}
+
+export function normalizePlayerJackPolicy(player = {}) {
+  const stored = player.jackPolicy ?? player.trashTalk?.jackPolicy ?? {};
+  // League default is EXPLICIT for everyone. A player's explicit legacy choice
+  // (their trash-talk level) is still honored via strictest-wins, and any player
+  // can opt down or fully out at any time.
+  const legacy = legacyLevel[player.trashTalk?.level] ?? 'explicit';
+  const legacyOptOut = player.trashTalk?.level === 'none';
+  const explicitDefault = legacy === 'explicit' || legacy === 'target';
+  return {
+    playerConsentLevel: validLevel(stored.playerConsentLevel, legacy),
+    adminAssignedLevel: validLevel(stored.adminAssignedLevel, legacy),
+    roastEnabled: stored.roastEnabled ?? !legacyOptOut,
+    // Commissioner attests this is a private 18+ friends league; players at an
+    // explicit-or-higher level default to consented but may revoke in settings.
+    adultLanguageConsent: stored.adultLanguageConsent ?? explicitDefault,
+    adultAgeGate: stored.adultAgeGate ?? explicitDefault,
+    favoriteTeam: stored.favoriteTeam ?? player.favoriteTeam ?? null,
+    updatedAt: stored.updatedAt ?? player.trashTalk?.updatedAt ?? null,
+    updatedBy: stored.updatedBy ?? 'player',
+  };
+}
+
+export function resolveJackRoastPolicy({ player, leagueSettings, isWinner = false } = {}) {
+  const league = normalizeJackSettings(leagueSettings);
+  const policy = normalizePlayerJackPolicy(player);
+  const strictestIndex = lowerLevel(policy.playerConsentLevel, policy.adminAssignedLevel, league.globalRoastCap, 'target');
+  let effectiveLevel = JACK_ROAST_LEVELS[strictestIndex];
+  const adultSpaceReady = league.privateAdultSpace && (!league.ageGateRequired || policy.adultAgeGate) && policy.adultLanguageConsent;
+  if (!adultSpaceReady && ['explicit', 'target'].includes(effectiveLevel)) effectiveLevel = 'pg13';
+  const enabled = Boolean(league.enabled && policy.roastEnabled);
+  const roastAllowed = enabled && !isWinner;
+  const profanityAllowed = roastAllowed && league.profanityLevel !== 'off'
+    ? league.profanityLevel === 'adult' && adultSpaceReady && ['explicit', 'target'].includes(effectiveLevel) ? 'adult' : 'mild'
+    : 'off';
+  return {
+    enabled,
+    roastAllowed,
+    winnerProtected: Boolean(isWinner),
+    effectiveLevel: enabled ? effectiveLevel : 'off',
+    effectiveLabel: enabled ? JACK_ROAST_LABELS[effectiveLevel] : 'Roasting disabled',
+    profanityAllowed,
+    strictestLimit: 'platform → admin → player consent',
+    adultSpaceReady,
+    playerPolicy: policy,
+    leaguePolicy: league,
+  };
+}
+
+export function moderateJackMessage({ text, targetPlayer, leagueSettings, requestedLevel = 'clean', isWinner = false, groundedFactIds = [], availableFactIds = [] } = {}) {
+  const message = String(text ?? '').trim();
+  const policy = resolveJackRoastPolicy({ player: targetPlayer, leagueSettings, isWinner });
+  let reason = '';
+  if (!message) reason = 'empty_message';
+  else if (!policy.roastAllowed) reason = policy.winnerProtected ? 'winner_protected' : 'roasting_disabled';
+  else if (prohibitedPersonalTopics.test(message)) reason = 'personal_or_protected_topic';
+  else if (JACK_ROAST_LEVELS.indexOf(validLevel(requestedLevel)) > JACK_ROAST_LEVELS.indexOf(policy.effectiveLevel)) reason = 'requested_level_exceeds_strictest_limit';
+  else if (strongProfanity.test(message) && policy.profanityAllowed !== 'adult') reason = 'adult_language_not_allowed';
+  else if (mildProfanity.test(message) && policy.profanityAllowed === 'off') reason = 'profanity_disabled';
+  else if (!groundedFactIds.length || groundedFactIds.some((id) => !availableFactIds.includes(id))) reason = 'unsupported_or_missing_fact';
+  return {
+    decision: reason ? 'blocked' : 'allowed',
+    reason: reason || null,
+    text: message,
+    targetPlayerId: targetPlayer?.id ?? null,
+    requestedLevel: validLevel(requestedLevel),
+    policy,
+    groundedFactIds: [...groundedFactIds],
+  };
+}
+
+export function previewJackRoast({ player, leagueSettings, isWinner = false, fact = {} } = {}) {
+  const policy = resolveJackRoastPolicy({ player, leagueSettings, isWinner });
+  const name = player?.name ?? 'Player';
+  const score = `${Number(fact.correct ?? 0)}–${Number(fact.incorrect ?? 0)}`;
+  if (policy.winnerProtected) return { state: 'winner', text: `${name} owns the week at ${score}. Give the winner the floor—the roast line is locked.` };
+  if (!policy.roastAllowed) return { state: 'protected', text: `${name}: ${score}. Facts only; roasting is disabled.` };
+  const lines = {
+    clean: `${name} finished ${score}. That upset pick had confidence, heart, and absolutely no supporting evidence.`,
+    pg13: `${name} finished ${score}. That pick was a bad idea wearing a very confident hat.`,
+    explicit: `${name} went ${score} and I need everybody to see this sheet. This man watched a whole week of football and learned NOTHING — that's not a slump, that's a damn lifestyle.`,
+    target: `${name}: ${score}. Y'all seen this sheet? This ain't picks, this is a cry for help with a tiebreaker on it. The scoreboard didn't beat you — it filed a restraining order. Sit down, drink some water, try again Thursday.`,
+  };
+  return { state: 'roast', text: lines[policy.effectiveLevel], level: policy.effectiveLevel, profanityAllowed: policy.profanityAllowed };
+}
+
+export function buildPlayerSeasonMemory({ player, weeklyRecords = [], priorSeasons = [], rivalries = [] } = {}) {
+  const ordered = [...weeklyRecords].sort((a, b) => Number(a.week) - Number(b.week));
+  const totalPicks = ordered.reduce((total, week) => total + Number(week.correct ?? 0) + Number(week.incorrect ?? 0), 0);
+  const correct = ordered.reduce((total, week) => total + Number(week.correct ?? 0), 0);
+  const winPercentage = totalPicks ? Number(((correct / totalPicks) * 100).toFixed(1)) : 0;
+  let currentType = null; let currentLength = 0; let longestWin = 0; let longestLoss = 0;
+  for (const week of ordered) {
+    const type = week.weeklyWinner ? 'win' : 'loss';
+    if (type === currentType) currentLength += 1; else { currentType = type; currentLength = 1; }
+    if (type === 'win') longestWin = Math.max(longestWin, currentLength);
+    else longestLoss = Math.max(longestLoss, currentLength);
+  }
+  const bestWeek = ordered.length ? [...ordered].sort((a, b) => Number(b.correct) - Number(a.correct))[0] : null;
+  const worstWeek = ordered.length ? [...ordered].sort((a, b) => Number(a.correct) - Number(b.correct))[0] : null;
+  return {
+    playerId: player?.id ?? null,
+    favoriteTeam: player?.favoriteTeam ?? normalizePlayerJackPolicy(player).favoriteTeam,
+    totalPicks,
+    correct,
+    incorrect: totalPicks - correct,
+    winPercentage,
+    weeklyRecord: ordered.map((week) => ({ ...clone(week) })),
+    seasonRank: ordered.at(-1)?.seasonRank ?? null,
+    currentStreak: ordered.length ? { type: currentType, length: currentLength } : { type: 'none', length: 0 },
+    longestWinningStreak: longestWin,
+    longestLosingStreak: longestLoss,
+    bestWeek: bestWeek ? { week: bestWeek.week, correct: bestWeek.correct } : null,
+    worstWeek: worstWeek ? { week: worstWeek.week, correct: worstWeek.correct } : null,
+    upsetPicksWon: ordered.reduce((total, week) => total + Number(week.upsetPicksWon ?? 0), 0),
+    missedObviousCalls: ordered.reduce((total, week) => total + Number(week.missedObviousCalls ?? 0), 0),
+    favoriteTeamResults: ordered.map((week) => week.favoriteTeamResult).filter(Boolean),
+    rivalries: clone(rivalries),
+    priorSeasons: clone(priorSeasons),
+    leagueTitles: priorSeasons.reduce((total, season) => total + Number(season.titles ?? 0), 0),
+    groundedAt: ordered.at(-1)?.verifiedAt ?? priorSeasons.at(-1)?.verifiedAt ?? null,
+  };
+}
+
+export function buildWeeklyWinnerRecognition({ leaderboard = [], verified = false, tiebreaker = null, celebrationsEnabled = true } = {}) {
+  if (!verified) return { status: 'pending', winners: [], message: 'Winner pending. Jack will wait for verified final results.' };
+  if (!leaderboard.length) return { status: 'unavailable', winners: [], message: 'No verified player entries are available.' };
+  const topScore = Math.max(...leaderboard.map((entry) => Number(entry.score)));
+  const tied = leaderboard.filter((entry) => Number(entry.score) === topScore);
+  let winners = tied;
+  let resolution = tied.length > 1 ? 'co_winners' : 'highest_score';
+  if (tied.length > 1 && tiebreaker?.winnerId) {
+    winners = tied.filter((entry) => entry.playerId === tiebreaker.winnerId);
+    resolution = winners.length ? 'verified_tiebreaker' : 'co_winners';
+    if (!winners.length) winners = tied;
+  }
+  const names = winners.map((winner) => winner.name).join(' & ');
+  return {
+    status: winners.length > 1 ? 'co_winners' : 'winner',
+    winners: clone(winners),
+    protectedPlayerIds: winners.map((winner) => winner.playerId),
+    resolution,
+    celebrationEnabled: Boolean(celebrationsEnabled),
+    message: `${names} ${winners.length > 1 ? 'share' : 'owns'} the crown at ${topScore} correct. The reigning champ gets praised all week — roast immunity holds until a new winner is crowned.`,
+  };
+}
+
+export function normalizeJackVoiceSettings(settings = {}) {
+  const merged = { ...DEFAULT_JACK_SETTINGS.voice, ...(settings ?? {}) };
+  merged.volume = Math.min(1, Math.max(0, Number(merged.volume)));
+  merged.speed = Math.min(1.3, Math.max(0.7, Number(merged.speed)));
+  merged.pitch = Math.min(1.1, Math.max(0.6, Number(merged.pitch)));
+  if (merged.textOnly) { merged.enabled = false; merged.autoplay = false; }
+  if (merged.reducedAudio) merged.autoplay = false;
+  return merged;
+}
+
+export function nextJackAvatarState(requested, { animationEnabled = true, reducedMotion = false } = {}) {
+  if (!animationEnabled || reducedMotion) return { state: JACK_AVATAR_STATES.includes(requested) ? requested : 'idle', motion: 'static' };
+  return { state: JACK_AVATAR_STATES.includes(requested) ? requested : 'idle', motion: 'animated' };
+}
