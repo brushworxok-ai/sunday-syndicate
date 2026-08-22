@@ -74,7 +74,7 @@ const wrongTeam = (game, winner) => (winner === game.away ? game.home : game.awa
 
 function picksWithMisses(missedGameIds) {
   return Object.fromEntries(GAMES.map((game) => {
-    const winner = DEMO_RESULTS[game.id].winner;
+    const result = DEMO_RESULTS[game.id]; const winner = result ? result.winner : game.home;
     return [game.id, missedGameIds.includes(game.id) ? wrongTeam(game, winner) : winner];
   }));
 }
