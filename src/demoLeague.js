@@ -1,4 +1,4 @@
-import { DEMO_GAMES as GAMES, DEMO_SEASON, DEMO_WEEK as WEEK } from './data.js';
+import { GAMES, SEASON as DEMO_SEASON, WEEK } from './data.js';
 
 export const TONE_LEVELS = ['none', 'light', 'competitive', 'maximum'];
 
