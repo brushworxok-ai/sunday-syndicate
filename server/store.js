@@ -384,6 +384,30 @@ export class LeagueStore {
     return payout;
   }
 
+  startSeason(leagueId, { week = 1, actor = 'commissioner' } = {}) {
+    const demoIds = DEMO_LEAGUE.players.map((player) => player.id);
+    const placeholders = demoIds.map(() => '?').join(',');
+    const removed = this.db.prepare(`SELECT name FROM players WHERE league_id = ? AND id IN (${placeholders})`).all(leagueId, ...demoIds).map((row) => row.name);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare(`DELETE FROM player_credentials WHERE player_id IN (${placeholders})`).run(...demoIds);
+      this.db.prepare(`DELETE FROM consent_records WHERE league_id = ? AND player_id IN (${placeholders})`).run(leagueId, ...demoIds);
+      this.db.prepare(`DELETE FROM sheets WHERE league_id = ? AND player_id IN (${placeholders})`).run(leagueId, ...demoIds);
+      this.db.prepare(`DELETE FROM results WHERE league_id = ? AND verified_by = 'Commissioner Demo'`).run(leagueId);
+      this.db.prepare('DELETE FROM recaps WHERE league_id = ? AND id = ?').run(leagueId, DEMO_LEAGUE.recap.id);
+      const demoBetIds = DEMO_LEAGUE.sideBets.map((bet) => bet.id);
+      if (demoBetIds.length) this.db.prepare(`DELETE FROM side_bets WHERE league_id = ? AND id IN (${demoBetIds.map(() => '?').join(',')})`).run(leagueId, ...demoBetIds);
+      this.db.prepare('DELETE FROM broadcasts WHERE league_id = ? AND id = ?').run(leagueId, DEMO_LEAGUE.broadcast.id);
+      this.db.prepare(`DELETE FROM chat_messages WHERE league_id = ? AND player_id IN (${placeholders})`).run(leagueId, ...demoIds);
+      this.db.prepare(`DELETE FROM survivor_picks WHERE league_id = ? AND player_id IN (${placeholders})`).run(leagueId, ...demoIds);
+      this.db.prepare(`DELETE FROM players WHERE league_id = ? AND id IN (${placeholders})`).run(leagueId, ...demoIds);
+      this.db.prepare('UPDATE leagues SET week = ? WHERE id = ?').run(week, leagueId);
+      this.writeAudit(leagueId, 'season.started', `Season started at Week ${week}. Demo players removed: ${removed.join(', ') || 'none (already clean)'}`, actor, { removedCount: removed.length, week }, new Date().toISOString(), { inTransaction: true });
+      this.db.exec('COMMIT');
+      return { removed, week, playerCount: this.db.prepare('SELECT COUNT(*) AS count FROM players WHERE league_id = ?').get(leagueId).count };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
   writeAudit(leagueId, event, detail, actor = 'system', metadata = {}, at = new Date().toISOString(), { inTransaction = false } = {}) {
     this.db.prepare('INSERT INTO audit_logs (id, league_id, event_at, event, detail, actor, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), leagueId, at, event, detail, actor, stringify(metadata));
     return { leagueId, event, detail, actor, metadata, at, inTransaction };

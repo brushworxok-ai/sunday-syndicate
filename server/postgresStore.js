@@ -350,6 +350,31 @@ export class PostgresLeagueStore {
     });
   }
 
+  async startSeason(leagueId, { week = 1, actor = 'commissioner' } = {}) {
+    const demoPlayerIds = new Set(DEMO_LEAGUE.players.map((player) => player.id));
+    const containsDemoPlayer = (value) => {
+      const text = JSON.stringify(value ?? null);
+      return [...demoPlayerIds].some((id) => text.includes(id));
+    };
+    return this.mutateLeague(leagueId, (draft) => {
+      const removed = (draft.players ?? []).filter((player) => demoPlayerIds.has(player.id)).map((player) => player.name);
+      draft.players = (draft.players ?? []).filter((player) => !demoPlayerIds.has(player.id));
+      for (const id of demoPlayerIds) delete (draft.playerCredentials ?? {})[id];
+      draft.consentRecords = (draft.consentRecords ?? []).filter((record) => !demoPlayerIds.has(record.playerId));
+      draft.sheets = (draft.sheets ?? []).filter((sheet) => !demoPlayerIds.has(sheet.playerId));
+      draft.results = Object.fromEntries(Object.entries(draft.results ?? {}).filter(([, result]) => result?.verifiedBy !== 'Commissioner Demo'));
+      draft.recaps = (draft.recaps ?? []).filter((recap) => recap.id !== DEMO_LEAGUE.recap.id);
+      draft.sideBets = (draft.sideBets ?? []).filter((bet) => !containsDemoPlayer(bet));
+      draft.broadcasts = (draft.broadcasts ?? []).filter((broadcast) => broadcast.id !== DEMO_LEAGUE.broadcast.id && !containsDemoPlayer(broadcast.deliveries));
+      draft.chat = (draft.chat ?? []).filter((message) => !demoPlayerIds.has(message.playerId));
+      draft.survivorPicks = (draft.survivorPicks ?? []).filter((pick) => !demoPlayerIds.has(pick.playerId));
+      draft.payouts = (draft.payouts ?? []).filter((payout) => !containsDemoPlayer(payout));
+      draft.week = week;
+      draft.auditLog.push(auditEntry('season.started', `Season started at Week ${week}. Demo players removed: ${removed.join(', ') || 'none (already clean)'}`, actor, { removedCount: removed.length, week }));
+      return { removed, week, playerCount: draft.players.length };
+    });
+  }
+
   async writeAudit(leagueId, event, detail, actor = 'system', metadata = {}, at = new Date().toISOString()) {
     return this.mutateLeague(leagueId, (draft) => {
       const entry = auditEntry(event, detail, actor, metadata, at);

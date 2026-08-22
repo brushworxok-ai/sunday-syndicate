@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, SEASON, WEEK } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
 import { ModerationError } from './moderation.js';
-import { buildLeaderboard, scoreSheet } from '../src/demoLeague.js';
+import { DEMO_LEAGUE, buildLeaderboard, scoreSheet } from '../src/demoLeague.js';
 import {
   buildPlayerSeasonMemory,
   buildWeeklyWinnerRecognition,
@@ -88,14 +88,56 @@ app.post('/api/auth/player', asyncRoute((request, response) => playerAuth.login(
 app.delete('/api/auth/player', (request, response) => playerAuth.logout(request, response));
 app.get('/api/auth/player/status', asyncRoute((request, response) => playerAuth.status(request, response)));
 
+/* ── Season auto-start: purge demo players once the real season opens ──
+   Week 1's pick window opens 2 days before the first kickoff. From that
+   moment, any league still carrying the demo crew is cleaned automatically
+   the next time anyone loads it. Real registered players are untouched. */
+const DEMO_PLAYER_IDS = new Set(DEMO_LEAGUE.players.map((player) => player.id));
+const SEASON_OPENS_AT = (() => {
+  const firstKickoff = new Date(`${SCHEDULE[0].games[0].date}T00:00:00-04:00`);
+  firstKickoff.setDate(firstKickoff.getDate() - 2);
+  return firstKickoff;
+})();
+
+async function autoStartSeasonIfDue(league) {
+  if (!league) return league;
+  if (Date.now() < SEASON_OPENS_AT.getTime()) return league;
+  const hasDemoPlayers = (league.players ?? []).some((player) => DEMO_PLAYER_IDS.has(player.id));
+  if (!hasDemoPlayers) return league;
+  try {
+    await store.startSeason(league.id, { week: getCurrentWeek(), actor: 'season_auto_start' });
+    return await store.getLeague(league.id);
+  } catch (error) {
+    console.error('Season auto-start failed:', error.message);
+    return league;
+  }
+}
+
 app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
-  const league = await store.getLeague(request.params.leagueId);
+  const league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
   if (!league) return response.status(404).json({ error: 'League not found.' });
   return response.json(league);
 }));
 
+/* ── Manual season start: commissioner clears the demo crew on demand ── */
+app.post('/api/leagues/:leagueId/season/start', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const week = Number(request.body?.week) || getCurrentWeek();
+  const outcome = await store.startSeason(request.params.leagueId, { week, actor: request.actor });
+  return response.json({ ...outcome, message: outcome.removed.length ? `Removed ${outcome.removed.length} demo players: ${outcome.removed.join(', ')}. League set to Week ${week}.` : `League was already clean. Set to Week ${week}.` });
+}));
+
 app.post('/api/leagues/:leagueId/reset-demo', auth.requireAdmin, asyncRoute(async (request, response) => {
   if (request.params.leagueId !== leagueId) return response.status(404).json({ error: 'Demo league not found.' });
+  const existing = await store.getLeague(leagueId);
+  const realPlayers = (existing?.players ?? []).filter((player) => !DEMO_PLAYER_IDS.has(player.id));
+  if (realPlayers.length && !request.body?.confirmWipe) {
+    return response.status(409).json({
+      error: `This league has ${realPlayers.length} real registered player${realPlayers.length === 1 ? '' : 's'}. Resetting the demo would permanently erase them and all their picks. Send { "confirmWipe": true } only if you really mean it.`,
+      code: 'real_players_present',
+    });
+  }
   await store.seedDemo({ force: true });
   return response.json(await store.getLeague(leagueId));
 }));
