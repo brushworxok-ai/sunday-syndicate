@@ -4,7 +4,7 @@ export const JACK_ROAST_LABELS = {
   clean: 'Clean',
   pg13: 'PG-13',
   explicit: 'Explicit Adult',
-  target: 'Commissioner’s Target',
+  target: "Commissioner's Target",
 };
 
 export const JACK_AVATAR_STATES = ['idle', 'listening', 'thinking', 'talking', 'roast', 'winner', 'shock', 'live', 'error'];
@@ -14,8 +14,7 @@ export const DEFAULT_JACK_SETTINGS = Object.freeze({
   privateAdultSpace: true,
   ageGateRequired: true,
   globalRoastCap: 'target',
-  defaultRoastLevel: 'explicit',
-  profanityLevel: 'adult',
+  profanityLevel: 'mild',
   winnerCelebrations: true,
   adminApprovalRequired: true,
   voice: {
@@ -33,9 +32,9 @@ export const DEFAULT_JACK_SETTINGS = Object.freeze({
   animation: { enabled: true, reducedMotion: false },
 });
 
-const legacyLevel = { none: 'clean', light: 'pg13', competitive: 'explicit', maximum: 'target' };
+const legacyLevel = { none: 'clean', light: 'clean', competitive: 'pg13', maximum: 'target' };
 const mildProfanity = /\b(damn|hell|crap)\b/i;
-const strongProfanity = /\b(shit|bullshit|fuck|fucking|ass|asshole)\b/i;
+const strongProfanity = /\b(shit|bullshit|fuck|fucking|ass|asshole|nigga|niggas)\b/i;
 const prohibitedPersonalTopics = /\b(slur|racial|religion|sexual|sex life|kill|die|threat|wife|husband|mother|father|family|diagnos|health|disab|appearance|weight|salary|job|house|car|bank|debt|money problem|private life)\b/i;
 
 function clone(value) {
@@ -65,20 +64,14 @@ export function normalizeJackSettings(settings = {}) {
 
 export function normalizePlayerJackPolicy(player = {}) {
   const stored = player.jackPolicy ?? player.trashTalk?.jackPolicy ?? {};
-  // League default is EXPLICIT for everyone. A player's explicit legacy choice
-  // (their trash-talk level) is still honored via strictest-wins, and any player
-  // can opt down or fully out at any time.
-  const legacy = legacyLevel[player.trashTalk?.level] ?? 'explicit';
+  const legacy = legacyLevel[player.trashTalk?.level] ?? 'clean';
   const legacyOptOut = player.trashTalk?.level === 'none';
-  const explicitDefault = legacy === 'explicit' || legacy === 'target';
   return {
     playerConsentLevel: validLevel(stored.playerConsentLevel, legacy),
     adminAssignedLevel: validLevel(stored.adminAssignedLevel, legacy),
     roastEnabled: stored.roastEnabled ?? !legacyOptOut,
-    // Commissioner attests this is a private 18+ friends league; players at an
-    // explicit-or-higher level default to consented but may revoke in settings.
-    adultLanguageConsent: stored.adultLanguageConsent ?? explicitDefault,
-    adultAgeGate: stored.adultAgeGate ?? explicitDefault,
+    adultLanguageConsent: stored.adultLanguageConsent ?? false,
+    adultAgeGate: stored.adultAgeGate ?? false,
     favoriteTeam: stored.favoriteTeam ?? player.favoriteTeam ?? null,
     updatedAt: stored.updatedAt ?? player.trashTalk?.updatedAt ?? null,
     updatedBy: stored.updatedBy ?? 'player',
@@ -137,13 +130,13 @@ export function previewJackRoast({ player, leagueSettings, isWinner = false, fac
   const policy = resolveJackRoastPolicy({ player, leagueSettings, isWinner });
   const name = player?.name ?? 'Player';
   const score = `${Number(fact.correct ?? 0)}–${Number(fact.incorrect ?? 0)}`;
-  if (policy.winnerProtected) return { state: 'winner', text: `${name} owns the week at ${score}. Give the winner the floor—the roast line is locked.` };
-  if (!policy.roastAllowed) return { state: 'protected', text: `${name}: ${score}. Facts only; roasting is disabled.` };
+  if (policy.winnerProtected) return { state: 'winner', text: `${name} owns the week at ${score}. That's the champ right there. Jack only got love for the winner.` };
+  if (!policy.roastAllowed) return { state: 'protected', text: `${name}: ${score}. Facts only, no roast. Respect the boundary.` };
   const lines = {
-    clean: `${name} finished ${score}. That upset pick had confidence, heart, and absolutely no supporting evidence.`,
-    pg13: `${name} finished ${score}. That pick was a bad idea wearing a very confident hat.`,
-    explicit: `${name} went ${score} and I need everybody to see this sheet. This man watched a whole week of football and learned NOTHING — that's not a slump, that's a damn lifestyle.`,
-    target: `${name}: ${score}. Y'all seen this sheet? This ain't picks, this is a cry for help with a tiebreaker on it. The scoreboard didn't beat you — it filed a restraining order. Sit down, drink some water, try again Thursday.`,
+    clean: `${name} finished ${score}. That upset pick had all the confidence in the world and zero evidence to back it up.`,
+    pg13: `${name} finished ${score}. Bruh, that pick sheet looked like it was filled out during a fire drill. Do better.`,
+    explicit: `${name} finished ${score}. Dawg, that sheet was a damn mess. The scoreboard brought receipts and you got cooked.`,
+    target: `${name} finished ${score}. Nigga please. That sheet was straight garbage with cleats on. Every warning sign was wide open by ten yards.`,
   };
   return { state: 'roast', text: lines[policy.effectiveLevel], level: policy.effectiveLevel, profanityAllowed: policy.profanityAllowed };
 }
@@ -205,7 +198,7 @@ export function buildWeeklyWinnerRecognition({ leaderboard = [], verified = fals
     protectedPlayerIds: winners.map((winner) => winner.playerId),
     resolution,
     celebrationEnabled: Boolean(celebrationsEnabled),
-    message: `${names} ${winners.length > 1 ? 'share' : 'owns'} the crown at ${topScore} correct. The reigning champ gets praised all week — roast immunity holds until a new winner is crowned.`,
+    message: `${names} ${winners.length > 1 ? 'share' : 'owns'} the week at ${topScore} correct. Respect the work; the winner roast is off.`,
   };
 }
 

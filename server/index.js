@@ -3,9 +3,14 @@ import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
-// Twilio is optional — only needed for webhook signature validation
-let twilio;
-try { twilio = (await import('twilio')).default; } catch { twilio = null; }
+// Twilio is optional — lazy-loaded only when webhook routes are hit
+let _twilioModule;
+async function getTwilioModule() {
+  if (_twilioModule === undefined) {
+    try { _twilioModule = (await import('twilio')).default; } catch { _twilioModule = null; }
+  }
+  return _twilioModule;
+}
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -222,6 +227,7 @@ app.post('/api/leagues/:leagueId/chat', asyncRoute(async (request, response) => 
 }));
 
 app.post('/api/webhooks/twilio/status', asyncRoute(async (request, response) => {
+  const twilio = await getTwilioModule();
   const signature = request.get('X-Twilio-Signature');
   const webhookUrl = `${process.env.APP_BASE_URL ?? ''}${request.originalUrl}`;
   if (!twilio || !process.env.TWILIO_AUTH_TOKEN || !signature || !twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, webhookUrl, request.body)) return response.status(403).send('Invalid signature');
@@ -230,6 +236,7 @@ app.post('/api/webhooks/twilio/status', asyncRoute(async (request, response) => 
 }));
 
 app.post('/api/webhooks/twilio/inbound', asyncRoute(async (request, response) => {
+  const twilio = await getTwilioModule();
   const signature = request.get('X-Twilio-Signature');
   const webhookUrl = `${process.env.APP_BASE_URL ?? ''}${request.originalUrl}`;
   if (!twilio || !process.env.TWILIO_AUTH_TOKEN || !signature || !twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, webhookUrl, request.body)) return response.status(403).send('Invalid signature');
@@ -439,25 +446,25 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
 function buildLocalAssistantFallback(question, context) {
   const q = question.toLowerCase();
   if (q.includes('standing') || q.includes('winning') || q.includes('leader')) {
-    if (!context.standings?.length) return `No entries locked for ${context.weekLabel} yet. Once players submit their sheets, standings will appear on the Board tab.`;
+    if (!context.standings?.length) return `Ain't nobody locked in sheets for ${context.weekLabel} yet, bruh. Once players submit, the Board tab will light up.`;
     const top = context.standings.slice(0, 5).map((s, i) => `${i + 1}. ${s.name} — ${s.score} correct (TB ${s.tiebreaker})`).join('\n');
-    const winnerLine = context.weeklyWinner?.status === 'winner' ? `\n\nChampion of the week: ${context.weeklyWinner.winners[0]?.name}. Respect the work.` : '';
-    return `Current standings for ${context.weekLabel}:\n${top}${winnerLine}\n\nCheck the Board tab for live updates.`;
+    const winnerLine = context.weeklyWinner?.status === 'winner' ? `\n\nChamp of the week: ${context.weeklyWinner.winners[0]?.name}. That boy cooked. Respect the work.` : '';
+    return `Here's the standings for ${context.weekLabel}:\n${top}${winnerLine}\n\nHit the Board tab for live updates.`;
   }
   if (q.includes('rule') || q.includes('how') || q.includes('work')) {
-    return context.rules.join(' ');
+    return `Aight, here's how we run it: ${context.rules.join(' ')}`;
   }
   if (q.includes('game') || q.includes('schedule') || q.includes('matchup')) {
     const completed = context.games.filter((g) => g.winner).length;
-    return `${context.weekLabel} has ${context.totalGames} games on the board. ${completed} have posted final results so far. Head to the Picks tab to build your sheet.`;
+    return `${context.weekLabel} got ${context.totalGames} games on the board. ${completed} already in the books. Hit the Picks tab and get your sheet right.`;
   }
   if (q.includes('streak') || q.includes('record') || q.includes('season') || q.includes('stat')) {
     const memories = context.playerMemories ?? [];
-    if (!memories.length) return `No season stats available yet. Once players have a few weeks of picks, I'll have the full scouting report.`;
+    if (!memories.length) return `No season stats yet, dawg. Once we get a few weeks in, I'll have the full scouting report on everybody.`;
     const top = memories.slice(0, 5).map((m) => `${m.name}: ${m.winPercentage}% (${m.correct}/${m.totalPicks}), streak ${m.currentStreak?.type} ${m.currentStreak?.length}`).join('\n');
     return `Season stats so far:\n${top}`;
   }
-  return `I'm Jack, your league's AI commissioner. I can help with standings, rules, schedules, season stats, and more. The Gemini API isn't configured yet, so I'm running on local smarts — add GEMINI_API_KEY to .env for full AI power.`;
+  return `What's good — I"m Jack, your league's AI commissioner. I got standings, rules, schedules, season stats, all of it. The Gemini API ain"t hooked up yet so I'm running on local smarts. Drop GEMINI_API_KEY in the env and watch me really go to work.`;
 }
 
 /* ── Jack Settings (Admin) ── */
@@ -701,7 +708,7 @@ app.post('/api/leagues/:leagueId/reminders/picks', auth.requireAdmin, asyncRoute
   const when = deadline ? deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET' : 'first kickoff';
   const messages = missing.map((p) => ({
     playerId: p.id,
-    text: `🏈 BETIT: Jack here. Week ${week} sheets lock at ${when}${hoursLeft ? ` (~${hoursLeft}h from now)` : ''} and yours is still blank. Don't make me narrate your no-show all season. Get your picks in.`,
+    text: `🏈 BETIT: Ayo, it's Jack. Week ${week} sheets lock at ${when}${hoursLeft ? ` (~${hoursLeft}h)` : ''}. Yours is blank, dawg. You trippin if you think I won't clown you for a no-show. Get your picks in.`,
   }));
   const provider = createSmsProvider(process.env);
   const broadcast = await sendJackBroadcast({ store, leagueId: request.params.leagueId, provider, messages, actor: request.actor, kind: 'pick_reminder' });
@@ -732,10 +739,10 @@ app.post('/api/leagues/:leagueId/jack/broadcast', auth.requireAdmin, asyncRoute(
   // SMS is a carrier channel, not the private age-gated in-app space, so
   // texted roasts are capped at PG-13 no matter the player's in-app level.
   const smsRoastLine = (entry, memory, isWinner) => {
-    if (isWinner) return `You're the champ, ${entry.name.split(' ')[0]}. Jack only has compliments for you this week.`;
+    if (isWinner) return `${entry.name.split(' ')[0]}, that's you on top. Jack got nothing but love for the champ this week.`;
     const score = `${entry.score}/${weekGames.length}`;
-    const streak = memory?.currentStreak?.type === 'loss' && memory.currentStreak.length > 1 ? ` That's ${memory.currentStreak.length} rough weeks running.` : '';
-    return `Jack's verdict: ${score}. That sheet had confidence and not much else.${streak} Full roast waiting in the app.`;
+    const streak = memory?.currentStreak?.type === 'loss' && memory.currentStreak.length > 1 ? ` That's ${memory.currentStreak.length} rough weeks in a row, bruh.` : '';
+    return `Jack's verdict: ${score}. That sheet had confidence and not much else, dawg.${streak} Full roast waiting in the app.`;
   };
 
   const messages = [];

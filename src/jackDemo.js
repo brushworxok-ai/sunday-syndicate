@@ -100,7 +100,7 @@ export function createDemoAccount(input = {}) {
 }
 
 export function jackOnboardingMessage(account) {
-  return `Welcome to the 405, ${account.displayName}. I’m Jack—your league host. Your favorite team is ${account.favoriteTeam}, your setting is ${ROAST_MODE_LABELS[account.humor]}, and your next move is simple: review the facts, make every pick, and lock the sheet before kickoff.`;
+  return `Welcome to the 405, ${account.displayName}. I'm Jack—your league host. Your favorite team is ${account.favoriteTeam}, your setting is ${ROAST_MODE_LABELS[account.humor]}, and your next move is simple: review the facts, make every pick, and lock the sheet before kickoff.`;
 }
 
 export function buildJackDemoStandings(phase = 'before') {
@@ -130,7 +130,7 @@ export function buildJackPlayerComment(playerId, phase = 'after') {
     none: `${fact} No joke generated.`,
     light: `${fact} A rough bounce, but the week is still very much alive.`,
     competitive: `${fact} Avery called Kansas City and is currently accepting apologies in alphabetical order.`,
-    maximum: `${fact} Taylor’s Kansas City pick finally showed up; the rest of the sheet is still circling the parking lot.`,
+    maximum: `${fact} Taylor's Kansas City pick finally showed up; the rest of the sheet is still circling the parking lot.`,
   };
   return {
     playerId,
@@ -148,8 +148,8 @@ export function generateJackDemoRecap(phase = 'after') {
   const leader = standings[0];
   const commentary = JACK_DEMO_PLAYERS.map((player) => buildJackPlayerComment(player.id, phase));
   return {
-    title: 'Jack’s Take · History-aware live edition',
-    body: `Kansas City’s fourth-quarter touchdown flipped the simulated live board. ${leader.name} moved into first at ${leader.projectedScore} projected correct. In 2025, Avery finished first at 168–104 while Marcus finished second at 162–110. The game is still live, so these standings are a projection—not a final result.`,
+    title: "Jack's Take · History-aware live edition",
+    body: `Kansas City's fourth-quarter touchdown flipped the simulated live board. ${leader.name} moved into first at ${leader.projectedScore} projected correct. In 2025, Avery finished first at 168–104 while Marcus finished second at 162–110. The game is still live, so these standings are a projection—not a final result.`,
     commentary,
     jokes: commentary.filter((item) => item.targetedJoke).map((item) => ({ targetPlayerId: item.playerId, tone: item.mode, text: item.text })),
     jokeTargets: commentary.filter((item) => item.targetedJoke).map((item) => item.playerId),
