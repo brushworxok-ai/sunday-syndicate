@@ -1,83 +1,91 @@
 /**
- * survivor.js — Survivor side pool.
- *
- * Rules: pick ONE team to win each week. You can never reuse a team all
- * season. If your team loses (verified result), you're eliminated. Last
- * player standing wins the survivor pot.
- *
- * Elimination is DERIVED from verified results, never stored — so a score
- * correction automatically un-eliminates or eliminates the right people.
+ * Survivor pool logic — pick one team per week, never reuse.
+ * One loss and you're eliminated.
  */
 
-import { getGames, TEAMS } from './data.js';
+import { TEAMS, getGames } from './data.js';
 
-/** Find the game a team plays in a given week (null on bye). */
-export function findTeamGame(weekNum, team) {
-  return getGames(weekNum).find((g) => g.away === team || g.home === team) ?? null;
+/**
+ * Find the game a team plays in for a given week's games.
+ */
+export function findTeamGame(games, team) {
+  return games.find((g) => g.away === team || g.home === team) ?? null;
 }
 
 /**
- * Derive the full survivor pool state.
- * survivorPicks: [{ playerId, week, team, pickedAt }]
- * results: { [gameId]: { winner, verifiedAt } }
+ * Derive the full survivor pool state from raw picks, players, and results.
+ * This is a pure function — no mutations, no storage.
  */
-export function deriveSurvivorPool({ survivorPicks = [], players = [], results = {} } = {}) {
+export function deriveSurvivorPool({ survivorPicks = [], players = [], results = {} }) {
+  // Group picks by player
   const byPlayer = new Map();
   for (const pick of survivorPicks) {
-    if (!byPlayer.has(pick.playerId)) byPlayer.set(pick.playerId, []);
-    byPlayer.get(pick.playerId).push(pick);
+    const key = pick.playerId;
+    if (!byPlayer.has(key)) byPlayer.set(key, []);
+    byPlayer.get(key).push(pick);
   }
 
   const entries = [];
   for (const [playerId, picks] of byPlayer) {
     const player = players.find((p) => p.id === playerId);
-    const ordered = [...picks].sort((a, b) => a.week - b.week);
+    const sortedPicks = [...picks].sort((a, b) => a.week - b.week);
+    const usedTeams = sortedPicks.map((p) => p.team);
+
+    let alive = true;
     let eliminatedWeek = null;
     let wins = 0;
-    const history = ordered.map((pick) => {
-      const game = findTeamGame(pick.week, pick.team);
+
+    const annotatedPicks = sortedPicks.map((pick) => {
+      const weekGames = getGames(pick.week);
+      const game = findTeamGame(weekGames, pick.team);
       const result = game ? results[game.id] : null;
+
       let outcome = 'pending';
-      if (!game) outcome = 'invalid';
-      else if (result?.winner) outcome = result.winner === pick.team ? 'won' : 'lost';
-      if (outcome === 'won') wins += 1;
-      if (outcome === 'lost' && eliminatedWeek == null) eliminatedWeek = pick.week;
-      return { week: pick.week, team: pick.team, teamFull: TEAMS[pick.team] ?? pick.team, outcome, gameId: game?.id ?? null, pickedAt: pick.pickedAt };
+      if (result?.winner) {
+        if (result.winner === pick.team) {
+          outcome = 'win';
+          wins += 1;
+        } else {
+          outcome = 'loss';
+          if (alive) {
+            alive = false;
+            eliminatedWeek = pick.week;
+          }
+        }
+      }
+
+      return {
+        week: pick.week,
+        team: pick.team,
+        teamFull: TEAMS[pick.team] ?? pick.team,
+        outcome,
+      };
     });
+
     entries.push({
       playerId,
-      name: player?.name ?? 'Unknown player',
-      picks: history,
-      usedTeams: ordered.map((p) => p.team),
-      wins,
+      name: player?.name ?? playerId,
+      picks: annotatedPicks,
+      usedTeams,
+      alive,
       eliminatedWeek,
-      alive: eliminatedWeek == null,
+      wins,
     });
   }
 
-  entries.sort((a, b) => (a.alive === b.alive ? b.wins - a.wins || a.name.localeCompare(b.name) : a.alive ? -1 : 1));
-  const alive = entries.filter((e) => e.alive);
+  // Sort: alive first, then by wins descending
+  entries.sort((a, b) => {
+    if (a.alive !== b.alive) return a.alive ? -1 : 1;
+    return b.wins - a.wins;
+  });
+
+  const aliveCount = entries.filter((e) => e.alive).length;
+  const champion = aliveCount === 1 && entries.length > 1 ? entries.find((e) => e.alive) : null;
+
   return {
     entries,
-    aliveCount: alive.length,
+    aliveCount,
     totalCount: entries.length,
-    champion: entries.length > 1 && alive.length === 1 ? alive[0] : null,
+    champion,
   };
-}
-
-/**
- * Validate a proposed survivor pick. Returns { ok } or { ok: false, error }.
- */
-export function validateSurvivorPick({ playerId, week, team, survivorPicks = [], results = {}, players = [], now = new Date(), isWeekLocked }) {
-  if (!team || !TEAMS[team]) return { ok: false, error: 'Pick a valid NFL team.' };
-  const game = findTeamGame(week, team);
-  if (!game) return { ok: false, error: `${TEAMS[team]} ${getGames(week).length ? 'is on bye' : 'does not play'} in Week ${week}.` };
-  if (typeof isWeekLocked === 'function' && isWeekLocked(week, now)) return { ok: false, error: `Week ${week} is locked — survivor picks were due before the first kickoff.` };
-
-  const pool = deriveSurvivorPool({ survivorPicks, players, results });
-  const entry = pool.entries.find((e) => e.playerId === playerId);
-  if (entry && !entry.alive) return { ok: false, error: `You were eliminated in Week ${entry.eliminatedWeek}. The graveyard has no picks.` };
-  const priorUse = entry?.picks.find((p) => p.team === team && p.week !== week);
-  if (priorUse) return { ok: false, error: `You already burned ${TEAMS[team]} in Week ${priorUse.week}. One ride per team.` };
-  return { ok: true, game };
 }

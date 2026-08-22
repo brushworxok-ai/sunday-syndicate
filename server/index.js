@@ -247,9 +247,9 @@ function computeWeeklyRecord(player, league, weekNumber) {
   if (!weekSheets.length) return null;
   const sheet = weekSheets[0];
   const weekGames = getGames(weekNumber);
-  const correct = Object.entries(sheet.picks).reduce((n, [gid, pick]) => n + ((league.results ?? {})[gid]?.winner === pick ? 1 : 0), 0);
+  const correct = Object.entries(sheet.picks ?? {}).reduce((n, [gid, pick]) => n + ((league.results ?? {})[gid]?.winner === pick ? 1 : 0), 0);
   const total = weekGames.length;
-  const leaderboard = buildLeaderboard(league.players, league.sheets.filter((s) => s.week === weekNumber), league.results);
+  const leaderboard = buildLeaderboard(league.players, (league.sheets ?? []).filter((s) => s.week === weekNumber), league.results);
   const entry = leaderboard.find((e) => e.playerId === player.id);
   const isWinner = leaderboard.length > 0 && leaderboard[0].playerId === player.id;
   return { week: weekNumber, correct, incorrect: total - correct, weeklyWinner: isWinner, seasonRank: entry?.rank ?? null };

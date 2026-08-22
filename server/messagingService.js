@@ -90,6 +90,35 @@ export async function sendApprovedRecap({ store, leagueId, recapId, provider, ac
   return broadcast;
 }
 
+export async function sendJackBroadcast({ store, leagueId, provider, messages, actor = 'jack', kind = 'jack_broadcast' }) {
+  const league = await store.getLeague(leagueId);
+  if (!league) throw new WorkflowError('League not found.', 404, 'not_found');
+  const deliveries = [];
+  for (const msg of messages) {
+    const player = await store.getPlayer(msg.playerId);
+    if (!player?.phoneVerifiedAt || player.messaging?.smsConsent !== 'opted_in') {
+      deliveries.push({ playerId: msg.playerId, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: !player?.phoneVerifiedAt ? 'phone_not_verified' : 'sms_consent_not_active', fallback: { channel: 'in_app', status: 'available' } });
+      continue;
+    }
+    let delivered = null;
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const result = await provider.send({ player, text: msg.text });
+        delivered = { playerId: msg.playerId, channel: 'sms', status: result.status, providerAttempted: true, provider: provider.name, providerMessageId: result.id, attemptCount: attempt, attemptedAt: new Date().toISOString() };
+        break;
+      } catch (error) { lastError = error; }
+    }
+    if (delivered) deliveries.push(delivered);
+    else deliveries.push({ playerId: msg.playerId, channel: 'sms', status: 'failed', providerAttempted: true, provider: provider.name, errorCode: String(lastError?.code ?? 'provider_error'), error: lastError?.message ?? 'Provider failed', attemptCount: 2, attemptedAt: new Date().toISOString() });
+  }
+  const hasFailures = deliveries.some((d) => d.status === 'failed');
+  const broadcast = { id: `broadcast-${randomUUID()}`, kind, architecture: 'individual_jack_sms', status: hasFailures ? 'completed_with_failures' : 'completed', sentAt: new Date().toISOString(), provider: provider.name, deliveries };
+  await store.saveBroadcast(leagueId, broadcast);
+  await store.writeAudit(leagueId, `broadcast.${kind}`, `Jack broadcast (${kind}) completed: ${deliveries.filter((d) => d.status !== 'suppressed' && d.status !== 'failed').length} sent, ${deliveries.filter((d) => d.status === 'suppressed').length} suppressed, ${deliveries.filter((d) => d.status === 'failed').length} failed`, actor, { broadcastId: broadcast.id });
+  return broadcast;
+}
+
 export async function applyDeliveryStatus({ store, providerMessageId, status, errorCode = null }) {
   const found = await store.findBroadcastByProviderMessageId(providerMessageId);
   if (!found) return null;

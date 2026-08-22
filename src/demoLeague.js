@@ -86,7 +86,7 @@ export const DEMO_SHEETS = [
 ];
 
 export function scoreSheet(sheet, results = DEMO_RESULTS) {
-  return Object.entries(sheet.picks).reduce(
+  return Object.entries(sheet.picks ?? {}).reduce(
     (score, [gameId, pick]) => score + (results[gameId]?.winner === pick ? 1 : 0),
     0,
   );
@@ -123,7 +123,7 @@ export const DEMO_SIDE_BET_PROPOSALS = [
     event: 'Featured game total over 50 points',
     terms: 'Taylor takes over 50; Chris takes 50 or under',
     settlementRule: 'featured_game_total',
-    stake: { type: 'bragging_rights', amount: 1, label: 'Choose next week’s group-chat title' },
+    stake: { type: 'bragging_rights', amount: 1, label: `Choose next week's group-chat title` },
     visibility: 'participants_only',
     createdAt: '2025-11-20T17:00:00.000Z',
     expiresAt: '2025-11-20T20:00:00.000Z',
@@ -160,8 +160,8 @@ export function moderateRoastCandidates(candidates, players = DEMO_PLAYERS, leag
     const player = players.find((item) => item.id === candidate.targetPlayerId);
     let reason = '';
     if (!leagueSettings.trashTalkEnabled) reason = 'league_trash_talk_disabled';
-    else if (!player || player.trashTalk.level === 'none') reason = 'player_opted_out';
-    else if (TONE_LEVELS.indexOf(candidate.tone) > TONE_LEVELS.indexOf(player.trashTalk.level)) reason = 'tone_exceeds_player_consent';
+    else if (!player || player.trashTalk?.level === 'none') reason = 'player_opted_out';
+    else if (TONE_LEVELS.indexOf(candidate.tone) > TONE_LEVELS.indexOf(player.trashTalk?.level ?? 'none')) reason = 'tone_exceeds_player_consent';
     else if (TONE_LEVELS.indexOf(candidate.tone) > TONE_LEVELS.indexOf(leagueSettings.maximumTone)) reason = 'tone_exceeds_league_limit';
     else if (restrictedTopic.test(candidate.text)) reason = 'private_or_sensitive_topic';
 
@@ -176,7 +176,7 @@ export function buildBroadcastDeliveries(players = DEMO_PLAYERS, failedPlayerIds
     if (!player.phoneVerifiedAt) {
       return { playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: 'phone_not_verified' };
     }
-    if (player.messaging.smsConsent !== 'opted_in') {
+    if (player.messaging?.smsConsent !== 'opted_in') {
       return { playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: 'sms_consent_not_active', fallback: { channel: 'in_app', status: 'available' } };
     }
     if (failedPlayerIds.includes(player.id)) {
@@ -210,7 +210,7 @@ export function createDemoLeague() {
   const leaderboard = buildLeaderboard();
   const sideBets = DEMO_SIDE_BET_PROPOSALS.map((proposal) => settleSideBet(proposal, leaderboard, resultsFinalizedAt));
   const roastCandidates = [
-    { id: 'roast-safe', targetPlayerId: 'player-taylor', tone: 'maximum', text: 'Taylor’s picks were so cold this week they may qualify as weather data.' },
+    { id: 'roast-safe', targetPlayerId: 'player-taylor', tone: 'maximum', text: `Taylor's picks were so cold this week they may qualify as weather data.` },
     { id: 'roast-no-consent', targetPlayerId: 'player-chris', tone: 'light', text: 'Chris finished last, but at least the effort was consistent.' },
     { id: 'roast-private-topic', targetPlayerId: 'player-taylor', tone: 'competitive', text: 'Taylor should sell the car after a performance like that.' },
   ];
@@ -220,10 +220,10 @@ export function createDemoLeague() {
   const settledBet = sideBets.find((bet) => bet.settlementStatus === 'settled');
   const totalGames = GAMES.length;
   const finalText = [
-    `${winner.name} wins Week ${WEEK} at ${winner.score}–${totalGames - winner.score}${leaderboard[1] ? `, one point ahead of ${leaderboard[1].name}` : ‘’}. ${leaderboard.slice(2).map((e) => `${e.name} finishes ${e.score}–${totalGames - e.score}`).join(‘, while ‘)}${leaderboard.length > 2 ? ‘.’ : ‘’} ${biggestRise.name} makes the biggest climb${biggestRise.rankChange > 0 ? `, moving up ${biggestRise.rankChange} spot${biggestRise.rankChange > 1 ? ‘s’ : ‘’}` : ‘’}.`,
-    settledBet ? `Side bet settled: ${settledBet.winnerId === settledBet.creatorId ? DEMO_PLAYERS.find((p) => p.id === settledBet.creatorId)?.name : DEMO_PLAYERS.find((p) => p.id === settledBet.opponentId)?.name} won ${settledBet.stake.label}. ${moderation.allowed[0]?.text ?? ‘’}` : (moderation.allowed[0]?.text ?? ‘’),
-    `Commissioner’s note: All ${totalGames} game results are verified; next week’s picks lock Thursday at 7:15 PM CT.`,
-  ].join(‘\n\n’);
+    `${winner.name} wins Week ${WEEK} at ${winner.score}–${totalGames - winner.score}${leaderboard[1] ? `, one point ahead of ${leaderboard[1].name}` : ''}. ${leaderboard.slice(2).map((e) => `${e.name} finishes ${e.score}–${totalGames - e.score}`).join(', while ')}${leaderboard.length > 2 ? '.' : ''} ${biggestRise.name} makes the biggest climb${biggestRise.rankChange > 0 ? `, moving up ${biggestRise.rankChange} spot${biggestRise.rankChange > 1 ? 's' : ''}` : ''}.`,
+    settledBet ? `Side bet settled: ${settledBet.winnerId === settledBet.creatorId ? DEMO_PLAYERS.find((p) => p.id === settledBet.creatorId)?.name : DEMO_PLAYERS.find((p) => p.id === settledBet.opponentId)?.name} won ${settledBet.stake.label}. ${moderation.allowed[0]?.text ?? ''}` : (moderation.allowed[0]?.text ?? ''),
+    `Commissioner's note: All ${totalGames} game results are verified; next week's picks lock Thursday at 7:15 PM CT.`,
+  ].join('\n\n');
   const recap = {
     id: 'recap-week-12',
     week: WEEK,
@@ -292,5 +292,5 @@ export const DEMO_LEAGUE = createDemoLeague();
 
 export const DEMO_CHAT = [
   { id: 'chat-demo-1', name: 'Marcus Reed', msg: 'The climb from third to first hits different. Receipts are open.', time: '2025-11-24T05:52:00.000Z' },
-  { id: 'chat-demo-2', name: 'Taylor Brooks', msg: 'Maximum roast mode stays on. I’ll be back next week. 🔥', time: '2025-11-24T05:54:00.000Z' },
+  { id: 'chat-demo-2', name: 'Taylor Brooks', msg: `Maximum roast mode stays on. I'll be back next week. 🔥`, time: '2025-11-24T05:54:00.000Z' },
 ];
