@@ -42,6 +42,8 @@ const MORE_ITEMS = [
   ['admin',    'Commissioner',     '🔒', 'Admin controls'],
 ];
 
+const PRESET_AVATARS = ['🏈', '🔥', '💰', '👑', '🦅', '🐻', '🐅', '🐬', '🐎', '🐺', '🦁', '⚡'];
+
 const LEAGUE_ID = 'league-sunday-syndicate-demo';
 
 async function apiRequest(path, options = {}) {
@@ -64,6 +66,9 @@ function App() {
   const [signupPhone, setSignupPhone] = useState('');
   const [signupPin, setSignupPin] = useState('');
   const [signupTeam, setSignupTeam] = useState('');
+  const [signupAvatar, setSignupAvatar] = useState('');
+  const [signupAvatarFile, setSignupAvatarFile] = useState(null);
+  const [signupStep, setSignupStep] = useState(1); // 1: info, 2: team+avatar
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [picks, setPicks] = useState({});
@@ -102,6 +107,7 @@ function App() {
   const [selectedWeek, setSelectedWeek] = useState(WEEK);
   const [liveScores, setLiveScores] = useState({ week: null, anyLive: false, scores: [] });
   const [nflNews, setNflNews] = useState({ items: [] });
+  const [nflInjuries, setNflInjuries] = useState({ teams: [] });
   const [nowTick, setNowTick] = useState(() => Date.now());
   const currentGames = useMemo(() => getGames(selectedWeek), [selectedWeek]);
   const currentByeTeams = useMemo(() => getByeTeams(selectedWeek), [selectedWeek]);
@@ -146,7 +152,10 @@ function App() {
   // NFL Wire: injuries, statuses, team news (refreshes every 10 minutes)
   useEffect(() => {
     let cancelled = false;
-    const load = () => apiRequest('/api/nfl-news').then((data) => { if (!cancelled) setNflNews(data); }).catch(() => {});
+    const load = () => {
+      apiRequest('/api/nfl-news').then((data) => { if (!cancelled) setNflNews(data); }).catch(() => {});
+      apiRequest('/api/nfl-injuries').then((data) => { if (!cancelled) setNflInjuries(data); }).catch(() => {});
+    };
     load();
     const timer = setInterval(load, 600_000);
     return () => { cancelled = true; clearInterval(timer); };
@@ -394,7 +403,8 @@ function App() {
       setAssistantMessages((prev) => [...prev, reply]);
       setJackAvatarState('talking');
       setTimeout(() => { assistantEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 100);
-      setTimeout(() => setJackAvatarState('idle'), 3000);
+      // Auto-speak Jack's response
+      readAssistantMessage(data.text);
     } catch (error) {
       setAssistantMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', text: `Sorry, I couldn't answer that right now. ${error.message}` }]);
       setJackAvatarState('error');
@@ -407,12 +417,13 @@ function App() {
   const jackAudioRef = useRef(null);
 
   const speakWithBrowser = (text) => {
-    if (!('speechSynthesis' in window)) { setAssistantSpeaking(''); return; }
+    if (!('speechSynthesis' in window)) { setAssistantSpeaking(''); setJackAvatarState('idle'); return; }
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 0.95;
     utterance.pitch = 0.85;
-    utterance.onend = () => setAssistantSpeaking('');
-    utterance.onerror = () => setAssistantSpeaking('');
+    utterance.onend = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); };
+    utterance.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); };
+    setJackAvatarState('talking');
     window.speechSynthesis.speak(utterance);
   };
 
@@ -431,8 +442,8 @@ function App() {
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         jackAudioRef.current = audio;
-        audio.onended = () => { setAssistantSpeaking(''); URL.revokeObjectURL(url); jackAudioRef.current = null; };
-        audio.onerror = () => { setAssistantSpeaking(''); URL.revokeObjectURL(url); jackAudioRef.current = null; };
+        audio.onended = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); URL.revokeObjectURL(url); jackAudioRef.current = null; };
+        audio.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); URL.revokeObjectURL(url); jackAudioRef.current = null; };
         await audio.play();
         return;
       }
@@ -651,25 +662,41 @@ function App() {
     } catch (error) { notify(error.message); }
   };
 
+  const handleAvatarUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) return notify('Image must be under 2 MB.');
+    const reader = new FileReader();
+    reader.onload = () => { setSignupAvatarFile(reader.result); setSignupAvatar(''); };
+    reader.readAsDataURL(file);
+  };
+
   const handleSignup = async (event) => {
     event.preventDefault();
-    if (!signupName.trim()) return notify('Enter your name.');
-    if (signupPhone.replace(/\D/g, '').length < 10) return notify('Enter your 10-digit phone number for text updates.');
-    if (signupPin.length < 4) return notify('Create a 4-digit PIN.');
+    // Step 1 validation
+    if (signupStep === 1) {
+      if (!signupName.trim()) return notify('Enter your name.');
+      if (signupPhone.replace(/\D/g, '').length < 10) return notify('Enter your 10-digit phone number.');
+      if (signupPin.length < 4) return notify('Create a 4-digit PIN.');
+      return setSignupStep(2);
+    }
+    // Step 2 validation
+    if (!signupTeam) return notify('Pick your favorite team — Jack needs to know who to roast.');
+    if (!signupAvatar && !signupAvatarFile) return notify('Choose an avatar or upload a pic.');
     setServerBusy('register');
     try {
       const registered = await apiRequest(`/api/leagues/${LEAGUE_ID}/players/register`, {
         method: 'POST',
-        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam || null }),
+        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar }),
       });
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify({ playerId: registered.playerId, pin: signupPin }) });
       setPlayerSession(session);
       await loadLeague();
       setName(registered.name);
       setChatName(registered.name);
-      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam('');
+      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam(''); setSignupAvatar(''); setSignupAvatarFile(null); setSignupStep(1);
       setShowWelcome(false);
-      notify(`Welcome to BETIT, ${registered.name}! You're signed in and opted in to Jack's texts (reply STOP anytime).`);
+      notify(`Welcome to the 405 BadGuys Parlay, ${registered.name}! You're signed in and opted in to Jack's texts (reply STOP anytime).`);
       // Jack greets the new player with the house rules
       setAssistantMessages((prev) => [...prev, {
         id: `jack-onboard-${Date.now()}`,
@@ -677,6 +704,9 @@ function App() {
         text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Sheets lock at the first kickoff, so don't be that guy texting me Thursday night. Ask me anything — rules, standings, your picks. I got you.`,
       }]);
       setAssistantOpen(true);
+      // Auto-speak the welcome message
+      const welcomeText = `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses.`;
+      setTimeout(() => readAssistantMessage(welcomeText), 500);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -688,8 +718,8 @@ function App() {
     <div className="app-shell">
       <header className="site-header">
         <button className="brand" type="button" onClick={() => setView('home')} aria-label="Go home">
-          <span className="brand-mark">BT</span>
-          <span><strong>BETIT</strong><small>NFL pick 'em</small></span>
+          <span className="brand-mark">405</span>
+          <span><strong>405 BADGUYS</strong><small>PARLAY</small></span>
         </button>
         <div className="header-week">
           <select value={selectedWeek} onChange={(e) => { setSelectedWeek(Number(e.target.value)); setPicks({}); }} aria-label="Select week">
@@ -745,17 +775,51 @@ function App() {
               </div>
               {welcomeMode === 'join' ? (
                 <form onSubmit={handleSignup}>
-                  <label>Your name<input value={signupName} onChange={(e) => setSignupName(e.target.value)} placeholder="First and last" maxLength="50" /></label>
-                  <label>Phone <small style={{ float: 'right', fontWeight: 400 }}>for SMS updates</small><input value={signupPhone} onChange={(e) => setSignupPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
-                  <label>Create a PIN<input value={signupPin} onChange={(e) => setSignupPin(e.target.value.replace(/\D/g, ''))} placeholder="4 digits" maxLength="4" type="password" inputMode="numeric" /></label>
-                  <label>Favorite team <small>optional — Jack keeps rivalry receipts</small>
-                    <select value={signupTeam} onChange={(e) => setSignupTeam(e.target.value)}>
-                      <option value="">No favorite team</option>
-                      {Object.entries(TEAMS).map(([abbr, full]) => <option key={abbr} value={abbr}>{full}</option>)}
-                    </select>
-                  </label>
-                  <button className="button button-primary full" disabled={serverBusy === 'register'} style={{ marginTop: 16 }}>{serverBusy === 'register' ? 'Creating account…' : 'Create Account'}</button>
-                  <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.45)', marginTop: 10 }}>Your number is used for game results, reminders, and Jack's weekly texts. Reply STOP to any message to opt out.</p>
+                  {/* Step indicator */}
+                  <div className="signup-steps">
+                    <span className={`signup-step ${signupStep >= 1 ? 'active' : ''}`}>1 · Info</span>
+                    <span className="signup-step-line" />
+                    <span className={`signup-step ${signupStep >= 2 ? 'active' : ''}`}>2 · Identity</span>
+                  </div>
+
+                  {signupStep === 1 && (<>
+                    <label>Your name<input value={signupName} onChange={(e) => setSignupName(e.target.value)} placeholder="First and last" maxLength="50" autoFocus /></label>
+                    <label>Phone <small style={{ float: 'right', fontWeight: 400 }}>for SMS updates</small><input value={signupPhone} onChange={(e) => setSignupPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
+                    <label>Create a PIN<input value={signupPin} onChange={(e) => setSignupPin(e.target.value.replace(/\D/g, ''))} placeholder="4 digits" maxLength="4" type="password" inputMode="numeric" /></label>
+                    <button className="button button-primary full" style={{ marginTop: 16 }}>Next · Pick your team →</button>
+                    <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.45)', marginTop: 10 }}>Your number is used for game results, reminders, and Jack's weekly texts. Reply STOP to any message to opt out.</p>
+                  </>)}
+
+                  {signupStep === 2 && (<>
+                    <label>Your team <small style={{ float: 'right', fontWeight: 400 }}>required — Jack keeps rivalry receipts</small>
+                      <select value={signupTeam} onChange={(e) => setSignupTeam(e.target.value)}>
+                        <option value="">Pick your squad</option>
+                        {Object.entries(TEAMS).map(([abbr, full]) => <option key={abbr} value={abbr}>{full}</option>)}
+                      </select>
+                    </label>
+                    {signupTeam && <div className="signup-team-preview"><img src={getTeamLogoUrl(signupTeam)} alt="" /><strong>{TEAMS[signupTeam]}</strong></div>}
+
+                    <div className="signup-avatar-section">
+                      <p className="signup-avatar-label">Profile pic</p>
+                      <div className="signup-avatar-grid">
+                        {PRESET_AVATARS.map((emoji) => (
+                          <button type="button" key={emoji} className={`avatar-pick ${signupAvatar === emoji ? 'selected' : ''}`} onClick={() => { setSignupAvatar(emoji); setSignupAvatarFile(null); }}>{emoji}</button>
+                        ))}
+                      </div>
+                      <div className="signup-avatar-upload">
+                        <label className="upload-btn">
+                          📷 Upload photo
+                          <input type="file" accept="image/*" onChange={handleAvatarUpload} hidden />
+                        </label>
+                        {signupAvatarFile && <div className="avatar-preview-img"><img src={signupAvatarFile} alt="Your avatar" /><span>✓</span></div>}
+                      </div>
+                    </div>
+
+                    <div className="signup-btn-row">
+                      <button type="button" className="button button-ghost" onClick={() => setSignupStep(1)}>← Back</button>
+                      <button className="button button-primary" disabled={serverBusy === 'register'}>{serverBusy === 'register' ? 'Creating…' : 'Join the league →'}</button>
+                    </div>
+                  </>)}
                 </form>
               ) : (
                 <form onSubmit={loginPlayer}>
@@ -796,6 +860,74 @@ function App() {
                 {rolloverPot > 0 && <p>Includes ${Number(rolloverPot).toLocaleString()} rollover</p>}
               </div>
             </section>
+
+            {/* ── Live Game Ticker ── */}
+            <section className="game-ticker" aria-label="Game ticker">
+              <div className="ticker-head">
+                <span className={liveScores.anyLive ? 'live-dot on' : 'live-dot'} />
+                <strong>{liveScores.anyLive ? 'Live games' : `Week ${selectedWeek} games`}</strong>
+                <small>{completedGames}/{currentGames.length} final</small>
+              </div>
+              <div className="ticker-scroll">
+                {currentGames.map((game) => {
+                  const live = liveByGame[game.id];
+                  const state = live?.state ?? 'pre';
+                  const result = (proofLeague.results ?? {})[game.id];
+                  return (
+                    <article className={`ticker-card ticker-${state}`} key={game.id}>
+                      <div className="ticker-matchup">
+                        <div className={`ticker-team ${state === 'post' && live && live.awayScore > live.homeScore ? 'won' : ''}`}>
+                          <img src={getTeamLogoUrl(game.away)} alt="" loading="lazy" />
+                          <span>{game.away}</span>
+                          {state !== 'pre' && <b>{live?.awayScore ?? 0}</b>}
+                        </div>
+                        <div className={`ticker-team ${state === 'post' && live && live.homeScore > live.awayScore ? 'won' : ''}`}>
+                          <img src={getTeamLogoUrl(game.home)} alt="" loading="lazy" />
+                          <span>{game.home}</span>
+                          {state !== 'pre' && <b>{live?.homeScore ?? 0}</b>}
+                        </div>
+                      </div>
+                      <small className="ticker-status">
+                        {state === 'in' ? `● ${live?.detail || 'Live'}` : state === 'post' ? '✓ Final' : game.time}
+                      </small>
+                      {result?.winner && <span className="ticker-winner">{result.winner} ✓</span>}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+
+            {/* ── Injury & News Ticker ── */}
+            {(nflInjuries.teams?.length > 0 || nflNews.items?.length > 0) && (
+              <section className="injury-ticker" aria-label="Injury and news ticker">
+                <div className="ticker-head">
+                  <span className="injury-icon">🏥</span>
+                  <strong>Injuries & player status</strong>
+                </div>
+                <div className="injury-scroll">
+                  {nflInjuries.teams?.slice(0, 12).map((team) => (
+                    <article className="injury-team-card" key={team.team}>
+                      <div className="injury-team-head">
+                        <img src={team.logo} alt="" loading="lazy" />
+                        <strong>{team.team}</strong>
+                      </div>
+                      {team.injuries.slice(0, 3).map((inj, j) => (
+                        <div className="injury-player" key={j}>
+                          <span className={`injury-status injury-${inj.status.toLowerCase().replace(/\s/g, '-')}`}>{inj.status}</span>
+                          <span>{inj.name} <small>{inj.position}</small></span>
+                        </div>
+                      ))}
+                    </article>
+                  ))}
+                  {nflNews.items?.slice(0, 6).map((item, i) => (
+                    <article className="injury-item" key={`news-${i}`}>
+                      <strong>{item.headline}</strong>
+                      {item.url && <a href={item.url} target="_blank" rel="noreferrer">↗</a>}
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section className="stat-grid">
               <article className="stat-card"><span>01</span><strong>{currentGames.length}</strong><p>games on the board</p></article>
@@ -1342,7 +1474,7 @@ function App() {
         </div>
       )}
 
-      <footer><span>BETIT · {weekLabel}</span><span>Built for bragging rights</span></footer>
+      <footer><span>405 BadGuys Parlay · {weekLabel}</span><span>Built for bragging rights</span></footer>
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );

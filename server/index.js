@@ -195,6 +195,7 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
       updatedAt: at,
       ...(TEAMS[request.body?.favoriteTeam] ? { jackPolicy: { favoriteTeam: request.body.favoriteTeam, updatedAt: at, updatedBy: 'player' } } : {}),
     },
+    avatar: typeof request.body?.avatar === 'string' ? request.body.avatar.slice(0, 200_000) : null,
   };
   await store.createPlayer(request.params.leagueId, player, hashPin(pin));
   return response.status(201).json({ playerId: player.id, name: player.name });
@@ -458,7 +459,7 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
   }
 
   const context = {
-    name: league.name || 'BETIT League',
+    name: league.name || '405 BadGuys Parlay',
     season: SEASON,
     week: currentWeek,
     weekLabel,
@@ -684,6 +685,42 @@ async function fetchNflNews() {
 
 app.get('/api/nfl-news', asyncRoute(async (_request, response) => response.json(await fetchNflNews())));
 
+/* ── NFL Injuries (ESPN injuries feed, 10-min cache) ── */
+let injuryCache = { at: 0, data: null };
+
+async function fetchNflInjuries() {
+  if (injuryCache.data && Date.now() - injuryCache.at < 600_000) return injuryCache.data;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    const upstream = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/nfl/injuries', { signal: controller.signal, headers: { accept: 'application/json' } });
+    clearTimeout(timer);
+    if (!upstream.ok) throw new Error(`ESPN injuries responded ${upstream.status}`);
+    const payload = await upstream.json();
+    const teams = [];
+    for (const team of payload?.season ?? payload?.injuries ?? []) {
+      const abbr = team?.team?.abbreviation ?? '';
+      const injuries = (team?.injuries ?? []).slice(0, 8).map((inj) => ({
+        name: `${inj.athlete?.firstName ?? ''} ${inj.athlete?.lastName ?? ''}`.trim(),
+        position: inj.athlete?.position?.abbreviation ?? '',
+        status: inj.status ?? '',
+        type: inj.type ?? '',
+        detail: inj.longComment ?? inj.shortComment ?? '',
+      })).filter((i) => i.name && i.status);
+      if (injuries.length) teams.push({ team: abbr, logo: `https://a.espncdn.com/i/teamlogos/nfl/500/${abbr.toLowerCase()}.png`, injuries });
+    }
+    const data = { fetchedAt: new Date().toISOString(), teams };
+    injuryCache = { at: Date.now(), data };
+    return data;
+  } catch (error) {
+    console.error('NFL injuries unavailable:', error.message);
+    if (injuryCache.data) return injuryCache.data;
+    return { fetchedAt: new Date().toISOString(), teams: [], error: 'injuries_unavailable' };
+  }
+}
+
+app.get('/api/nfl-injuries', asyncRoute(async (_request, response) => response.json(await fetchNflInjuries())));
+
 /* ── Live Scores (ESPN scoreboard, 30s cache) ── */
 const liveScoreCache = new Map();
 const ESPN_ABBR_FIXES = { WSH: 'WAS' };
@@ -806,7 +843,7 @@ app.post('/api/leagues/:leagueId/reminders/picks', auth.requireAdmin, asyncRoute
   const when = deadline ? deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET' : 'first kickoff';
   const messages = missing.map((p) => ({
     playerId: p.id,
-    text: `🏈 BETIT: Ayo, it's Jack. Week ${week} sheets lock at ${when}${hoursLeft ? ` (~${hoursLeft}h)` : ''}. Yours is blank, dawg. You trippin if you think I won't clown you for a no-show. Get your picks in.`,
+    text: `🏈 405 BadGuys: Ayo, it's Jack. Week ${week} sheets lock at ${when}${hoursLeft ? ` (~${hoursLeft}h)` : ''}. Yours is blank, dawg. You trippin if you think I won't clown you for a no-show. Get your picks in.`,
   }));
   const provider = createSmsProvider(process.env);
   const broadcast = await sendJackBroadcast({ store, leagueId: request.params.leagueId, provider, messages, actor: request.actor, kind: 'pick_reminder' });
@@ -851,7 +888,7 @@ app.post('/api/leagues/:leagueId/jack/broadcast', auth.requireAdmin, asyncRoute(
     const memory = playerMemories.find((m) => m.playerId === entry.playerId);
     const isWinner = winnerIds.has(entry.playerId);
     const roast = policy.roastAllowed || isWinner ? smsRoastLine(entry, memory, isWinner) : `Week ${currentWeek} score: ${entry.score}/${weekGames.length}.`;
-    const text = [`🏈 BETIT Week ${currentWeek} from Jack:`, resultsLine, champLine, roast].filter(Boolean).join(' ');
+    const text = [`🏈 405 BadGuys Week ${currentWeek} from Jack:`, resultsLine, champLine, roast].filter(Boolean).join(' ');
     messages.push({ playerId: entry.playerId, text: text.slice(0, 480) });
   }
 
