@@ -53,37 +53,36 @@ export const DEMO_PLAYERS = [
   },
 ];
 
-export const DEMO_RESULTS = {
-  '1': { awayScore: 21, homeScore: 27, winner: 'BUF' },
-  '2': { awayScore: 24, homeScore: 17, winner: 'DAL' },
-  '3': { awayScore: 20, homeScore: 13, winner: 'GB' },
-  '4': { awayScore: 28, homeScore: 24, winner: 'SF' },
-  '5': { awayScore: 17, homeScore: 20, winner: 'PIT' },
-  '6': { awayScore: 31, homeScore: 23, winner: 'PHI' },
-  '7': { awayScore: 27, homeScore: 16, winner: 'MIA' },
-  '8': { awayScore: 23, homeScore: 20, winner: 'DEN' },
-  '9': { awayScore: 17, homeScore: 30, winner: 'TB' },
-  '10': { awayScore: 21, homeScore: 34, winner: 'CIN' },
-  '11': { awayScore: 20, homeScore: 24, winner: 'DET' },
-  '12': { awayScore: 26, homeScore: 14, winner: 'HOU' },
-  '13': { awayScore: 16, homeScore: 19, winner: 'JAX' },
-  '14': { awayScore: 24, homeScore: 17, winner: 'ARI' },
-};
+// Build demo results dynamically from the actual GAMES array so IDs always match.
+// Each game gets a plausible final score with the home team winning by default;
+// a few upsets are sprinkled in by making the away team win instead.
+const DEMO_SCORE_PAIRS = [
+  [21, 27], [24, 17], [20, 13], [28, 24], [17, 20], [31, 23], [27, 16], [23, 20],
+  [17, 30], [21, 34], [20, 24], [26, 14], [16, 19], [24, 17], [14, 28], [10, 24],
+];
+const DEMO_AWAY_WINS = new Set([1, 3, 5, 6, 7, 11, 13]); // indices where away wins
+export const DEMO_RESULTS = Object.fromEntries(GAMES.map((game, i) => {
+  const [awayScore, homeScore] = DEMO_SCORE_PAIRS[i % DEMO_SCORE_PAIRS.length];
+  const winner = DEMO_AWAY_WINS.has(i) ? game.away : game.home;
+  return [game.id, { awayScore, homeScore, winner }];
+}));
 
 const wrongTeam = (game, winner) => (winner === game.away ? game.home : game.away);
 
-function picksWithMisses(missedGameIds) {
-  return Object.fromEntries(GAMES.map((game) => {
-    const result = DEMO_RESULTS[game.id]; const winner = result ? result.winner : game.home;
-    return [game.id, missedGameIds.includes(game.id) ? wrongTeam(game, winner) : winner];
+// missedIndices are 0-based indices into GAMES — the pick for that game will be wrong
+function picksWithMisses(missedIndices) {
+  return Object.fromEntries(GAMES.map((game, i) => {
+    const result = DEMO_RESULTS[game.id];
+    const winner = result ? result.winner : game.home;
+    return [game.id, missedIndices.includes(i) ? wrongTeam(game, winner) : winner];
   }));
 }
 
 export const DEMO_SHEETS = [
-  { id: 'sheet-marcus', playerId: 'player-marcus', name: 'Marcus Reed', picks: picksWithMisses(['3', '11']), tiebreaker: 52, paid: true, season: DEMO_SEASON, week: WEEK, submittedAt: '2025-11-20T19:02:00.000Z' },
-  { id: 'sheet-jordan', playerId: 'player-jordan', name: 'Jordan Lee', picks: picksWithMisses(['1', '4', '12']), tiebreaker: 54, paid: true, season: DEMO_SEASON, week: WEEK, submittedAt: '2025-11-20T19:08:00.000Z' },
-  { id: 'sheet-taylor', playerId: 'player-taylor', name: 'Taylor Brooks', picks: picksWithMisses(['2', '3', '5', '7', '10', '13']), tiebreaker: 48, paid: true, season: DEMO_SEASON, week: WEEK, submittedAt: '2025-11-20T19:14:00.000Z' },
-  { id: 'sheet-chris', playerId: 'player-chris', name: 'Chris Morgan', picks: picksWithMisses(['1', '2', '4', '6', '8', '11', '14']), tiebreaker: 46, paid: true, season: DEMO_SEASON, week: WEEK, submittedAt: '2025-11-20T19:19:00.000Z' },
+  { id: 'sheet-marcus', playerId: 'player-marcus', name: 'Marcus Reed', picks: picksWithMisses([2, 10]), tiebreaker: 52, paid: true, season: DEMO_SEASON, week: WEEK, submittedAt: '2025-11-20T19:02:00.000Z' },
+  { id: 'sheet-jordan', playerId: 'player-jordan', name: 'Jordan Lee', picks: picksWithMisses([0, 3, 11]), tiebreaker: 54, paid: true, season: DEMO_SEASON, week: WEEK, submittedAt: '2025-11-20T19:08:00.000Z' },
+  { id: 'sheet-taylor', playerId: 'player-taylor', name: 'Taylor Brooks', picks: picksWithMisses([1, 2, 4, 6, 9, 12]), tiebreaker: 48, paid: true, season: DEMO_SEASON, week: WEEK, submittedAt: '2025-11-20T19:14:00.000Z' },
+  { id: 'sheet-chris', playerId: 'player-chris', name: 'Chris Morgan', picks: picksWithMisses([0, 1, 3, 5, 7, 10, 13]), tiebreaker: 46, paid: true, season: DEMO_SEASON, week: WEEK, submittedAt: '2025-11-20T19:19:00.000Z' },
 ];
 
 export function scoreSheet(sheet, results = DEMO_RESULTS) {
@@ -219,11 +218,12 @@ export function createDemoLeague() {
   const winner = leaderboard[0];
   const biggestRise = [...leaderboard].sort((a, b) => b.rankChange - a.rankChange)[0];
   const settledBet = sideBets.find((bet) => bet.settlementStatus === 'settled');
+  const totalGames = GAMES.length;
   const finalText = [
-    `Marcus Reed wins Week ${WEEK} at 12–2, one point ahead of Jordan Lee. Taylor Brooks finishes 8–6, while Chris Morgan closes at 7–7. Marcus also makes the biggest climb, moving from third to first.`,
-    `Side bet settled: Marcus defeated Jordan 12–11 and earned 25 virtual Badguy tokens. ${moderation.allowed[0]?.text ?? ''}`,
-    'Commissioner’s note: All 14 game results are verified; next week’s picks lock Thursday at 7:15 PM CT.',
-  ].join('\n\n');
+    `${winner.name} wins Week ${WEEK} at ${winner.score}–${totalGames - winner.score}${leaderboard[1] ? `, one point ahead of ${leaderboard[1].name}` : ‘’}. ${leaderboard.slice(2).map((e) => `${e.name} finishes ${e.score}–${totalGames - e.score}`).join(‘, while ‘)}${leaderboard.length > 2 ? ‘.’ : ‘’} ${biggestRise.name} makes the biggest climb${biggestRise.rankChange > 0 ? `, moving up ${biggestRise.rankChange} spot${biggestRise.rankChange > 1 ? ‘s’ : ‘’}` : ‘’}.`,
+    settledBet ? `Side bet settled: ${settledBet.winnerId === settledBet.creatorId ? DEMO_PLAYERS.find((p) => p.id === settledBet.creatorId)?.name : DEMO_PLAYERS.find((p) => p.id === settledBet.opponentId)?.name} won ${settledBet.stake.label}. ${moderation.allowed[0]?.text ?? ‘’}` : (moderation.allowed[0]?.text ?? ‘’),
+    `Commissioner’s note: All ${totalGames} game results are verified; next week’s picks lock Thursday at 7:15 PM CT.`,
+  ].join(‘\n\n’);
   const recap = {
     id: 'recap-week-12',
     week: WEEK,
@@ -255,7 +255,7 @@ export function createDemoLeague() {
     deliveries,
   };
   const auditLog = [
-    { at: resultsFinalizedAt, event: 'results.finalized', detail: '14 verified game results locked' },
+    { at: resultsFinalizedAt, event: 'results.finalized', detail: `${totalGames} verified game results locked` },
     { at: recap.generatedAt, event: 'recap.generated', detail: 'Grounded fact snapshot sent to Gemini recap pipeline' },
     { at: '2025-11-24T05:44:00.000Z', event: 'moderation.completed', detail: '1 roast allowed; 2 candidates blocked' },
     { at: recap.adminApproval.approvedAt, event: 'recap.approved', detail: 'Commissioner approved edited message' },

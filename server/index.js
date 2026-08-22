@@ -3,7 +3,9 @@ import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
-import twilio from 'twilio';
+// Twilio is optional — only needed for webhook signature validation
+let twilio;
+try { twilio = (await import('twilio')).default; } catch { twilio = null; }
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -222,7 +224,7 @@ app.post('/api/leagues/:leagueId/chat', asyncRoute(async (request, response) => 
 app.post('/api/webhooks/twilio/status', asyncRoute(async (request, response) => {
   const signature = request.get('X-Twilio-Signature');
   const webhookUrl = `${process.env.APP_BASE_URL ?? ''}${request.originalUrl}`;
-  if (!process.env.TWILIO_AUTH_TOKEN || !signature || !twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, webhookUrl, request.body)) return response.status(403).send('Invalid signature');
+  if (!twilio || !process.env.TWILIO_AUTH_TOKEN || !signature || !twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, webhookUrl, request.body)) return response.status(403).send('Invalid signature');
   await applyDeliveryStatus({ store, providerMessageId: request.body.MessageSid, status: request.body.MessageStatus, errorCode: request.body.ErrorCode || null });
   return response.status(204).end();
 }));
@@ -230,7 +232,7 @@ app.post('/api/webhooks/twilio/status', asyncRoute(async (request, response) => 
 app.post('/api/webhooks/twilio/inbound', asyncRoute(async (request, response) => {
   const signature = request.get('X-Twilio-Signature');
   const webhookUrl = `${process.env.APP_BASE_URL ?? ''}${request.originalUrl}`;
-  if (!process.env.TWILIO_AUTH_TOKEN || !signature || !twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, webhookUrl, request.body)) return response.status(403).send('Invalid signature');
+  if (!twilio || !process.env.TWILIO_AUTH_TOKEN || !signature || !twilio.validateRequest(process.env.TWILIO_AUTH_TOKEN, signature, webhookUrl, request.body)) return response.status(403).send('Invalid signature');
   const player = await store.findPlayerByPhoneE164(request.body.From);
   const optOutType = request.body.OptOutType;
   if (player && (optOutType === 'STOP' || optOutType === 'START')) await store.updatePlayerPreferences(player.id, { smsConsent: optOutType === 'STOP' ? 'opted_out' : 'opted_in' }, 'twilio_webhook');
