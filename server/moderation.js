@@ -1,4 +1,4 @@
-const prohibitedContent = /\b(slur|kill|die|threat|wife|husband|mother|father|family|diagnos|health|appearance|weight|salary|job|house|car|bank|sexual)\b/i;
+const prohibitedContent = /\b(slur|kill\s+you|death\s+threat|threaten|diagnos(?:is|ed|tic)|sexual\s+assault|molest|rape)\b/i;
 
 export class ModerationError extends Error {
   constructor(message, code) {

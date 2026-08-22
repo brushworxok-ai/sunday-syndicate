@@ -36,7 +36,7 @@ export function deriveSurvivorPool({ survivorPicks = [], players = [], results =
     let wins = 0;
 
     const annotatedPicks = sortedPicks.map((pick) => {
-      const weekGames = getGames(pick.week);
+      const weekGames = getGames(pick.week) ?? [];
       const game = findTeamGame(weekGames, pick.team);
       const result = game ? results[game.id] : null;
 

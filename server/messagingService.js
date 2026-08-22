@@ -67,7 +67,7 @@ export async function sendApprovedRecap({ store, leagueId, recapId, provider, ac
       deliveries.push({ playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: 'phone_not_verified', fallback: { channel: 'in_app', status: 'available' } });
       continue;
     }
-    if (player.messaging.smsConsent !== 'opted_in') {
+    if ((player.messaging ?? {}).smsConsent !== 'opted_in') {
       deliveries.push({ playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: 'sms_consent_not_active', fallback: { channel: 'in_app', status: 'available' } });
       continue;
     }

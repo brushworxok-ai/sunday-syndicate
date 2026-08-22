@@ -33,8 +33,8 @@ function factualRecap(facts, players) {
   return `${facts.winner.name} wins Week ${facts.week} at ${facts.winner.score}–${GAMES.length - facts.winner.score}${facts.runnerUp ? `, ${facts.winner.score - facts.runnerUp.score} point${facts.winner.score - facts.runnerUp.score === 1 ? '' : 's'} ahead of ${facts.runnerUp.name}` : ''}. Rankings: ${rankings}. ${rise}\n\nSide bets: ${betCopy}.`;
 }
 
-function selectRoastTarget(facts, players, leagueSettings) {
-  if (!leagueSettings.trashTalkEnabled) return null;
+function selectRoastTarget(facts, players, leagueSettings = {}) {
+  if (!leagueSettings?.trashTalkEnabled) return null;
   return [...facts.leaderboard].reverse().map((entry) => ({ entry, player: players.find((candidate) => candidate.id === entry.playerId) }))
     .find(({ player }) => player && player.trashTalk.level !== 'none') ?? null;
 }

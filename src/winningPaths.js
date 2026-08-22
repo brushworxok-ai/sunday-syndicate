@@ -37,11 +37,15 @@ export function buildWinningPaths(league, weekContext) {
   const paths = scored.map((entry) => {
     const { score, maxPossible, tiebreaker } = entry;
 
-    // Clinched: even if everyone else gets remaining games right,
-    // this entry's current score is still the highest possible
+    // Clinched: this entry's current score already beats the best
+    // anyone else could possibly reach with all remaining games correct
+    const othersMaxPossible = Math.max(
+      ...scored.filter((s) => s.entryId !== entry.entryId).map((s) => s.maxPossible),
+      0,
+    );
     const clinched = remaining.length === 0
       ? score === bestCurrentScore
-      : score > bestPossible - score; // simplified heuristic
+      : score > othersMaxPossible;
 
     // Eliminated: even getting every remaining game right can't catch the leader
     const eliminated = maxPossible < bestCurrentScore;

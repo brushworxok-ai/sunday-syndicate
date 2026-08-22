@@ -464,7 +464,7 @@ function buildLocalAssistantFallback(question, context) {
     const top = memories.slice(0, 5).map((m) => `${m.name}: ${m.winPercentage}% (${m.correct}/${m.totalPicks}), streak ${m.currentStreak?.type} ${m.currentStreak?.length}`).join('\n');
     return `Season stats so far:\n${top}`;
   }
-  return `What's good — I"m Jack, your league's AI commissioner. I got standings, rules, schedules, season stats, all of it. The Gemini API ain"t hooked up yet so I'm running on local smarts. Drop GEMINI_API_KEY in the env and watch me really go to work.`;
+  return "What's good — I'm Jack, your league's AI commissioner. I got standings, rules, schedules, season stats, all of it. The Gemini API ain't hooked up yet so I'm running on local smarts. Drop GEMINI_API_KEY in the env and watch me really go to work.";
 }
 
 /* ── Jack Settings (Admin) ── */

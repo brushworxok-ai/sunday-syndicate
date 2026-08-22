@@ -1,4 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('App crash:', error, info?.componentStack); }
+  render() {
+    if (this.state.error) return (
+      <div style={{ padding: '2rem', textAlign: 'center', color: '#fff', background: '#111', minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
+        <h1 style={{ fontSize: '1.5rem' }}>Something went wrong</h1>
+        <p style={{ color: '#aaa', maxWidth: '24rem' }}>{this.state.error?.message || 'An unexpected error occurred.'}</p>
+        <button type="button" onClick={() => { this.setState({ error: null }); window.location.reload(); }} style={{ padding: '0.75rem 1.5rem', background: '#00ff87', color: '#000', border: 'none', borderRadius: '8px', fontWeight: 600, cursor: 'pointer' }}>Reload App</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 import { EMOJIS, ENTRY_FEE, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, formatCountdown, TEAMS } from './data.js';
 import { DEMO_CHAT, DEMO_LEAGUE } from './demoLeague.js';
 import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
@@ -1359,4 +1375,8 @@ function PlayerSessionPanel({ players, session, login, setLogin, onLogin, onLogo
   return <form className="player-session" onSubmit={onLogin}><div><span>◎</span><p><strong>Player sign-in</strong><small>Demo PIN is the last four visible phone digits. Production should replace this with OTP verification.</small></p></div><label>Player<select aria-label="Player identity" value={login.playerId} onChange={(event) => setLogin((current) => ({ ...current, playerId: event.target.value }))}>{players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label><label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="4" value={login.pin} onChange={(event) => setLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} /></label><button type="submit" disabled={busy || login.pin.length !== 4}>{busy ? 'Signing in…' : 'Sign in'}</button></form>;
 }
 
-export default App;
+function AppWithErrorBoundary() {
+  return <ErrorBoundary><App /></ErrorBoundary>;
+}
+
+export default AppWithErrorBoundary;

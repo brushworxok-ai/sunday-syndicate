@@ -4,7 +4,11 @@ const COOKIE_NAME = 'syndicate_admin';
 const PLAYER_COOKIE_NAME = 'syndicate_player';
 
 function parseCookies(header = '') {
-  return Object.fromEntries(header.split(';').map((part) => part.trim().split('=').map(decodeURIComponent)).filter(([key]) => key));
+  return Object.fromEntries(header.split(';').map((part) => {
+    const eq = part.indexOf('=');
+    if (eq < 0) return [part.trim(), ''];
+    return [decodeURIComponent(part.slice(0, eq).trim()), decodeURIComponent(part.slice(eq + 1).trim())];
+  }).filter(([key]) => key));
 }
 
 function safeEqual(left, right) {
