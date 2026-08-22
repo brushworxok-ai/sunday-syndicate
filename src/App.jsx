@@ -15,7 +15,7 @@ class ErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import { EMOJIS, ENTRY_FEE, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, formatCountdown, TEAMS } from './data.js';
+import { EMOJIS, ENTRY_FEE, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, formatCountdown, TEAMS, TEAM_COLORS, getTeamLogoUrl } from './data.js';
 import { DEMO_CHAT, DEMO_LEAGUE } from './demoLeague.js';
 import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
@@ -63,6 +63,7 @@ function App() {
   const [signupName, setSignupName] = useState('');
   const [signupPhone, setSignupPhone] = useState('');
   const [signupPin, setSignupPin] = useState('');
+  const [signupTeam, setSignupTeam] = useState('');
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [picks, setPicks] = useState({});
@@ -284,23 +285,6 @@ function App() {
     } finally { setServerBusy(''); }
   };
 
-  const resetDemo = async () => {
-    if (!(await ensureAdmin())) return;
-    setServerBusy('reset');
-    try {
-      const league = await apiRequest(`/api/leagues/${LEAGUE_ID}/reset-demo`, { method: 'POST' });
-      setServerLeague(league);
-      setSheets(league.sheets);
-      setResults(league.results);
-      setChatMsgs(league.chat);
-      setRolloverPot(0);
-      setAiResult({ recap: league.latestRecap.finalText, picks: '', trashTalk: '' });
-      setRecapEdit(league.latestRecap.finalText);
-      setAiError('');
-      notify('Durable demo database restored to the verified Week 12 snapshot.');
-    } catch (error) { notify(error.message); }
-    finally { setServerBusy(''); }
-  };
 
   const choosePick = (gameId, team) => {
     setPicks((current) => {
@@ -676,16 +660,23 @@ function App() {
     try {
       const registered = await apiRequest(`/api/leagues/${LEAGUE_ID}/players/register`, {
         method: 'POST',
-        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin }),
+        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam || null }),
       });
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify({ playerId: registered.playerId, pin: signupPin }) });
       setPlayerSession(session);
       await loadLeague();
       setName(registered.name);
       setChatName(registered.name);
-      setSignupName(''); setSignupPhone(''); setSignupPin('');
+      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam('');
       setShowWelcome(false);
       notify(`Welcome to BETIT, ${registered.name}! You're signed in and opted in to Jack's texts (reply STOP anytime).`);
+      // Jack greets the new player with the house rules
+      setAssistantMessages((prev) => [...prev, {
+        id: `jack-onboard-${Date.now()}`,
+        role: 'assistant',
+        text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Sheets lock at the first kickoff, so don't be that guy texting me Thursday night. Ask me anything — rules, standings, your picks. I got you.`,
+      }]);
+      setAssistantOpen(true);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -757,6 +748,12 @@ function App() {
                   <label>Your name<input value={signupName} onChange={(e) => setSignupName(e.target.value)} placeholder="First and last" maxLength="50" /></label>
                   <label>Phone <small style={{ float: 'right', fontWeight: 400 }}>for SMS updates</small><input value={signupPhone} onChange={(e) => setSignupPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
                   <label>Create a PIN<input value={signupPin} onChange={(e) => setSignupPin(e.target.value.replace(/\D/g, ''))} placeholder="4 digits" maxLength="4" type="password" inputMode="numeric" /></label>
+                  <label>Favorite team <small>optional — Jack keeps rivalry receipts</small>
+                    <select value={signupTeam} onChange={(e) => setSignupTeam(e.target.value)}>
+                      <option value="">No favorite team</option>
+                      {Object.entries(TEAMS).map(([abbr, full]) => <option key={abbr} value={abbr}>{full}</option>)}
+                    </select>
+                  </label>
                   <button className="button button-primary full" disabled={serverBusy === 'register'} style={{ marginTop: 16 }}>{serverBusy === 'register' ? 'Creating account…' : 'Create Account'}</button>
                   <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.45)', marginTop: 10 }}>Your number is used for game results, reminders, and Jack's weekly texts. Reply STOP to any message to opt out.</p>
                 </form>
@@ -855,9 +852,9 @@ function App() {
                   <article className={`game-card ${picks[game.id] ? 'picked' : ''}`} key={game.id}>
                     <div className="game-meta"><span>{String(index + 1).padStart(2, '0')}</span><p>{game.time}</p>{game.isTiebreaker && <b>★ Tiebreaker game</b>}{liveByGame[game.id]?.state === 'in' && <b className="live-badge">● LIVE {liveByGame[game.id].away} {liveByGame[game.id].awayScore}–{liveByGame[game.id].homeScore} {liveByGame[game.id].home} · {liveByGame[game.id].detail}</b>}</div>
                     <div className="team-buttons">
-                      <button type="button" className={picks[game.id] === game.away ? 'selected' : ''} onClick={() => choosePick(game.id, game.away)}><small>{game.awayFull}</small><strong>{game.away}</strong><span>AWAY</span></button>
+                      <button type="button" className={picks[game.id] === game.away ? 'selected' : ''} style={{ '--team-color': TEAM_COLORS[game.away] }} onClick={() => choosePick(game.id, game.away)}><img className="team-logo" src={getTeamLogoUrl(game.away)} alt="" loading="lazy" /><small>{game.awayFull}</small><strong>{game.away}</strong><span>AWAY</span></button>
                       <i>at</i>
-                      <button type="button" className={picks[game.id] === game.home ? 'selected' : ''} onClick={() => choosePick(game.id, game.home)}><small>{game.homeFull}</small><strong>{game.home}</strong><span>HOME</span></button>
+                      <button type="button" className={picks[game.id] === game.home ? 'selected' : ''} style={{ '--team-color': TEAM_COLORS[game.home] }} onClick={() => choosePick(game.id, game.home)}><img className="team-logo" src={getTeamLogoUrl(game.home)} alt="" loading="lazy" /><small>{game.homeFull}</small><strong>{game.home}</strong><span>HOME</span></button>
                     </div>
                   </article>
                 ))}
@@ -1047,6 +1044,12 @@ function App() {
                     <option value="none">No trash talk</option><option value="light">Light / friendly</option><option value="competitive">Competitive</option><option value="maximum">Maximum roast</option>
                   </select>
                 </label>
+                <label>Favorite team <small>Jack tracks rivalry bragging rights</small>
+                  <select value={player.trashTalk?.jackPolicy?.favoriteTeam ?? ''} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { favoriteTeam: event.target.value })}>
+                    <option value="">No favorite team</option>
+                    {Object.entries(TEAMS).map(([abbr, full]) => <option key={abbr} value={abbr}>{full}</option>)}
+                  </select>
+                </label>
                 <small>{serverBusy === `player-${player.id}` ? 'Saving…' : `Last tone update ${new Date(player.trashTalk.updatedAt).toLocaleString()}`}</small>
               </article>)}
             </div>
@@ -1089,8 +1092,7 @@ function App() {
         {view === 'demo' && (
           <StandardPage eyebrow="ACCEPTANCE SCENARIO · WEEK 12" title="The proof board" subtitle="A deterministic demo league showing the complete path from verified results to a moderated recap, consent-aware delivery, and non-cash side-bet settlement.">
             <div className="proof-actions">
-              <p><strong>Demo snapshot:</strong> finalized November 23, 2025 · every identifier and timestamp is inspectable below.</p>
-              <button className="button button-primary" type="button" onClick={resetDemo} disabled={serverBusy === 'reset'}>{serverBusy === 'reset' ? 'Resetting…' : 'Reset demo data'}</button>
+              <p><strong>Demo snapshot:</strong> finalized November 23, 2025 · every identifier and timestamp is inspectable below. Demo players are removed automatically when the real season opens.</p>
             </div>
 
             <section className="proof-metrics" aria-label="Acceptance scenario summary">

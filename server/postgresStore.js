@@ -221,6 +221,11 @@ export class PostgresLeagueStore {
         draft.consentRecords.push({ id: randomUUID(), playerId, channel: 'sms_results', status: preferences.smsConsent, source: actor === 'twilio_webhook' ? 'sms_keyword' : 'player_settings', recordedAt: at });
       }
       if (preferences.resultsChannel) player.messaging.resultsChannel = preferences.resultsChannel;
+      if (preferences.trashTalk) player.trashTalk = { ...(player.trashTalk ?? {}), ...clone(preferences.trashTalk) };
+      if (preferences.favoriteTeam !== undefined) {
+        player.trashTalk = player.trashTalk ?? {};
+        player.trashTalk.jackPolicy = { ...(player.trashTalk.jackPolicy ?? {}), favoriteTeam: preferences.favoriteTeam || null, updatedAt: at, updatedBy: actor };
+      }
       if (preferences.trashTalkLevel) {
         player.trashTalk.level = preferences.trashTalkLevel;
         player.trashTalk.updatedAt = at;

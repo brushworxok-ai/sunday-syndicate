@@ -51,6 +51,18 @@ export function getTeamLogoUrl(abbr) {
   return id ? `https://a.espncdn.com/i/teamlogos/nfl/500/${abbr.toLowerCase()}.png` : 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="%23333"/></svg>';
 }
 
+/** Team accent colors — vivid brand-adjacent hues tuned to stay visible on the dark UI. */
+export const TEAM_COLORS = {
+  ARI: '#B0264C', ATL: '#C6273D', BAL: '#7B5BC7', BUF: '#3B6FD4',
+  CAR: '#0085CA', CHI: '#E8622C', CIN: '#FB4F14', CLE: '#FF3C00',
+  DAL: '#5B8DC9', DEN: '#FB4F14', DET: '#0076B6', GB:  '#3E9B5F',
+  HOU: '#C8102E', IND: '#4C8CD4', JAX: '#00A5B8', KC:  '#E31837',
+  LV:  '#A5ACAF', LAC: '#0080C6', LAR: '#4A76D8', MIA: '#00B2A9',
+  MIN: '#8A5BC7', NE:  '#D63A50', NO:  '#D3BC8D', NYG: '#4C7BD4',
+  NYJ: '#2E9B6E', PHI: '#2C8C7A', PIT: '#FFB612', SF:  '#D42B2B',
+  SEA: '#69BE28', TB:  '#E23838', TEN: '#4B92DB', WAS: '#B0433C',
+};
+
 // Helper: build a game object with auto-resolved full names
 function g(id, away, home, date, time) {
   return {

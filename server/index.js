@@ -14,7 +14,7 @@ async function getTwilioModule() {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, SEASON, WEEK } from '../src/data.js';
+import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, SEASON, WEEK, TEAMS } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
 import { ModerationError } from './moderation.js';
 import { DEMO_LEAGUE, buildLeaderboard, scoreSheet } from '../src/demoLeague.js';
@@ -151,6 +151,7 @@ app.patch('/api/players/:playerId/preferences', playerAuth.requirePlayer, asyncR
   if (input.smsConsent && !allowedSms.includes(input.smsConsent)) return response.status(422).json({ error: 'Invalid SMS consent state.' });
   if (input.resultsChannel && !allowedChannels.includes(input.resultsChannel)) return response.status(422).json({ error: 'Invalid results channel.' });
   if (input.trashTalkLevel && !allowedTones.includes(input.trashTalkLevel)) return response.status(422).json({ error: 'Invalid trash-talk level.' });
+  if (input.favoriteTeam !== undefined && input.favoriteTeam !== '' && input.favoriteTeam !== null && !TEAMS[input.favoriteTeam]) return response.status(422).json({ error: 'Invalid favorite team.' });
   const player = await store.updatePlayerPreferences(request.params.playerId, input, 'player');
   if (!player) return response.status(404).json({ error: 'Player not found.' });
   return response.json(player);
@@ -189,7 +190,11 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
     // launch should replace this with OTP verification (Twilio Verify).
     phoneVerifiedAt: at,
     messaging: { smsConsent: 'opted_in', consentedAt: at, resultsChannel: 'sms_and_in_app' },
-    trashTalk: { level: 'competitive', updatedAt: at }, // maps to the league's explicit default
+    trashTalk: {
+      level: 'competitive', // maps to the league's explicit default
+      updatedAt: at,
+      ...(TEAMS[request.body?.favoriteTeam] ? { jackPolicy: { favoriteTeam: request.body.favoriteTeam, updatedAt: at, updatedBy: 'player' } } : {}),
+    },
   };
   await store.createPlayer(request.params.leagueId, player, hashPin(pin));
   return response.status(201).json({ playerId: player.id, name: player.name });
@@ -216,6 +221,53 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   return response.status(201).json(sheet);
 }));
 
+/* ── Jack's rivalry desk: when one player's favorite team beats another's,
+   Jack drops a receipt in the league chat. Grounded in real final scores only.
+   Teasing is capped by the losing fan's own trash-talk consent level. ── */
+const favoriteTeamOf = (player) => player?.trashTalk?.jackPolicy?.favoriteTeam ?? null;
+
+async function maybePostRivalryChat(leagueId, gameId, result) {
+  try {
+    if (!result?.winner) return;
+    const game = SCHEDULE.flatMap((w) => w.games).find((candidate) => candidate.id === gameId);
+    if (!game) return;
+    const league = await store.getLeague(leagueId);
+    if (!league) return;
+    if ((league.chat ?? []).some((message) => message.id === `chat-rivalry-${gameId}`)) return; // already posted
+    const loserTeam = result.winner === game.away ? game.home : game.away;
+    const winnerFans = (league.players ?? []).filter((player) => favoriteTeamOf(player) === result.winner);
+    const loserFans = (league.players ?? []).filter((player) => favoriteTeamOf(player) === loserTeam);
+    if (!winnerFans.length || !loserFans.length) return;
+
+    const finalScore = result.winner === game.away
+      ? `${result.awayScore}–${result.homeScore}`
+      : `${result.homeScore}–${result.awayScore}`;
+    const margin = Math.abs(Number(result.awayScore) - Number(result.homeScore));
+    const winnerNames = winnerFans.map((player) => player.name.split(' ')[0]).join(' & ');
+
+    const gasUp = margin >= 17
+      ? `${winnerNames}, your squad COOKED. That wasn't a game, that was a business decision.`
+      : margin >= 8
+        ? `${winnerNames}, your boys handled that. Comfortable. Never worried.`
+        : `${winnerNames}, your team survived a dogfight. A win is a win — collect your bragging rights.`;
+
+    // Tease the losing fan only as hard as their own consent level allows
+    const teases = loserFans.map((player) => {
+      const level = player.trashTalk?.level ?? 'none';
+      const first = player.name.split(' ')[0];
+      if (level === 'none') return null; // opted out — never named
+      if (level === 'light') return `Tough one for the ${loserTeam} faithful. Heads up, ${first} — next week's a new week.`;
+      if (margin >= 17) return `${first}... bruh. ${loserTeam} got ran off the field and you watched every minute of it. That's dedication. Misplaced, but dedication.`;
+      return `${first}, your ${loserTeam} squad came up short AGAIN and the whole league saw it. I'm keeping receipts, dawg.`;
+    }).filter(Boolean);
+
+    const msg = [`🏈 RIVALRY DESK: ${result.winner} beat ${loserTeam} ${finalScore}.`, gasUp, ...teases].join(' ').slice(0, 400);
+    await store.addChatMessage(leagueId, { id: `chat-rivalry-${gameId}`, playerId: null, name: 'Jack', msg, time: new Date().toISOString() });
+  } catch (error) {
+    console.error('Rivalry chat failed:', error.message);
+  }
+}
+
 app.put('/api/leagues/:leagueId/results/:gameId', auth.requireAdmin, asyncRoute(async (request, response) => {
   const game = SCHEDULE.flatMap((w) => w.games).find((candidate) => candidate.id === request.params.gameId);
   if (!game) return response.status(404).json({ error: 'Game not found.' });
@@ -223,7 +275,9 @@ app.put('/api/leagues/:leagueId/results/:gameId', auth.requireAdmin, asyncRoute(
   const homeScore = Number(request.body?.homeScore);
   if (!Number.isInteger(awayScore) || !Number.isInteger(homeScore) || awayScore < 0 || homeScore < 0 || awayScore === homeScore) return response.status(422).json({ error: 'Enter two different non-negative final scores.' });
   const result = { awayScore, homeScore, winner: awayScore > homeScore ? game.away : game.home };
-  return response.json(await store.upsertResult(request.params.leagueId, game.id, result, request.actor));
+  const saved = await store.upsertResult(request.params.leagueId, game.id, result, request.actor);
+  await maybePostRivalryChat(request.params.leagueId, game.id, result);
+  return response.json(saved);
 }));
 
 app.post('/api/leagues/:leagueId/recaps/generate', auth.requireAdmin, asyncRoute(async (request, response) => {
@@ -705,6 +759,7 @@ app.get('/api/leagues/:leagueId/live-scores', asyncRoute(async (request, respons
         if (existing?.winner && existing?.verifiedAt) continue;
         const winner = score.awayScore > score.homeScore ? score.away : score.home;
         await store.upsertResult(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner }, 'live_feed_auto');
+        await maybePostRivalryChat(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner });
         autoVerified += 1;
       }
     }
@@ -729,6 +784,7 @@ app.post('/api/leagues/:leagueId/results/sync', auth.requireAdmin, asyncRoute(as
     if (existing?.winner && existing?.verifiedAt && !request.body?.force) { skipped.push(score.gameId); continue; }
     const winner = score.awayScore > score.homeScore ? score.away : score.home;
     await store.upsertResult(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner }, `${request.actor} (live feed)`);
+    await maybePostRivalryChat(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner });
     applied.push({ gameId: score.gameId, matchup: `${score.away} at ${score.home}`, final: `${score.awayScore}–${score.homeScore}`, winner });
   }
   return response.json({ week, applied, appliedCount: applied.length, alreadyVerified: skipped.length, liveInProgress: feed.scores.filter((s) => s.state === 'in').length });

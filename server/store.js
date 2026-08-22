@@ -265,6 +265,7 @@ export class LeagueStore {
     if (preferences.resultsChannel) messaging.resultsChannel = preferences.resultsChannel;
     if (preferences.trashTalkLevel) { trashTalk.level = preferences.trashTalkLevel; trashTalk.updatedAt = at; }
     if (preferences.trashTalk) Object.assign(trashTalk, preferences.trashTalk);
+    if (preferences.favoriteTeam !== undefined) trashTalk.jackPolicy = { ...(trashTalk.jackPolicy ?? {}), favoriteTeam: preferences.favoriteTeam || null, updatedAt: at, updatedBy: actor };
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare('UPDATE players SET messaging_json = ?, trash_talk_json = ?, updated_at = ? WHERE id = ?').run(stringify(messaging), stringify(trashTalk), at, playerId);
