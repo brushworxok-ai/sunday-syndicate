@@ -5,27 +5,54 @@
   "start_url": "/?view=home",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "orientation": "any",
   "background_color": "#070814",
   "theme_color": "#11152b",
   "shortcuts": [
-    { "name": "Make picks", "short_name": "Picks", "url": "/?view=picks" },
-    { "name": "View scores", "short_name": "Scores", "url": "/?view=results" },
-    { "name": "Ask Jack", "short_name": "Jack", "url": "/?view=join" }
+    {
+      "name": "Make picks",
+      "short_name": "Picks",
+      "url": "/?view=picks"
+    },
+    {
+      "name": "View scores",
+      "short_name": "Scores",
+      "url": "/?view=results"
+    },
+    {
+      "name": "Ask Jack",
+      "short_name": "Jack",
+      "url": "/?view=join"
+    }
   ],
   "icons": [
     {
-      "src": "/jack.jpg",
-      "sizes": "1024x1024",
-      "type": "image/jpeg",
+      "src": "/jack-money-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/notification-icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "src": "/jack-money-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/jack-money-icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/jack-money-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
