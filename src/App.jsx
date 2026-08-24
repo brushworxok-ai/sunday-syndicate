@@ -20,6 +20,7 @@ import { DEMO_CHAT, DEMO_LEAGUE } from './demoLeague.js';
 import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
 import { deriveSurvivorPool, findTeamGame } from './survivor.js';
+import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
@@ -33,6 +34,7 @@ const MAIN_NAV = [
 const MORE_ITEMS = [
   ['season',   'Season',           '🏆', 'Full-season standings & payouts'],
   ['survivor', 'Survivor',         '🛡️', "One team a week. Lose once, you're out."],
+  ['cfb',      'College FB',       '🏟️', 'CFB rankings, games & pick-em pools'],
   ['entries',  'Locked Entries',   '📋', 'View submitted pick sheets'],
   ['players',  'Player Settings',  '👤', 'Preferences & consent'],
   ['bets',     'Side Bets',        '🎲', 'Challenge your crew'],
@@ -117,6 +119,26 @@ function App() {
   const weekLabel = useMemo(() => getWeek(selectedWeek)?.label ?? `Week ${selectedWeek}`, [selectedWeek]);
   const [betForm, setBetForm] = useState({ creatorId: 'player-marcus', opponentId: 'player-taylor', event: `Week ${selectedWeek} final pick score`, terms: 'Higher verified weekly score wins', settlementRule: 'compare_weekly_score', stakeType: 'virtual_tokens', stakeAmount: 10, stakeLabel: '10 Syndicate tokens', optionalMessage: '' });
   const [recapEdit, setRecapEdit] = useState(DEMO_LEAGUE.recap.finalText);
+  const [recapShow, setRecapShow] = useState(null); // { slides, narration, week }
+  const [recapShowLoading, setRecapShowLoading] = useState(false);
+  const [recapSlideIndex, setRecapSlideIndex] = useState(0);
+
+  // CFB state
+  const [cfbRankings, setCfbRankings] = useState(null);
+  const [cfbGames, setCfbGames] = useState(null);
+  const [cfbWeek, setCfbWeek] = useState(1);
+  const [cfbLoading, setCfbLoading] = useState('');
+
+  // CashApp Pool state
+  const [cashAppPoolUrl, setCashAppPoolUrl] = useState('');
+  const [cashAppPoolLabel, setCashAppPoolLabel] = useState('');
+
+  // CFB Pick-Em pool state
+  const [cfbSelected, setCfbSelected] = useState(() => new Set());
+  const [cfbEntryFee, setCfbEntryFee] = useState(10);
+  const [cfbMyPicks, setCfbMyPicks] = useState({});
+  const [cfbTiebreaker, setCfbTiebreaker] = useState('');
+  const [cfbBuilderOpen, setCfbBuilderOpen] = useState(false);
 
   const loadLeague = useCallback(async () => {
     try {
@@ -304,6 +326,148 @@ function App() {
     } finally { setServerBusy(''); }
   };
 
+
+  // CFB data loaders
+  const loadCfbRankings = async () => {
+    setCfbLoading('rankings');
+    try {
+      const data = await apiRequest('/api/cfb/rankings');
+      setCfbRankings(data);
+    } catch (error) { notify(error.message); }
+    finally { setCfbLoading(''); }
+  };
+
+  const loadCfbGames = async (week) => {
+    setCfbLoading('games');
+    try {
+      const data = await apiRequest(`/api/cfb/scoreboard?week=${week}`);
+      setCfbGames(data);
+    } catch (error) { notify(error.message); }
+    finally { setCfbLoading(''); }
+  };
+
+  // CashApp Pool link
+  const saveCashAppPool = async (urlOverride, labelOverride) => {
+    if (!(await ensureAdmin())) return;
+    const url = (urlOverride ?? (cashAppPoolUrl || serverLeague?.settings?.cashAppPool?.url || '')).trim();
+    const label = (labelOverride ?? (cashAppPoolLabel || serverLeague?.settings?.cashAppPool?.label || '')).trim();
+    setServerBusy('cashapp-pool');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cashapp-pool`, { method: 'PATCH', body: JSON.stringify({ url, label }) });
+      await loadLeague();
+      notify(url ? 'Cash App Pool link saved — players will see the pay button now.' : 'Cash App Pool link cleared.');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  // ── CFB Pick-Em pool ──
+  const cfbPool = useMemo(
+    () => (serverLeague?.cfbPools ?? []).find((p) => p.week === cfbWeek) ?? null,
+    [serverLeague, cfbWeek],
+  );
+  const cfbBoard = useMemo(() => (cfbPool ? gradeCfbPool(cfbPool) : null), [cfbPool]);
+  const cfbMyEntry = cfbPool?.entries?.[playerSession.playerId] ?? null;
+  const cfbTbGame = useMemo(() => (cfbPool ? getTiebreakerGame(cfbPool) : null), [cfbPool]);
+
+  // Auto-load games + rankings the first time the CFB page opens
+  useEffect(() => {
+    if (view !== 'cfb') return;
+    if (!cfbGames) loadCfbGames(cfbWeek);
+    if (!cfbRankings) loadCfbRankings();
+  }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pre-fill my existing picks when the pool or sign-in changes
+  useEffect(() => {
+    if (cfbMyEntry) {
+      setCfbMyPicks(cfbMyEntry.picks ?? {});
+      setCfbTiebreaker(String(cfbMyEntry.tiebreaker ?? ''));
+    } else {
+      setCfbMyPicks({});
+      setCfbTiebreaker('');
+    }
+  }, [cfbPool?.id, playerSession.playerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleCfbGame = (gameId) => {
+    setCfbSelected((current) => {
+      const next = new Set(current);
+      if (next.has(gameId)) next.delete(gameId);
+      else if (next.size < 20) next.add(gameId);
+      return next;
+    });
+  };
+
+  const createCfbPool = async () => {
+    if (!(await ensureAdmin())) return;
+    setServerBusy('cfb-pool-create');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool`, {
+        method: 'POST',
+        body: JSON.stringify({ week: cfbWeek, entryFee: Number(cfbEntryFee) || 0, gameIds: [...cfbSelected] }),
+      });
+      await loadLeague();
+      setCfbSelected(new Set());
+      setCfbBuilderOpen(false);
+      notify(`Week ${cfbWeek} CFB pool is live — players can pick now.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const patchCfbPool = async (status) => {
+    if (!cfbPool || !(await ensureAdmin())) return;
+    setServerBusy('cfb-pool-status');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+      await loadLeague();
+      notify(status === 'locked' ? 'Pool locked — no more pick changes.' : status === 'open' ? 'Pool reopened for picks.' : 'Pool finalized.');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const submitCfbPicks = async () => {
+    if (!cfbPool) return;
+    if (!playerSession.authenticated) return notify('Sign in as a player to lock in your CFB picks.');
+    setServerBusy('cfb-picks');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/picks`, {
+        method: 'POST',
+        body: JSON.stringify({ picks: cfbMyPicks, tiebreaker: Number(cfbTiebreaker) }),
+      });
+      await loadLeague();
+      notify(`Your Week ${cfbPool.week} CFB picks are locked in. Good luck! 🏟️`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const syncCfbScores = async () => {
+    if (!cfbPool || !(await ensureAdmin())) return;
+    setServerBusy('cfb-sync');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/sync-scores`, { method: 'POST' });
+      await loadLeague();
+      notify(data.allFinal ? 'All games final — pool graded and complete. 🏆' : `Scores synced for ${data.updated} game${data.updated === 1 ? '' : 's'}.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const toggleCfbPaid = async (playerId, nextPaid) => {
+    if (!cfbPool || !(await ensureAdmin())) return;
+    setServerBusy(`cfb-paid-${playerId}`);
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/paid`, { method: 'PATCH', body: JSON.stringify({ playerId, paid: nextPaid }) });
+      await loadLeague();
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const chooseCfbPick = (gameId, side) => {
+    if (cfbPool?.status !== 'open') return;
+    setCfbMyPicks((current) => {
+      const next = { ...current };
+      if (next[gameId] === side) delete next[gameId];
+      else next[gameId] = side;
+      return next;
+    });
+  };
 
   const choosePick = (gameId, team) => {
     setPicks((current) => {
@@ -655,6 +819,16 @@ function App() {
       notify(`Jack texted ${sent} player${sent === 1 ? '' : 's'} (${suppressed} suppressed by consent).`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
+  };
+
+  const launchRecapShow = async () => {
+    setRecapShowLoading(true);
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/recap-show`);
+      setRecapShow(data);
+      setRecapSlideIndex(0);
+    } catch (error) { notify(error.message); }
+    finally { setRecapShowLoading(false); }
   };
 
   const saveJackLeagueSettings = async (jackSettings) => {
@@ -1021,6 +1195,7 @@ function App() {
                 {aiResult.recap ? <p className="ai-copy">{aiResult.recap}</p> : <p className="muted">Turn your entries and posted results into a sharp, grounded league update—no invented stats.</p>}
                 {aiError && <p className="error-text">{aiError}</p>}
                 <button className="text-button" type="button" onClick={getRecap} disabled={!weekSheets.length || aiLoading === 'recap'}>{aiLoading === 'recap' ? 'Writing…' : aiResult.recap ? 'Refresh recap ↗' : 'Generate league recap ↗'}</button>
+                <button className="text-button recap-show-btn" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading…' : '▶ Watch Recap Show'}</button>
               </div>
               <div className="panel next-up">
                 <span className="eyebrow dark">NEXT UP</span><h2>{currentGames[0]?.away} <i>at</i> {currentGames[0]?.home}</h2><p>{currentGames[0]?.time}</p>
@@ -1080,6 +1255,16 @@ function App() {
               <label>Tiebreaker total<input type="number" min="0" value={tiebreaker} onChange={(event) => setTiebreaker(event.target.value)} placeholder="48" /></label>
               <p className="rule-note"><strong>Closest without going over wins.</strong> Going over means your tiebreaker is busted.</p>
               <label className="check-row"><input type="checkbox" checked={paid} onChange={(event) => setPaid(event.target.checked)} /><span>I confirm I sent ${ENTRY_FEE}</span></label>
+              {serverLeague?.settings?.cashAppPool?.url && (
+                <div className="cashapp-steps">
+                  <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
+                    <span className="cashapp-icon">💵</span>
+                    <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App Pool'}</strong><small>1. Tap here → 2. Pay ${ENTRY_FEE} → 3. Check the box above</small></div>
+                    <span className="cashapp-arrow">↗</span>
+                  </a>
+                  <small className="muted">Works without Cash App too — the pool page takes Apple Pay & Google Pay.</small>
+                </div>
+              )}
               <button className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Locking in…' : <>Lock in picks <span>→</span></>}</button>
               <button className="ai-mini-button" type="button" onClick={analyzePicks} disabled={aiLoading === 'picks'}><span>✦</span>{aiLoading === 'picks' ? 'Reviewing…' : 'Ask Gemini to check my sheet'}</button>
               {aiResult.picks && <div className="ai-slip-result">{aiResult.picks}</div>}
@@ -1418,6 +1603,238 @@ function App() {
           </StandardPage>
         )}
 
+        {view === 'cfb' && (
+          <StandardPage eyebrow="COLLEGE FOOTBALL" title="CFB Pick-Em" subtitle="Pick every game against the spread. Best record takes the pot — closest tiebreaker settles ties.">
+            <div className="cfb-controls">
+              <div className="cfb-week-picker">
+                <label>Week</label>
+                <select value={cfbWeek} onChange={(e) => { const w = Number(e.target.value); setCfbWeek(w); loadCfbGames(w); }}>{Array.from({ length: 16 }, (_, i) => <option key={i + 1} value={i + 1}>Week {i + 1}</option>)}</select>
+                <button className="button button-ghost-dark" type="button" onClick={() => loadCfbGames(cfbWeek)} disabled={cfbLoading === 'games'}>{cfbLoading === 'games' ? 'Loading…' : '↻ Refresh'}</button>
+              </div>
+              {isComm && !cfbPool && (
+                <button className="button button-primary" type="button" onClick={() => setCfbBuilderOpen((v) => !v)}>
+                  {cfbBuilderOpen ? '✕ Cancel Builder' : `＋ Build Week ${cfbWeek} Pool`}
+                </button>
+              )}
+            </div>
+
+            {/* ── Commissioner slate builder ── */}
+            {isComm && cfbBuilderOpen && !cfbPool && (
+              <section className="cfb-pool-card builder">
+                <h2 className="cfb-section-title">🛠️ Build the Week {cfbWeek} slate</h2>
+                <p className="muted">Tap games below to add them to the slate (3–20 games). The last kickoff automatically becomes the tiebreaker game.</p>
+                <div className="cfb-builder-bar">
+                  <label>Entry fee $<input type="number" min="0" max="1000" value={cfbEntryFee} onChange={(e) => setCfbEntryFee(e.target.value)} /></label>
+                  <span className="cfb-builder-count">{cfbSelected.size} selected</span>
+                  <button className="button button-primary" type="button" disabled={cfbSelected.size < 3 || serverBusy === 'cfb-pool-create'} onClick={createCfbPool}>
+                    {serverBusy === 'cfb-pool-create' ? 'Creating…' : `Create Pool (${cfbSelected.size} games)`}
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {/* ── Active pool ── */}
+            {cfbPool && (
+              <section className={`cfb-pool-card ${cfbPool.status}`}>
+                <div className="cfb-pool-head">
+                  <div>
+                    <h2 className="cfb-section-title">🏆 Week {cfbPool.week} Pick-Em Pool</h2>
+                    <small className="muted">{cfbPool.games.length} games · ${cfbPool.entryFee} entry · Pot ${Object.values(cfbPool.entries ?? {}).filter((e) => e.paid).length * cfbPool.entryFee}</small>
+                  </div>
+                  <span className={`cfb-pool-status ${cfbPool.status}`}>{cfbPool.status === 'open' ? '🟢 Open for picks' : cfbPool.status === 'locked' ? '🔒 Locked' : '🏁 Final'}</span>
+                </div>
+
+                {serverLeague?.settings?.cashAppPool?.url && (
+                  <div className="cashapp-steps">
+                    <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
+                      <span className="cashapp-icon">💵</span>
+                      <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay Entry Fee'}</strong><small>Step 1: Tap here · Step 2: Pay ${cfbPool.entryFee} in Cash App · Step 3: You're in</small></div>
+                      <span className="cashapp-arrow">↗</span>
+                    </a>
+                    <small className="muted">No Cash App? The pool link also takes Apple Pay & Google Pay. The commissioner marks you paid once it lands.</small>
+                  </div>
+                )}
+
+                {/* Player pick flow */}
+                {cfbPool.status === 'open' && (
+                  playerSession.authenticated ? (
+                    <div className="cfb-pick-flow">
+                      <div className="cfb-pick-progress">
+                        <strong>{Object.keys(cfbMyPicks).length}/{cfbPool.games.length} picked</strong>
+                        {cfbMyEntry && <span className="cfb-entry-in">✓ Picks in — edit anytime before lock</span>}
+                      </div>
+                      <div className="cfb-pick-grid">
+                        {cfbPool.games.map((g) => (
+                          <article className="cfb-pick-card" key={g.id}>
+                            <div className="cfb-pick-meta">
+                              <span className="cfb-pick-spread">{g.spreadLabel}</span>
+                              <span className="cfb-pick-date">{new Date(g.date).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>
+                              {cfbTbGame?.id === g.id && <span className="cfb-tb-tag">TIEBREAKER</span>}
+                            </div>
+                            <div className="cfb-pick-buttons">
+                              <button type="button" className={`cfb-pick-team ${cfbMyPicks[g.id] === 'away' ? 'picked' : ''}`} onClick={() => chooseCfbPick(g.id, 'away')}>
+                                {g.away.logo && <img src={g.away.logo} alt="" loading="lazy" />}
+                                <span>{g.away.rank ? `#${g.away.rank} ` : ''}{g.away.abbr}</span>
+                              </button>
+                              <span className="cfb-at">@</span>
+                              <button type="button" className={`cfb-pick-team ${cfbMyPicks[g.id] === 'home' ? 'picked' : ''}`} onClick={() => chooseCfbPick(g.id, 'home')}>
+                                {g.home.logo && <img src={g.home.logo} alt="" loading="lazy" />}
+                                <span>{g.home.rank ? `#${g.home.rank} ` : ''}{g.home.abbr}</span>
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                      <div className="cfb-tb-row">
+                        <label>Tiebreaker — total points in {cfbTbGame ? `${cfbTbGame.away.abbr} @ ${cfbTbGame.home.abbr}` : 'the last game'}
+                          <input type="number" min="0" max="200" inputMode="numeric" value={cfbTiebreaker} onChange={(e) => setCfbTiebreaker(e.target.value)} placeholder="e.g. 52" />
+                        </label>
+                      </div>
+                      <button className="button button-primary full" type="button" disabled={serverBusy === 'cfb-picks'} onClick={submitCfbPicks}>
+                        {serverBusy === 'cfb-picks' ? 'Locking in…' : cfbMyEntry ? 'Update My Picks' : `Lock In My ${cfbPool.games.length} Picks`}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="cfb-signin-nudge">
+                      <p className="muted">Sign in as a player to make your picks — it takes ten seconds.</p>
+                      <PlayerSessionPanel players={proofLeague.players} session={playerSession} login={playerLogin} setLogin={setPlayerLogin} onLogin={loginPlayer} onLogout={logoutPlayer} busy={serverBusy === 'player-login'} />
+                    </div>
+                  )
+                )}
+
+                {/* Leaderboard */}
+                {cfbBoard && cfbBoard.rows.length > 0 && (
+                  <div className="cfb-board">
+                    <h3 className="cfb-sub-title">{cfbBoard.complete ? '🏁 Final Standings' : `📊 Standings — ${cfbBoard.gamesFinal}/${cfbBoard.gamesTotal} games final`}</h3>
+                    {cfbBoard.tiebreakerTotal != null && <small className="muted">Tiebreaker game landed on {cfbBoard.tiebreakerTotal} total points.</small>}
+                    <div className="cfb-board-rows">
+                      {cfbBoard.rows.map((row, index) => (
+                        <div className={`cfb-board-row ${cfbBoard.complete && cfbBoard.winners.some((w) => w.playerId === row.playerId) ? 'winner' : ''} ${row.playerId === playerSession.playerId ? 'me' : ''}`} key={row.playerId}>
+                          <span className="cfb-board-rank">{index + 1}</span>
+                          <span className="cfb-board-name">{row.name}{cfbBoard.complete && cfbBoard.winners.some((w) => w.playerId === row.playerId) ? ' 👑' : ''}</span>
+                          <span className="cfb-board-record">{row.wins}-{row.losses}{row.pushes ? `-${row.pushes}` : ''}</span>
+                          <span className="cfb-board-tb">TB {row.tiebreaker}{row.tbDiff != null ? ` (±${row.tbDiff})` : ''}</span>
+                          {isComm ? (
+                            <button type="button" className={`cfb-paid-toggle ${row.paid ? 'paid' : ''}`} disabled={serverBusy === `cfb-paid-${row.playerId}`} onClick={() => toggleCfbPaid(row.playerId, !row.paid)}>
+                              {row.paid ? '✓ Paid' : 'Mark paid'}
+                            </button>
+                          ) : (
+                            <span className={`cfb-paid-chip ${row.paid ? 'paid' : ''}`}>{row.paid ? '✓ Paid' : 'Unpaid'}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Picks reveal once locked */}
+                {cfbPool.status !== 'open' && cfbBoard && cfbBoard.rows.length > 0 && (
+                  <details className="cfb-picks-reveal">
+                    <summary>See everyone's picks</summary>
+                    <div className="cfb-reveal-table-wrap">
+                      <table className="cfb-reveal-table">
+                        <thead><tr><th>Game</th>{cfbBoard.rows.map((row) => <th key={row.playerId}>{row.name.split(' ')[0]}</th>)}</tr></thead>
+                        <tbody>
+                          {cfbPool.games.map((g) => {
+                            const cover = cfbBoard.covers[g.id];
+                            return (
+                              <tr key={g.id}>
+                                <td>{g.away.abbr}@{g.home.abbr}<small> {g.spreadLabel}</small></td>
+                                {cfbBoard.rows.map((row) => {
+                                  const pick = row.picks?.[g.id];
+                                  const label = pick === 'home' ? g.home.abbr : pick === 'away' ? g.away.abbr : '—';
+                                  const state = cover == null ? '' : cover === 'push' ? 'push' : pick === cover ? 'hit' : 'miss';
+                                  return <td className={state} key={row.playerId}>{label}</td>;
+                                })}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
+
+                {/* Commissioner pool controls */}
+                {isComm && (
+                  <div className="cfb-admin-bar">
+                    {cfbPool.status === 'open' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('locked')}>🔒 Lock picks</button>}
+                    {cfbPool.status === 'locked' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('open')}>🔓 Reopen picks</button>}
+                    <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-sync'} onClick={syncCfbScores}>{serverBusy === 'cfb-sync' ? 'Syncing…' : '⚡ Sync scores from ESPN'}</button>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {!cfbPool && !cfbBuilderOpen && (
+              <div className="cfb-empty pool-hint"><span>🏆</span><p>No pick-em pool for Week {cfbWeek} yet.{isComm ? ' Tap “Build Pool” above, pick 3–20 games from the list, and the pool goes live.' : ' The commissioner hasn’t built this week’s slate yet — check back soon.'}</p></div>
+            )}
+
+            {cfbRankings && (
+              <section className="cfb-rankings">
+                <h2 className="cfb-section-title">📊 {cfbRankings.name} — {cfbRankings.season}</h2>
+                <div className="cfb-rankings-grid">
+                  {cfbRankings.teams.map((t) => (
+                    <article className={`cfb-rank-card ${t.rank <= 5 ? 'top5' : t.rank <= 10 ? 'top10' : ''}`} key={t.rank}>
+                      <span className="cfb-rank-num">{t.rank}</span>
+                      {t.logo && <img className="cfb-team-logo" src={t.logo} alt="" loading="lazy" />}
+                      <div className="cfb-rank-info"><strong>{t.team}</strong><small>{t.abbr} · {t.record || '—'}</small></div>
+                      {t.prevRank && t.prevRank !== t.rank && <span className={`cfb-rank-change ${t.rank < t.prevRank ? 'up' : 'down'}`}>{t.rank < t.prevRank ? `▲${t.prevRank - t.rank}` : `▼${t.rank - t.prevRank}`}</span>}
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {cfbGames && (
+              <section className="cfb-games">
+                <h2 className="cfb-section-title">🏟️ Week {cfbGames.week} — {cfbGames.totalGames} Games</h2>
+                <div className="cfb-games-grid">
+                  {cfbGames.games.filter((g) => g.isRanked).map((g) => (
+                    <article className={`cfb-game-card ranked ${cfbBuilderOpen ? 'selectable' : ''} ${cfbSelected.has(g.id) ? 'selected' : ''}`} onClick={cfbBuilderOpen ? () => toggleCfbGame(g.id) : undefined} key={g.id}>
+                      <div className="cfb-game-teams">
+                        <div className="cfb-game-team">
+                          {g.away.logo && <img src={g.away.logo} alt="" className="cfb-game-logo" loading="lazy" />}
+                          <div><strong>{g.away.rank ? `#${g.away.rank} ` : ''}{g.away.abbr}</strong><small>{g.away.name}</small></div>
+                        </div>
+                        <span className="cfb-at">@</span>
+                        <div className="cfb-game-team home">
+                          {g.home.logo && <img src={g.home.logo} alt="" className="cfb-game-logo" loading="lazy" />}
+                          <div><strong>{g.home.rank ? `#${g.home.rank} ` : ''}{g.home.abbr}</strong><small>{g.home.name}</small></div>
+                        </div>
+                      </div>
+                      <div className="cfb-game-odds">
+                        {g.spread && <span className="cfb-spread">{g.spread}</span>}
+                        {g.overUnder && <span className="cfb-ou">O/U {g.overUnder}</span>}
+                      </div>
+                      {g.status !== 'scheduled' && <span className="cfb-status">{g.statusDetail}</span>}
+                    </article>
+                  ))}
+                </div>
+                {cfbGames.games.filter((g) => !g.isRanked).length > 0 && (
+                  <>
+                    <h3 className="cfb-sub-title">Other Games</h3>
+                    <div className="cfb-games-grid compact">
+                      {cfbGames.games.filter((g) => !g.isRanked).map((g) => (
+                        <article className={`cfb-game-card ${cfbBuilderOpen ? 'selectable' : ''} ${cfbSelected.has(g.id) ? 'selected' : ''}`} onClick={cfbBuilderOpen ? () => toggleCfbGame(g.id) : undefined} key={g.id}>
+                          <div className="cfb-game-teams compact">
+                            <span><strong>{g.away.abbr}</strong> @ <strong>{g.home.abbr}</strong></span>
+                            {g.spread && <span className="cfb-spread">{g.spread}</span>}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </section>
+            )}
+
+            {!cfbRankings && !cfbGames && (
+              <div className="cfb-empty"><span>🏟️</span><p>Load rankings or pick a week to see games and spreads. Data pulls live from ESPN — rankings update weekly, spreads as soon as lines are posted.</p></div>
+            )}
+          </StandardPage>
+        )}
+
         {view === 'rules' && (
           <StandardPage eyebrow="THE FINE PRINT" title="House rules" subtitle="Simple enough to explain before kickoff. Firm enough to settle Monday-night arguments.">
             <div className="rules-grid">
@@ -1455,6 +1872,30 @@ function App() {
               <div className="jack-text-row">
                 <div><strong>📱 Jack's weekly text</strong><p>Texts every opted-in player their results, the reigning champ shoutout, and a personal (PG-13 over SMS) jab. Full-strength roasts stay in the app.</p></div>
                 <button className="button button-send" type="button" onClick={sendJackText} disabled={serverBusy === 'jack-text'}>{serverBusy === 'jack-text' ? 'Texting…' : 'Send Jack\'s texts'}</button>
+              </div>
+              <div className="jack-text-row">
+                <div><strong>🎬 Jack's Weekly Recap Show</strong><p>Full-screen animated slideshow with standings, winner spotlight, movers, roasts, and Jack's AI commentary. Auto-advances with manual controls.</p></div>
+                <button className="button button-primary" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading show…' : '▶ Launch Recap Show'}</button>
+              </div>
+            </section>
+            <section className="cashapp-admin-section">
+              <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Cash App Pool Link</h2></div></div>
+              <p>One shared payment link for the whole league. Players tap it, pay the entry fee, and you mark them paid — no chasing handles.</p>
+              <ol className="cashapp-howto">
+                <li>In Cash App, tap the <strong>$</strong> tab → <strong>Pools</strong> → <strong>Create Pool</strong>. Name it (e.g. “Sunday Syndicate Week 1”) and set a goal if you want.</li>
+                <li>Tap <strong>Share</strong> and copy the pool link — it looks like <code>cash.app/pool/…</code></li>
+                <li>Paste it below and save. The pay button shows up on the Picks page and inside every CFB pool automatically. Friends without Cash App can still pay through the link with Apple Pay or Google Pay.</li>
+              </ol>
+              <div className="cashapp-admin-form">
+                <label>Pool URL<input type="url" value={cashAppPoolUrl || serverLeague?.settings?.cashAppPool?.url || ''} onChange={(e) => setCashAppPoolUrl(e.target.value)} placeholder="https://cash.app/pool/..." /></label>
+                <label>Button label <small>optional</small><input type="text" value={cashAppPoolLabel || serverLeague?.settings?.cashAppPool?.label || ''} onChange={(e) => setCashAppPoolLabel(e.target.value)} placeholder="Pay $20 Entry Fee" maxLength="80" /></label>
+                <div className="cashapp-admin-actions">
+                  <button className="button button-primary" type="button" onClick={() => saveCashAppPool()} disabled={serverBusy === 'cashapp-pool'}>{serverBusy === 'cashapp-pool' ? 'Saving…' : 'Save Pool Link'}</button>
+                  {serverLeague?.settings?.cashAppPool?.url && <button className="button button-ghost-dark" type="button" onClick={() => { setCashAppPoolUrl(''); setCashAppPoolLabel(''); saveCashAppPool('', ''); }}>Clear Link</button>}
+                </div>
+                {serverLeague?.settings?.cashAppPool?.url && (
+                  <div className="cashapp-preview"><span>💵</span><div><strong>Active:</strong> <a href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">{serverLeague.settings.cashAppPool.label || 'Cash App Pool'} ↗</a></div></div>
+                )}
               </div>
             </section>
             <JackControlStudio
@@ -1553,6 +1994,10 @@ function App() {
         </div>
       )}
 
+      {recapShow && (
+        <RecapShow data={recapShow} slideIndex={recapSlideIndex} onSlideChange={setRecapSlideIndex} onClose={() => setRecapShow(null)} />
+      )}
+
       <footer><span>405 BadGuys Parlay · {weekLabel}</span><span>Built for bragging rights</span></footer>
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
@@ -1586,6 +2031,170 @@ function StatusPill({ state = 'neutral', children }) {
 function PlayerSessionPanel({ players, session, login, setLogin, onLogin, onLogout, busy }) {
   if (session.authenticated) return <div className="player-session active"><div><span>{session.name.split(' ').map((word) => word[0]).join('')}</span><p><strong>Signed in as {session.name}</strong><small>Player-owned controls are unlocked only for this identity.</small></p></div><button type="button" onClick={onLogout}>Switch player</button></div>;
   return <form className="player-session" onSubmit={onLogin}><div><span>◎</span><p><strong>Player sign-in</strong><small>Demo PIN is the last four visible phone digits. Production should replace this with OTP verification.</small></p></div><label>Player<select aria-label="Player identity" value={login.playerId} onChange={(event) => setLogin((current) => ({ ...current, playerId: event.target.value }))}>{players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label><label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="4" value={login.pin} onChange={(event) => setLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} /></label><button type="submit" disabled={busy || login.pin.length !== 4}>{busy ? 'Signing in…' : 'Sign in'}</button></form>;
+}
+
+function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
+  const slide = data.slides[slideIndex];
+  const narration = data.narration ?? [];
+  const total = data.slides.length;
+  const canPrev = slideIndex > 0;
+  const canNext = slideIndex < total - 1;
+
+  // Auto-advance every 6 seconds
+  useEffect(() => {
+    if (slideIndex >= total - 1) return;
+    const timer = setTimeout(() => onSlideChange(slideIndex + 1), 6000);
+    return () => clearTimeout(timer);
+  }, [slideIndex, total, onSlideChange]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight' && canNext) onSlideChange(slideIndex + 1);
+      if (e.key === 'ArrowLeft' && canPrev) onSlideChange(slideIndex - 1);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [slideIndex, canPrev, canNext, onSlideChange, onClose]);
+
+  return (
+    <div className="recap-show-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="recap-show">
+        <button className="recap-show-close" type="button" onClick={onClose}>×</button>
+
+        <div className="recap-show-progress">
+          {data.slides.map((_, i) => (
+            <button key={i} className={`recap-dot ${i === slideIndex ? 'active' : ''} ${i < slideIndex ? 'done' : ''}`} type="button" onClick={() => onSlideChange(i)} aria-label={`Slide ${i + 1}`} />
+          ))}
+        </div>
+
+        <div className="recap-show-stage">
+          {slide.type === 'title' && (
+            <div className="recap-slide recap-slide-title">
+              <div className="recap-jack-badge">✦</div>
+              <h1>Week {slide.week} Recap</h1>
+              <p className="recap-subtitle">{slide.season} Season · {slide.gameCount} Games</p>
+              {narration[0] && <p className="recap-narration">{narration[0]}</p>}
+              <div className="recap-meta-row">
+                <span>{slide.playerCount} players</span>
+                <span>{slide.verifiedCount}/{slide.gameCount} verified</span>
+              </div>
+            </div>
+          )}
+
+          {slide.type === 'winner' && (
+            <div className="recap-slide recap-slide-winner">
+              <span className="recap-crown">👑</span>
+              <h1>{slide.name}</h1>
+              <p className="recap-big-score">{slide.score}–{slide.total - slide.score}</p>
+              {narration[1] && <p className="recap-narration">{narration[1]}</p>}
+              {slide.runnerUp && (
+                <p className="recap-runner-up">Runner-up: {slide.runnerUp.name} ({slide.runnerUp.score}–{slide.total - slide.runnerUp.score})</p>
+              )}
+              {slide.margin > 0 && <p className="recap-margin">Won by {slide.margin} pick{slide.margin !== 1 ? 's' : ''}</p>}
+            </div>
+          )}
+
+          {slide.type === 'standings' && (
+            <div className="recap-slide recap-slide-standings">
+              <h2>Standings</h2>
+              {narration[2] && <p className="recap-narration">{narration[2]}</p>}
+              <div className="recap-standings-list">
+                {slide.entries.map((entry, i) => (
+                  <div className={`recap-standing-row ${i === 0 ? 'first' : ''}`} key={entry.playerId}>
+                    <span className="recap-rank">#{entry.rank}</span>
+                    <span className="recap-name">{entry.name}</span>
+                    <span className="recap-score">{entry.score}</span>
+                    <span className={`recap-change ${entry.rankChange > 0 ? 'up' : entry.rankChange < 0 ? 'down' : ''}`}>
+                      {entry.rankChange > 0 ? `▲${entry.rankChange}` : entry.rankChange < 0 ? `▼${Math.abs(entry.rankChange)}` : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {slide.type === 'movers' && (
+            <div className="recap-slide recap-slide-movers">
+              <h2>Week's Movers</h2>
+              {narration[2] && <p className="recap-narration">{narration[2]}</p>}
+              <div className="recap-movers-grid">
+                {slide.rise && (
+                  <div className="recap-mover-card rise">
+                    <span className="recap-mover-icon">🚀</span>
+                    <h3>{slide.rise.name}</h3>
+                    <p className="recap-mover-stat">+{slide.rise.change} positions</p>
+                    <p>Score: {slide.rise.score}</p>
+                  </div>
+                )}
+                {slide.fall && (
+                  <div className="recap-mover-card fall">
+                    <span className="recap-mover-icon">📉</span>
+                    <h3>{slide.fall.name}</h3>
+                    <p className="recap-mover-stat">{slide.fall.change} positions</p>
+                    <p>Score: {slide.fall.score}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {slide.type === 'sideBets' && (
+            <div className="recap-slide recap-slide-bets">
+              <h2>Side Bets Settled</h2>
+              {narration[3] && <p className="recap-narration">{narration[3]}</p>}
+              <div className="recap-bets-list">
+                {slide.bets.map((bet, i) => (
+                  <div className="recap-bet-card" key={i}>
+                    <span className="recap-bet-icon">🎲</span>
+                    <div>
+                      <strong>{bet.winnerName} wins!</strong>
+                      <p>{bet.creatorName} vs {bet.opponentName}</p>
+                      <p className="recap-bet-stake">{bet.stake}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {slide.type === 'roasts' && (
+            <div className="recap-slide recap-slide-roasts">
+              <h2>Jack's Takes</h2>
+              <div className="recap-roasts-scroll">
+                {slide.players.map((p) => (
+                  <div className={`recap-roast-card ${p.isWinner ? 'winner' : ''}`} key={p.playerId}>
+                    <div className="recap-roast-header">
+                      <strong>{p.name}</strong>
+                      <span>#{p.rank} · {p.score} pts</span>
+                    </div>
+                    {p.text && <p className="recap-roast-text">{p.isWinner ? '👑 ' : '🔥 '}{p.text}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {slide.type === 'closing' && (
+            <div className="recap-slide recap-slide-closing">
+              <div className="recap-jack-badge large">✦</div>
+              <h1>That's a wrap!</h1>
+              <p className="recap-subtitle">Week {slide.week} is in the books.</p>
+              {narration[4] && <p className="recap-narration">{narration[4]}</p>}
+              <p className="recap-signoff">— Jack, Commissioner AI</p>
+            </div>
+          )}
+        </div>
+
+        <div className="recap-show-nav">
+          <button type="button" disabled={!canPrev} onClick={() => onSlideChange(slideIndex - 1)}>‹ Prev</button>
+          <span>{slideIndex + 1} / {total}</span>
+          <button type="button" disabled={!canNext} onClick={() => onSlideChange(slideIndex + 1)}>Next ›</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AppWithErrorBoundary() {

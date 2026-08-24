@@ -106,6 +106,7 @@ function publicLeague(state) {
     consentRecords: clone(state.consentRecords ?? []).sort(byNewest('recordedAt')),
     survivorPicks: clone(state.survivorPicks ?? []).sort((a, b) => Number(a.week) - Number(b.week)),
     payouts: clone(state.payouts ?? []).sort(byNewest('paidAt')),
+    cfbPools: clone(state.cfbPools ?? []).sort(byNewest('createdAt')),
   };
 }
 
@@ -343,6 +344,34 @@ export class PostgresLeagueStore {
       else draft.survivorPicks.push(clone(pick));
       draft.auditLog.push(auditEntry('survivor.pick_saved', `Survivor pick for Week ${pick.week}: ${pick.team}`, pick.playerId, { week: pick.week, team: pick.team }));
       return pick;
+    });
+  }
+
+  async getCfbPool(leagueId, poolId) {
+    const state = await this.readState(leagueId);
+    return clone((state?.cfbPools ?? []).find((pool) => pool.id === poolId) ?? null);
+  }
+
+  async saveCfbPool(leagueId, pool) {
+    return this.mutateLeague(leagueId, (draft) => {
+      draft.cfbPools ??= [];
+      const index = draft.cfbPools.findIndex((item) => item.id === pool.id);
+      if (index >= 0) draft.cfbPools[index] = clone(pool);
+      else draft.cfbPools.push(clone(pool));
+      draft.auditLog.push(auditEntry('cfb_pool.saved', `CFB Week ${pool.week} pool is ${pool.status}`, 'admin', { poolId: pool.id, status: pool.status }));
+      return pool;
+    });
+  }
+
+  async saveCfbPoolEntry(leagueId, poolId, entry) {
+    return this.mutateLeague(leagueId, (draft) => {
+      draft.cfbPools ??= [];
+      const pool = draft.cfbPools.find((item) => item.id === poolId);
+      if (!pool) return null;
+      pool.entries = pool.entries ?? {};
+      pool.entries[entry.playerId] = clone(entry);
+      draft.auditLog.push(auditEntry('cfb_pool.picks_saved', `${entry.name} locked CFB Week ${pool.week} picks`, entry.playerId, { poolId }));
+      return clone(pool);
     });
   }
 

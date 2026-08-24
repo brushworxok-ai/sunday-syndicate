@@ -30,6 +30,7 @@ import { createAdminAuth, createPlayerAuth, hashPin } from './auth.js';
 import {
   WorkflowError,
   approveRecap,
+  calculateLeagueFacts,
   createSideBet,
   generateWeeklyRecap,
   respondToSideBet,
@@ -737,6 +738,158 @@ app.post('/api/leagues/:leagueId/jack/weekly-roast', auth.requireAdmin, asyncRou
   return response.json({ week: currentWeek, roasts, winner: winnerRecognition });
 }));
 
+/* ── Jack Weekly Recap Show (slideshow data) ── */
+app.get('/api/leagues/:leagueId/recap-show', asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+
+  const currentWeek = getCurrentWeek();
+  const weekGames = getGames(currentWeek);
+  const facts = calculateLeagueFacts(league);
+
+  // Build per-player roasts if Gemini is configured
+  const geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_api_key_here');
+  const playerMemories = buildSeasonMemories(league, currentWeek);
+  const winnerRecognition = computeWinnerRecognition(league, currentWeek);
+  const winnerIds = new Set(winnerRecognition?.protectedPlayerIds ?? []);
+
+  const slides = [];
+
+  // Slide 1: Title
+  slides.push({
+    type: 'title',
+    week: league.week,
+    season: league.season ?? 2026,
+    playerCount: league.players.length,
+    gameCount: weekGames.length,
+    verifiedCount: facts.verifiedGameCount,
+  });
+
+  // Slide 2: Weekly winner
+  if (facts.winner) {
+    slides.push({
+      type: 'winner',
+      name: facts.winner.name,
+      playerId: facts.winner.playerId,
+      score: facts.winner.score,
+      total: weekGames.length,
+      margin: facts.runnerUp ? facts.winner.score - facts.runnerUp.score : 0,
+      runnerUp: facts.runnerUp ? { name: facts.runnerUp.name, score: facts.runnerUp.score } : null,
+    });
+  }
+
+  // Slide 3: Full standings
+  slides.push({
+    type: 'standings',
+    entries: facts.leaderboard.map((entry) => ({
+      playerId: entry.playerId,
+      name: entry.name,
+      score: entry.score,
+      rank: entry.rank,
+      rankChange: entry.rankChange,
+    })),
+  });
+
+  // Slide 4: Movers — biggest rise & fall
+  if (facts.biggestRise || facts.biggestFall) {
+    slides.push({
+      type: 'movers',
+      rise: facts.biggestRise ? { name: facts.biggestRise.name, change: facts.biggestRise.rankChange, score: facts.biggestRise.score } : null,
+      fall: facts.biggestFall ? { name: facts.biggestFall.name, change: facts.biggestFall.rankChange, score: facts.biggestFall.score } : null,
+    });
+  }
+
+  // Slide 5: Side bets settled
+  if (facts.settledBets.length > 0) {
+    slides.push({
+      type: 'sideBets',
+      bets: facts.settledBets.map((bet) => ({
+        winnerId: bet.winnerId,
+        winnerName: league.players.find((p) => p.id === bet.winnerId)?.name ?? 'Unknown',
+        stake: bet.stake?.label ?? bet.stake?.type ?? 'bragging rights',
+        creatorName: league.players.find((p) => p.id === bet.creatorId)?.name ?? 'Player 1',
+        opponentName: league.players.find((p) => p.id === bet.opponentId)?.name ?? 'Player 2',
+      })),
+    });
+  }
+
+  // Slide 6: Per-player roast cards
+  const roastSlides = [];
+  if (geminiConfigured) {
+    const leaderboard = buildLeaderboard(league.players, (league.sheets ?? []).filter((s) => s.week === currentWeek), league.results);
+    const { buildPrompt } = await import('./prompts.js');
+    const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+    for (const entry of leaderboard) {
+      const player = (league.players ?? []).find((p) => p.id === entry.playerId);
+      const policy = player ? resolveJackRoastPolicy({ player, leagueSettings: league.settings, isWinner: winnerIds.has(entry.playerId) }) : null;
+      const memory = playerMemories.find((m) => m.playerId === entry.playerId);
+      const isWinner = winnerIds.has(entry.playerId);
+
+      const { systemInstruction, prompt } = buildPrompt('weeklyRoast', {
+        playerName: entry.name,
+        roastLevel: policy ? (policy.effectiveLevel === 'off' ? 'clean' : policy.effectiveLevel) : 'clean',
+        isWinner,
+        seasonMemory: memory ?? null,
+        weekScore: entry.score,
+        weekTotal: weekGames.length,
+        weekRank: entry.rank,
+      });
+
+      try {
+        const result = await client.models.generateContent({
+          model,
+          contents: prompt,
+          config: { systemInstruction, temperature: 0.7, maxOutputTokens: 200 },
+        });
+        roastSlides.push({ playerId: entry.playerId, name: entry.name, text: result?.text?.trim() ?? '', isWinner, rank: entry.rank, score: entry.score });
+      } catch {
+        roastSlides.push({ playerId: entry.playerId, name: entry.name, text: '', isWinner, rank: entry.rank, score: entry.score });
+      }
+    }
+  }
+
+  if (roastSlides.length) {
+    slides.push({ type: 'roasts', players: roastSlides });
+  }
+
+  // Generate narration lines via Gemini
+  let narration = [];
+  if (geminiConfigured && facts.winner) {
+    try {
+      const { buildPrompt } = await import('./prompts.js');
+      const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const { systemInstruction, prompt } = buildPrompt('recapShow', {
+        week: league.week,
+        winnerName: facts.winner.name,
+        winnerScore: facts.winner.score,
+        totalGames: weekGames.length,
+        runnerUpName: facts.runnerUp?.name,
+        runnerUpScore: facts.runnerUp?.score,
+        biggestRiseName: facts.biggestRise?.name,
+        biggestRiseChange: facts.biggestRise?.rankChange,
+        biggestFallName: facts.biggestFall?.name,
+        biggestFallChange: facts.biggestFall?.rankChange,
+        settledBetCount: facts.settledBets.length,
+        playerCount: league.players.length,
+      });
+      const result = await client.models.generateContent({
+        model,
+        contents: prompt,
+        config: { systemInstruction, temperature: 0.8, maxOutputTokens: 300 },
+      });
+      narration = (result?.text?.trim() ?? '').split('\n').filter(Boolean).slice(0, 5);
+    } catch {
+      narration = [];
+    }
+  }
+
+  // Slide 7: Closing
+  slides.push({ type: 'closing', week: league.week });
+
+  return response.json({ week: currentWeek, slides, narration, finalized: facts.finalized });
+}));
+
 /* ── NFL Wire: injuries, player statuses, team news (ESPN, 5-min cache) ── */
 let newsCache = { at: 0, data: null };
 
@@ -1040,6 +1193,234 @@ app.patch('/api/leagues/:leagueId/season-pool', auth.requireAdmin, asyncRoute(as
   const seasonPool = { entryFee, paidPlayerIds, updatedAt: new Date().toISOString() };
   await store.updateLeagueSettings(request.params.leagueId, { ...(league.settings ?? {}), seasonPool });
   return response.json({ seasonPool });
+}));
+
+/* ── CashApp Pool Link (Commissioner sets a sharable Cash App Pools URL) ── */
+app.patch('/api/leagues/:leagueId/cashapp-pool', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const url = typeof request.body?.url === 'string' ? request.body.url.trim() : '';
+  const label = typeof request.body?.label === 'string' ? request.body.label.trim().slice(0, 80) : '';
+  // Allow clearing by sending empty url
+  const cashAppPool = url ? { url, label: label || 'Pay Entry Fee', updatedAt: new Date().toISOString() } : null;
+  await store.updateLeagueSettings(request.params.leagueId, { ...(league.settings ?? {}), cashAppPool });
+  return response.json({ cashAppPool });
+}));
+
+/* ── CFB Data — proxies ESPN free API for college football rankings, games & spreads ── */
+const cfbCache = { rankings: null, rankingsAt: 0, scoreboard: {}, scoreboardAt: {} };
+const CFB_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+app.get('/api/cfb/rankings', asyncRoute(async (_request, response) => {
+  const now = Date.now();
+  if (cfbCache.rankings && now - cfbCache.rankingsAt < CFB_CACHE_TTL) {
+    return response.json(cfbCache.rankings);
+  }
+  try {
+    const res = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/college-football/rankings');
+    const data = await res.json();
+    const ap = data.rankings?.find((r) => r.name === 'AP Top 25' || r.name?.includes('AP'));
+    const teams = (ap?.ranks ?? []).map((r) => ({
+      rank: r.current,
+      prevRank: r.previous,
+      team: r.team?.nickname || r.team?.displayName || '?',
+      abbr: r.team?.abbreviation || '?',
+      logo: r.team?.logos?.[0]?.href || '',
+      record: r.recordSummary || '',
+      points: r.points,
+    }));
+    const result = { name: ap?.name || 'AP Top 25', season: ap?.season?.year || 2026, teams };
+    cfbCache.rankings = result;
+    cfbCache.rankingsAt = now;
+    return response.json(result);
+  } catch (error) {
+    console.error('CFB rankings fetch error:', error.message);
+    return response.status(502).json({ error: 'Failed to fetch CFB rankings.' });
+  }
+}));
+
+async function fetchCfbWeek(week, { force = false } = {}) {
+  const now = Date.now();
+  const cacheKey = `w${week}`;
+  if (!force && cfbCache.scoreboard[cacheKey] && now - (cfbCache.scoreboardAt[cacheKey] || 0) < CFB_CACHE_TTL) {
+    return cfbCache.scoreboard[cacheKey];
+  }
+  const res = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?week=${week}&groups=80&limit=60`);
+  const data = await res.json();
+  const games = (data.events ?? []).map((ev) => {
+    const comp = ev.competitions?.[0];
+    const away = comp?.competitors?.find((c) => c.homeAway === 'away');
+    const home = comp?.competitors?.find((c) => c.homeAway === 'home');
+    const odds = comp?.odds?.[0];
+    const isFinal = (comp?.status?.type?.name || '').includes('FINAL');
+    return {
+      id: ev.id,
+      name: ev.shortName || ev.name,
+      date: comp?.date || ev.date,
+      status: comp?.status?.type?.name || 'scheduled',
+      statusDetail: comp?.status?.type?.shortDetail || '',
+      final: isFinal,
+      away: {
+        abbr: away?.team?.abbreviation || '?',
+        name: away?.team?.displayName || '?',
+        logo: away?.team?.logo || '',
+        rank: away?.curatedRank?.current && away.curatedRank.current <= 25 ? away.curatedRank.current : null,
+        score: away?.score != null ? Number(away.score) : null,
+      },
+      home: {
+        abbr: home?.team?.abbreviation || '?',
+        name: home?.team?.displayName || '?',
+        logo: home?.team?.logo || '',
+        rank: home?.curatedRank?.current && home.curatedRank.current <= 25 ? home.curatedRank.current : null,
+        score: home?.score != null ? Number(home.score) : null,
+      },
+      spread: odds?.details || null,
+      homeSpread: Number.isFinite(Number(odds?.spread)) ? Number(odds.spread) : null,
+      overUnder: odds?.overUnder || null,
+      isRanked: Boolean(
+        (away?.curatedRank?.current && away.curatedRank.current <= 25) ||
+        (home?.curatedRank?.current && home.curatedRank.current <= 25)
+      ),
+    };
+  });
+  // Sort: ranked matchups first, then by date
+  games.sort((a, b) => {
+    if (a.isRanked && !b.isRanked) return -1;
+    if (!a.isRanked && b.isRanked) return 1;
+    return new Date(a.date) - new Date(b.date);
+  });
+  const result = { week, season: data.season?.year || 2026, totalGames: games.length, games };
+  cfbCache.scoreboard[cacheKey] = result;
+  cfbCache.scoreboardAt[cacheKey] = now;
+  return result;
+}
+
+app.get('/api/cfb/scoreboard', asyncRoute(async (request, response) => {
+  const week = Number(request.query.week) || 1;
+  try {
+    return response.json(await fetchCfbWeek(week));
+  } catch (error) {
+    console.error('CFB scoreboard fetch error:', error.message);
+    return response.status(502).json({ error: 'Failed to fetch CFB scoreboard.' });
+  }
+}));
+
+/* ── CFB Pick-Em Pool — commissioner builds a weekly ATS slate, players pick every game ── */
+app.post('/api/leagues/:leagueId/cfb-pool', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const week = Number(request.body?.week);
+  if (!Number.isInteger(week) || week < 1 || week > 16) return response.status(422).json({ error: 'A valid CFB week (1–16) is required.' });
+  const entryFee = Number(request.body?.entryFee ?? 10);
+  if (!Number.isFinite(entryFee) || entryFee < 0 || entryFee > 1000) return response.status(422).json({ error: 'Entry fee must be between $0 and $1000.' });
+  const gameIds = Array.isArray(request.body?.gameIds) ? [...new Set(request.body.gameIds.map(String))] : [];
+  if (gameIds.length < 3 || gameIds.length > 20) return response.status(422).json({ error: 'Pick between 3 and 20 games for the slate.' });
+
+  let scoreboard;
+  try { scoreboard = await fetchCfbWeek(week); }
+  catch { return response.status(502).json({ error: 'Could not fetch this week’s games from ESPN. Try again in a minute.' }); }
+  const byId = new Map(scoreboard.games.map((g) => [g.id, g]));
+  const missing = gameIds.filter((id) => !byId.has(id));
+  if (missing.length) return response.status(422).json({ error: 'Some selected games were not found for that week. Reload games and try again.' });
+
+  const poolId = `cfb-w${week}`;
+  const existing = (league.cfbPools ?? []).find((p) => p.id === poolId);
+  if (existing && Object.keys(existing.entries ?? {}).length > 0) {
+    return response.status(409).json({ error: 'That week already has a pool with picks submitted. Lock or finalize it instead of rebuilding.' });
+  }
+  const games = gameIds.map((id) => {
+    const g = byId.get(id);
+    return {
+      id: g.id, name: g.name, date: g.date,
+      away: { abbr: g.away.abbr, name: g.away.name, logo: g.away.logo, rank: g.away.rank },
+      home: { abbr: g.home.abbr, name: g.home.name, logo: g.home.logo, rank: g.home.rank },
+      homeSpread: g.homeSpread,
+      spreadLabel: g.spread ?? (g.homeSpread != null ? `${g.home.abbr} ${g.homeSpread > 0 ? '+' : ''}${g.homeSpread}` : 'Pick-em'),
+      overUnder: g.overUnder,
+    };
+  }).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  const pool = {
+    id: poolId, week, season: scoreboard.season, entryFee,
+    status: 'open',
+    games, entries: existing?.entries ?? {}, scores: existing?.scores ?? {},
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await store.saveCfbPool(request.params.leagueId, pool);
+  return response.status(201).json(pool);
+}));
+
+app.patch('/api/leagues/:leagueId/cfb-pool/:poolId', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
+  if (!pool) return response.status(404).json({ error: 'Pool not found.' });
+  const status = request.body?.status;
+  if (status && !['open', 'locked', 'final'].includes(status)) return response.status(422).json({ error: 'Status must be open, locked, or final.' });
+  if (status) pool.status = status;
+  if (request.body?.entryFee != null) {
+    const entryFee = Number(request.body.entryFee);
+    if (!Number.isFinite(entryFee) || entryFee < 0 || entryFee > 1000) return response.status(422).json({ error: 'Entry fee must be between $0 and $1000.' });
+    pool.entryFee = entryFee;
+  }
+  pool.updatedAt = new Date().toISOString();
+  await store.saveCfbPool(request.params.leagueId, pool);
+  return response.json(pool);
+}));
+
+app.post('/api/leagues/:leagueId/cfb-pool/:poolId/picks', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
+  if (!pool) return response.status(404).json({ error: 'Pool not found.' });
+  const picks = request.body?.picks;
+  const tiebreaker = request.body?.tiebreaker;
+  const { validateCfbPicks } = await import('../src/cfbPool.js');
+  const verdict = validateCfbPicks({ pool, picks, tiebreaker });
+  if (!verdict.ok) return response.status(422).json({ error: verdict.error });
+  const entry = {
+    playerId: request.player.id,
+    name: request.player.name,
+    picks: Object.fromEntries((pool.games ?? []).map((g) => [g.id, picks[g.id]])),
+    tiebreaker: Number(tiebreaker),
+    paid: pool.entries?.[request.player.id]?.paid ?? false,
+    submittedAt: pool.entries?.[request.player.id]?.submittedAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const saved = await store.saveCfbPoolEntry(request.params.leagueId, request.params.poolId, entry);
+  if (!saved) return response.status(404).json({ error: 'Pool not found.' });
+  return response.status(201).json({ entry, poolId: pool.id });
+}));
+
+app.patch('/api/leagues/:leagueId/cfb-pool/:poolId/paid', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
+  if (!pool) return response.status(404).json({ error: 'Pool not found.' });
+  const playerId = String(request.body?.playerId ?? '');
+  const entry = pool.entries?.[playerId];
+  if (!entry) return response.status(404).json({ error: 'No entry for that player.' });
+  entry.paid = Boolean(request.body?.paid);
+  const saved = await store.saveCfbPoolEntry(request.params.leagueId, request.params.poolId, entry);
+  return response.json({ entry, poolId: saved.id });
+}));
+
+app.post('/api/leagues/:leagueId/cfb-pool/:poolId/sync-scores', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
+  if (!pool) return response.status(404).json({ error: 'Pool not found.' });
+  let scoreboard;
+  try { scoreboard = await fetchCfbWeek(pool.week, { force: true }); }
+  catch { return response.status(502).json({ error: 'Could not fetch scores from ESPN. Try again in a minute.' }); }
+  const byId = new Map(scoreboard.games.map((g) => [g.id, g]));
+  pool.scores = pool.scores ?? {};
+  let updated = 0;
+  for (const game of pool.games ?? []) {
+    const live = byId.get(game.id);
+    if (!live || live.home.score == null || live.away.score == null) continue;
+    pool.scores[game.id] = { homeScore: live.home.score, awayScore: live.away.score, final: live.final, statusDetail: live.statusDetail };
+    updated += 1;
+  }
+  const allFinal = (pool.games ?? []).length > 0 && pool.games.every((g) => pool.scores[g.id]?.final);
+  if (allFinal) pool.status = 'final';
+  else if (pool.status === 'final') pool.status = 'locked';
+  pool.updatedAt = new Date().toISOString();
+  await store.saveCfbPool(request.params.leagueId, pool);
+  return response.json({ pool, updated, allFinal });
 }));
 
 /* ── Payout tracking ── */

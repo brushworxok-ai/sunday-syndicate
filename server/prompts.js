@@ -259,6 +259,36 @@ export const PROMPTS = {
       prompt: `Player: ${playerName}. Week score: ${weekScore}/${weekTotal}. Rank: #${weekRank}. Winner: ${isWinner}. ${memoryLine}`,
     };
   },
+
+  recapShow(payload = {}) {
+    const week = cleanNumber(payload.week) ?? 1;
+    const winnerName = cleanText(payload.winnerName, 40) || 'The champ';
+    const winnerScore = cleanNumber(payload.winnerScore) ?? 0;
+    const totalGames = cleanNumber(payload.totalGames) ?? 0;
+    const runnerUpName = cleanText(payload.runnerUpName, 40) || null;
+    const runnerUpScore = cleanNumber(payload.runnerUpScore) ?? 0;
+    const biggestRiseName = cleanText(payload.biggestRiseName, 40) || null;
+    const biggestRiseChange = cleanNumber(payload.biggestRiseChange) ?? 0;
+    const biggestFallName = cleanText(payload.biggestFallName, 40) || null;
+    const biggestFallChange = cleanNumber(payload.biggestFallChange) ?? 0;
+    const settledBetCount = cleanNumber(payload.settledBetCount) ?? 0;
+    const playerCount = cleanNumber(payload.playerCount) ?? 0;
+
+    return {
+      systemInstruction: [
+        'You are Jack, the AI commissioner of the 405 BADGUYS PARLAY NFL pick-em league.',
+        'Generate narration for a weekly recap slideshow. Return EXACTLY 5 lines separated by newlines.',
+        'Line 1: Opening hype line for the week (energetic, 15 words max).',
+        'Line 2: Winner celebration line naming the winner (20 words max).',
+        'Line 3: Standings movement commentary — who climbed, who fell (20 words max).',
+        'Line 4: Side-bet or league drama line (15 words max). If no bets settled, comment on the competition.',
+        'Line 5: Closing sign-off line from Jack (15 words max).',
+        'Be energetic, fun, and specific to the supplied facts. No preamble, no labels, just the 5 lines.',
+        'Never invent scores or facts not in the supplied data.',
+      ].join(' '),
+      prompt: `Week ${week} recap data: Winner: ${winnerName} (${winnerScore}-${totalGames - winnerScore}). ${runnerUpName ? `Runner-up: ${runnerUpName} (${runnerUpScore}-${totalGames - runnerUpScore}).` : ''} ${biggestRiseName ? `Biggest climb: ${biggestRiseName} (+${biggestRiseChange}).` : ''} ${biggestFallName ? `Biggest drop: ${biggestFallName} (${biggestFallChange}).` : ''} Side bets settled: ${settledBetCount}. Players: ${playerCount}.`,
+    };
+  },
 };
 
 export function buildPrompt(action, payload) {

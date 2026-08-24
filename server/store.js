@@ -130,6 +130,14 @@ export class LeagueStore {
         actor TEXT NOT NULL,
         metadata_json TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS cfb_pools (
+        id TEXT PRIMARY KEY,
+        league_id TEXT NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+        data_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_cfb_pools_league ON cfb_pools(league_id);
       CREATE INDEX IF NOT EXISTS idx_audit_league_time ON audit_logs(league_id, event_at);
       CREATE INDEX IF NOT EXISTS idx_recaps_league_week ON recaps(league_id, week);
       CREATE INDEX IF NOT EXISTS idx_bets_league ON side_bets(league_id);
@@ -232,7 +240,8 @@ export class LeagueStore {
     const consentRecords = this.db.prepare('SELECT * FROM consent_records WHERE league_id = ? ORDER BY recorded_at DESC').all(leagueId).map((row) => ({ id: row.id, playerId: row.player_id, channel: row.channel, status: row.status, source: row.source, recordedAt: row.recorded_at }));
     const survivorPicks = this.db.prepare('SELECT * FROM survivor_picks WHERE league_id = ? ORDER BY week, picked_at').all(leagueId).map((row) => ({ playerId: row.player_id, week: row.week, team: row.team, pickedAt: row.picked_at }));
     const payouts = this.db.prepare('SELECT data_json FROM payouts WHERE league_id = ? ORDER BY created_at DESC').all(leagueId).map((row) => parse(row.data_json, {}));
-    return { id: league.id, name: league.name, week: league.week, settings: parse(league.settings_json, {}), players, sheets, results, recaps, latestRecap: recaps[0] ?? null, sideBets, broadcasts, latestBroadcast: broadcasts[0] ?? null, chat, auditLog, consentRecords, survivorPicks, payouts };
+    const cfbPools = this.db.prepare('SELECT data_json FROM cfb_pools WHERE league_id = ? ORDER BY created_at DESC').all(leagueId).map((row) => parse(row.data_json, {}));
+    return { id: league.id, name: league.name, week: league.week, settings: parse(league.settings_json, {}), players, sheets, results, recaps, latestRecap: recaps[0] ?? null, sideBets, broadcasts, latestBroadcast: broadcasts[0] ?? null, chat, auditLog, consentRecords, survivorPicks, payouts, cfbPools };
   }
 
   getPlayer(playerId) {
@@ -376,6 +385,31 @@ export class LeagueStore {
       .run(leagueId, pick.playerId, pick.week, pick.team, pick.pickedAt);
     this.writeAudit(leagueId, 'survivor.pick_saved', `Survivor pick for Week ${pick.week}: ${pick.team}`, pick.playerId, { week: pick.week, team: pick.team });
     return pick;
+  }
+
+  getCfbPool(leagueId, poolId) {
+    const row = this.db.prepare('SELECT data_json FROM cfb_pools WHERE league_id = ? AND id = ?').get(leagueId, poolId);
+    return row ? parse(row.data_json, null) : null;
+  }
+
+  saveCfbPool(leagueId, pool) {
+    const createdAt = pool.createdAt ?? new Date().toISOString();
+    this.db.prepare(`INSERT INTO cfb_pools (id, league_id, data_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at`)
+      .run(pool.id, leagueId, stringify(pool), createdAt, new Date().toISOString());
+    this.writeAudit(leagueId, 'cfb_pool.saved', `CFB Week ${pool.week} pool is ${pool.status}`, 'admin', { poolId: pool.id, status: pool.status });
+    return pool;
+  }
+
+  saveCfbPoolEntry(leagueId, poolId, entry) {
+    const pool = this.getCfbPool(leagueId, poolId);
+    if (!pool) return null;
+    pool.entries = pool.entries ?? {};
+    pool.entries[entry.playerId] = entry;
+    this.db.prepare('UPDATE cfb_pools SET data_json = ?, updated_at = ? WHERE league_id = ? AND id = ?')
+      .run(stringify(pool), new Date().toISOString(), leagueId, poolId);
+    this.writeAudit(leagueId, 'cfb_pool.picks_saved', `${entry.name} locked CFB Week ${pool.week} picks`, entry.playerId, { poolId });
+    return pool;
   }
 
   savePayout(leagueId, payout) {
