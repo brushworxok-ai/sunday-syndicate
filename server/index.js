@@ -1251,6 +1251,54 @@ app.post('/api/leagues/:leagueId/survivor/pick', playerAuth.requirePlayer, async
   return response.status(201).json(pick);
 }));
 
+/* ── Prop picks: saved per player per week; commissioner settles winners ── */
+const PROP_CATEGORY_IDS = ['passing', 'rushing', 'firstTd', 'turnovers'];
+
+app.post('/api/leagues/:leagueId/props', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const week = Number(request.body?.week) || getCurrentWeek();
+  if (isWeekLocked(week)) {
+    return response.status(422).json({ error: `Week ${week} is locked. Prop picks were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff.` });
+  }
+  const input = request.body?.picks ?? {};
+  const picks = {};
+  for (const id of PROP_CATEGORY_IDS) {
+    if (input[id] == null) continue;
+    const value = String(input[id]).trim().slice(0, 60);
+    if (!value) continue;
+    if (id === 'turnovers' && value !== 'over' && value !== 'under') {
+      return response.status(422).json({ error: 'Turnovers pick must be "over" or "under".' });
+    }
+    picks[id] = value;
+  }
+  if (!Object.keys(picks).length) return response.status(422).json({ error: 'At least one prop pick is required.' });
+  const settings = league.settings ?? {};
+  const propPicks = { ...(settings.propPicks ?? {}) };
+  propPicks[week] = { ...(propPicks[week] ?? {}), [request.player.id]: { ...picks, savedAt: new Date().toISOString() } };
+  await store.updateLeagueSettings(request.params.leagueId, { ...settings, propPicks });
+  return response.status(201).json({ week, playerId: request.player.id, picks });
+}));
+
+app.post('/api/leagues/:leagueId/props/settle', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const week = Number(request.body?.week);
+  if (!Number.isInteger(week) || week < 1 || week > 18) return response.status(422).json({ error: 'A valid week (1-18) is required.' });
+  const validIds = new Set((league.players ?? []).map((p) => p.id));
+  const input = request.body?.winners ?? {};
+  const winners = {};
+  for (const id of PROP_CATEGORY_IDS) {
+    if (!Array.isArray(input[id])) continue;
+    winners[id] = [...new Set(input[id].filter((pid) => validIds.has(pid)))];
+  }
+  const settings = league.settings ?? {};
+  const propResults = { ...(settings.propResults ?? {}) };
+  propResults[week] = { winners, settledAt: new Date().toISOString(), settledBy: request.actor ?? 'admin' };
+  await store.updateLeagueSettings(request.params.leagueId, { ...settings, propResults });
+  return response.json({ week, winners });
+}));
+
 /* ── Season pool: $25 per player, best season record takes it all ── */
 app.patch('/api/leagues/:leagueId/season-pool', auth.requireAdmin, asyncRoute(async (request, response) => {
   const league = await store.getLeague(request.params.leagueId);

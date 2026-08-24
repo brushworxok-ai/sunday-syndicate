@@ -1477,6 +1477,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .prop-input:focus { border-color: #00ff87; outline: none; }
 .prop-locked-badge { display: inline-block; font-size: 0.76rem; color: #00ff87; background: rgba(0, 255, 135, 0.08); border: 1px solid rgba(0, 255, 135, 0.25); border-radius: 999px; padding: 4px 12px; margin-top: 8px; }
 .prop-disclaimer { font-size: 0.72rem; color: #666; text-align: center; margin-top: 4px; }
+.prop-standings { margin-top: 28px; }
+.prop-standings .season-head, .prop-standings .season-row { grid-template-columns: 1fr 90px 110px; }
+.prop-settle-admin { margin-top: 28px; border: 1px solid rgba(212, 175, 55, 0.25); border-radius: 14px; padding: 16px; background: rgba(212, 175, 55, 0.04); display: grid; gap: 14px; }
+.prop-settle-cat { display: grid; gap: 8px; }
+.prop-settle-cat strong { font-size: 0.82rem; letter-spacing: 0.02em; }
+.prop-settle-players { display: grid; gap: 6px; }
+.prop-settle-check { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #cfcfcf; cursor: pointer; }
+.prop-settle-check input { accent-color: #39ff88; width: 16px; height: 16px; }
+.prop-settle-check em { color: #39ff88; font-style: normal; }
 
 /* ── Push notifications ── */
 .push-toggle-section { margin-top: 20px; }

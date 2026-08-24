@@ -133,6 +133,64 @@ function App() {
   const currentGames = useMemo(() => getGames(selectedWeek), [selectedWeek]);
   const currentByeTeams = useMemo(() => getByeTeams(selectedWeek), [selectedWeek]);
   const weekLabel = useMemo(() => getWeek(selectedWeek)?.label ?? `Week ${selectedWeek}`, [selectedWeek]);
+
+  // Load this player's saved prop picks for the selected week from the server
+  useEffect(() => {
+    const saved = serverLeague?.settings?.propPicks?.[selectedWeek]?.[playerSession.playerId];
+    if (saved) {
+      const { savedAt, ...picks } = saved;
+      setPropPicks(picks);
+    } else {
+      setPropPicks({});
+    }
+  }, [serverLeague?.settings?.propPicks, selectedWeek, playerSession.playerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Season-long prop standings: categories won per player across all settled weeks
+  const propStandings = useMemo(() => {
+    const allPicks = serverLeague?.settings?.propPicks ?? {};
+    const allResults = serverLeague?.settings?.propResults ?? {};
+    const players = serverLeague?.players ?? [];
+    const rows = new Map();
+    const ensure = (playerId) => {
+      if (!rows.has(playerId)) {
+        const player = players.find((p) => p.id === playerId);
+        rows.set(playerId, { playerId, name: player?.name ?? 'Unknown', wins: 0, weeksPlayed: 0 });
+      }
+      return rows.get(playerId);
+    };
+    for (const [, weekPicks] of Object.entries(allPicks)) {
+      for (const playerId of Object.keys(weekPicks)) ensure(playerId).weeksPlayed += 1;
+    }
+    for (const [, result] of Object.entries(allResults)) {
+      for (const winnerIds of Object.values(result?.winners ?? {})) {
+        for (const playerId of winnerIds) ensure(playerId).wins += 1;
+      }
+    }
+    return [...rows.values()].sort((a, b) => b.wins - a.wins || b.weeksPlayed - a.weeksPlayed || a.name.localeCompare(b.name));
+  }, [serverLeague?.settings?.propPicks, serverLeague?.settings?.propResults, serverLeague?.players]);
+
+  const savePropPicks = async () => {
+    if (!playerSession.authenticated) return notify('Sign in as a player to save prop picks.');
+    setServerBusy('prop-save');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/props`, { method: 'POST', body: JSON.stringify({ week: selectedWeek, picks: propPicks }) });
+      await loadLeague();
+      notify(`Prop picks saved for ${weekLabel}. Good luck.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const [propSettleWinners, setPropSettleWinners] = useState({});
+  const settlePropWeek = async () => {
+    setServerBusy('prop-settle');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/props/settle`, { method: 'POST', body: JSON.stringify({ week: selectedWeek, winners: propSettleWinners }) });
+      await loadLeague();
+      setPropSettleWinners({});
+      notify(`Prop winners settled for ${weekLabel}.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
   const [betForm, setBetForm] = useState({ creatorId: 'player-marcus', opponentId: 'player-taylor', event: `Week ${selectedWeek} final pick score`, terms: 'Higher verified weekly score wins', settlementRule: 'compare_weekly_score', stakeType: 'virtual_tokens', stakeAmount: 10, stakeLabel: '10 Syndicate tokens', optionalMessage: '' });
   const [recapEdit, setRecapEdit] = useState(DEMO_LEAGUE.recap.finalText);
   const [recapShow, setRecapShow] = useState(null); // { slides, narration, week }
@@ -1627,11 +1685,61 @@ function App() {
                     {propPicks[cat.id] && <span className="prop-locked-badge">Your pick: {propPicks[cat.id]}</span>}
                   </section>
                 ))}
-                <button className="button button-primary full" type="button" disabled={weekLocked || !Object.keys(propPicks).length} onClick={() => {
-                  notify(`Prop picks saved: ${Object.entries(propPicks).map(([k, v]) => `${k}: ${v}`).join(', ')}`);
-                }}>{weekLocked ? '🔒 Week locked' : 'Save prop picks →'}</button>
+                <button className="button button-primary full" type="button" disabled={weekLocked || serverBusy === 'prop-save' || !Object.keys(propPicks).filter((k) => propPicks[k]).length} onClick={savePropPicks}>{weekLocked ? '🔒 Week locked' : serverBusy === 'prop-save' ? 'Saving…' : 'Save prop picks →'}</button>
                 <p className="muted prop-disclaimer">Prop picks are for fun within your league. Results are settled by the commissioner after games wrap.</p>
               </div>
+            )}
+
+            <section className="prop-standings">
+              <div className="proof-heading"><div><span className="proof-step">SEASON</span><h2>Prop standings</h2></div></div>
+              {propStandings.length ? (
+                <div className="season-table">
+                  <div className="season-head"><span>Player</span><span>Props won</span><span>Weeks played</span></div>
+                  {propStandings.map((row, index) => (
+                    <div className={`season-row ${index === 0 && row.wins > 0 ? 'leader' : ''}`} key={row.playerId}>
+                      <span>{index === 0 && row.wins > 0 ? '👑 ' : ''}{row.name}</span>
+                      <span>{row.wins}</span>
+                      <span>{row.weeksPlayed}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="muted">No prop picks yet this season. Standings build as picks are saved and the commissioner settles winners each week.</p>}
+            </section>
+
+            {isComm && (
+              <section className="prop-settle-admin">
+                <div className="proof-heading"><div><span className="proof-step">COMMISSIONER</span><h2>Settle {weekLabel} props</h2></div></div>
+                {(() => {
+                  const weekPicks = serverLeague?.settings?.propPicks?.[selectedWeek] ?? {};
+                  const pickerIds = Object.keys(weekPicks);
+                  if (!pickerIds.length) return <p className="muted">No prop picks submitted for {weekLabel} yet.</p>;
+                  return <>
+                    {PROP_CATEGORIES.map((cat) => (
+                      <div className="prop-settle-cat" key={cat.id}>
+                        <strong>{cat.icon} {cat.label}</strong>
+                        <div className="prop-settle-players">
+                          {pickerIds.filter((pid) => weekPicks[pid]?.[cat.id]).map((pid) => {
+                            const player = (serverLeague?.players ?? []).find((p) => p.id === pid);
+                            const checked = (propSettleWinners[cat.id] ?? []).includes(pid);
+                            return (
+                              <label className="prop-settle-check" key={pid}>
+                                <input type="checkbox" checked={checked} onChange={() => setPropSettleWinners((w) => {
+                                  const current = new Set(w[cat.id] ?? []);
+                                  if (current.has(pid)) current.delete(pid); else current.add(pid);
+                                  return { ...w, [cat.id]: [...current] };
+                                })} />
+                                <span>{player?.name ?? pid} — <em>{weekPicks[pid][cat.id]}</em></span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    <button className="button button-secondary full" type="button" disabled={serverBusy === 'prop-settle'} onClick={settlePropWeek}>{serverBusy === 'prop-settle' ? 'Settling…' : `Settle ${weekLabel} prop winners`}</button>
+                    {serverLeague?.settings?.propResults?.[selectedWeek] && <p className="muted">✅ {weekLabel} already settled {new Date(serverLeague.settings.propResults[selectedWeek].settledAt).toLocaleDateString()} — settling again overwrites it.</p>}
+                  </>;
+                })()}
+              </section>
             )}
           </StandardPage>
         )}
