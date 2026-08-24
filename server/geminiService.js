@@ -8,7 +8,7 @@ export async function generateGeminiText({ client, model, action, payload }) {
     contents: prompt,
     config: {
       systemInstruction,
-      maxOutputTokens: 350,
+      maxOutputTokens: 1024,
     },
   });
 

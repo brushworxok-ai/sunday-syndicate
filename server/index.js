@@ -683,7 +683,7 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
     const result = await client.models.generateContent({
       model,
       contents: prompt,
-      config: { systemInstruction, temperature: 0.5, maxOutputTokens: 400 },
+      config: { systemInstruction, temperature: 0.5, maxOutputTokens: 1024 },
     });
     const text = result?.text?.trim();
     if (!text) throw new Error('Empty response from model.');
@@ -798,7 +798,7 @@ app.post('/api/leagues/:leagueId/jack/weekly-roast', auth.requireAdmin, asyncRou
       const result = await client.models.generateContent({
         model,
         contents: prompt,
-        config: { systemInstruction, temperature: 0.7, maxOutputTokens: 200 },
+        config: { systemInstruction, temperature: 0.7, maxOutputTokens: 768 },
       });
       roasts.push({ playerId: entry.playerId, name: entry.name, text: result?.text?.trim() ?? '', isWinner, roastLevel: policy?.effectiveLevel ?? 'clean' });
     } catch (err) {
@@ -911,7 +911,7 @@ app.get('/api/leagues/:leagueId/recap-show', asyncRoute(async (request, response
         const result = await client.models.generateContent({
           model,
           contents: prompt,
-          config: { systemInstruction, temperature: 0.7, maxOutputTokens: 200 },
+          config: { systemInstruction, temperature: 0.7, maxOutputTokens: 768 },
         });
         roastSlides.push({ playerId: entry.playerId, name: entry.name, text: result?.text?.trim() ?? '', isWinner, rank: entry.rank, score: entry.score });
       } catch {
@@ -947,7 +947,7 @@ app.get('/api/leagues/:leagueId/recap-show', asyncRoute(async (request, response
       const result = await client.models.generateContent({
         model,
         contents: prompt,
-        config: { systemInstruction, temperature: 0.8, maxOutputTokens: 300 },
+        config: { systemInstruction, temperature: 0.8, maxOutputTokens: 1024 },
       });
       narration = (result?.text?.trim() ?? '').split('\n').filter(Boolean).slice(0, 5);
     } catch {
