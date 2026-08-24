@@ -325,7 +325,7 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   // Signed-in players may submit unpaid and settle from credit or Cash App after;
   // anonymous sheets still need the payment confirmation checkbox.
   if (!input.paid && !input.playerId) return response.status(422).json({ error: 'Payment confirmation is required.' });
-  if (!Number.isFinite(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0) return response.status(422).json({ error: 'A valid tiebreaker is required.' });
+  if (!Number.isInteger(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0 || Number(input.tiebreaker) > 200) return response.status(422).json({ error: 'Tiebreaker must be a whole number between 0 and 200 (total points in the tiebreaker game).' });
   const submittedWeek = Number(input.week) || getCurrentWeek();
   const weekGames = getGames(submittedWeek);
   if (!weekGames.length) return response.status(422).json({ error: `No games found for Week ${submittedWeek}.` });
@@ -392,8 +392,9 @@ app.put('/api/leagues/:leagueId/results/:gameId', auth.requireAdmin, asyncRoute(
   if (!game) return response.status(404).json({ error: 'Game not found.' });
   const awayScore = Number(request.body?.awayScore);
   const homeScore = Number(request.body?.homeScore);
-  if (!Number.isInteger(awayScore) || !Number.isInteger(homeScore) || awayScore < 0 || homeScore < 0 || awayScore === homeScore) return response.status(422).json({ error: 'Enter two different non-negative final scores.' });
-  const result = { awayScore, homeScore, winner: awayScore > homeScore ? game.away : game.home };
+  if (!Number.isInteger(awayScore) || !Number.isInteger(homeScore) || awayScore < 0 || homeScore < 0) return response.status(422).json({ error: 'Enter non-negative whole-number final scores.' });
+  // NFL games can end tied — a tie counts as no point for anyone.
+  const result = { awayScore, homeScore, winner: awayScore === homeScore ? 'TIE' : (awayScore > homeScore ? game.away : game.home) };
   const saved = await store.upsertResult(request.params.leagueId, game.id, result, request.actor);
   await maybePostRivalryChat(request.params.leagueId, game.id, result);
   return response.json(saved);
@@ -514,7 +515,7 @@ function computeWinnerRecognition(league, currentWeek) {
     if (!verified) continue;
     const leaderboard = buildLeaderboard(league.players, weekSheets, league.results);
     const recognition = buildWeeklyWinnerRecognition({
-      leaderboard: leaderboard.map((e) => ({ playerId: e.playerId, name: e.name, score: e.score, tiebreaker: e.tiebreaker })),
+      leaderboard: leaderboard.map((e) => ({ playerId: e.playerId, name: e.name, score: e.score, tiebreaker: e.tiebreaker, tiebreakerRank: e.tiebreakerRank })),
       verified,
       celebrationsEnabled: jackSettings.winnerCelebrations,
     });
@@ -590,11 +591,11 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
     rules: [
       `WEEKLY ENTRY FEE: $${league.settings?.entryFee ?? 20} per weekly sheet.`,
       `Pick one winner for every game (straight up, no spread).`,
-      `One point per correct pick. Highest total wins the weekly pot.`,
-      `Tiebreaker: closest total without going over. Going over busts.`,
+      `One point per correct pick. Highest total wins the weekly pot. A game that ends in a TIE counts as no point for anyone.`,
+      `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess wins. Identical guesses split the pot.`,
       `DEADLINE: sheets lock at the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
       `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. It goes to the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week or best single sheet. Paid out after Week 18.`,
-      `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you. Last one standing wins.`,
+      `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you; a TIE counts as surviving. Last one standing wins.`,
       `CFB PICK-EM POOLS: separate college football pools where players pick every game AGAINST THE SPREAD. Best ATS record wins that pool's pot; tiebreaker is closest to the total points of the last game.`,
       `PAYMENTS: players pay through the league's Cash App Pool link or with one tap from their credit balance. Winnings can be credited straight to a player's balance and rolled into future entries. The app only tracks money between friends — Cash App moves it.`,
     ],
@@ -1093,7 +1094,7 @@ app.get('/api/leagues/:leagueId/live-scores', asyncRoute(async (request, respons
   // AUTO-SCORING: the app keeps score on its own. Any game the feed reports
   // as final is verified automatically the next time anyone loads scores.
   // The commissioner's manual entry still works and always wins (it re-verifies).
-  const finals = data.scores.filter((s) => s.state === 'post' && s.completed && s.awayScore !== s.homeScore);
+  const finals = data.scores.filter((s) => s.state === 'post' && s.completed);
   let autoVerified = 0;
   if (finals.length) {
     const league = await store.getLeague(request.params.leagueId);
@@ -1101,7 +1102,7 @@ app.get('/api/leagues/:leagueId/live-scores', asyncRoute(async (request, respons
       for (const score of finals) {
         const existing = (league.results ?? {})[score.gameId];
         if (existing?.winner && existing?.verifiedAt) continue;
-        const winner = score.awayScore > score.homeScore ? score.away : score.home;
+        const winner = score.awayScore === score.homeScore ? 'TIE' : (score.awayScore > score.homeScore ? score.away : score.home);
         await store.upsertResult(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner }, 'live_feed_auto');
         await maybePostRivalryChat(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner });
         autoVerified += 1;
@@ -1120,13 +1121,13 @@ app.post('/api/leagues/:leagueId/results/sync', auth.requireAdmin, asyncRoute(as
   const feed = await fetchLiveScores(week);
   if (feed.error) return response.status(502).json({ error: 'The live score feed is unreachable right now. Enter finals manually or try again shortly.' });
 
-  const finals = feed.scores.filter((s) => s.state === 'post' && s.completed && s.awayScore !== s.homeScore);
+  const finals = feed.scores.filter((s) => s.state === 'post' && s.completed);
   const applied = [];
   const skipped = [];
   for (const score of finals) {
     const existing = (league.results ?? {})[score.gameId];
     if (existing?.winner && existing?.verifiedAt && !request.body?.force) { skipped.push(score.gameId); continue; }
-    const winner = score.awayScore > score.homeScore ? score.away : score.home;
+    const winner = score.awayScore === score.homeScore ? 'TIE' : (score.awayScore > score.homeScore ? score.away : score.home);
     await store.upsertResult(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner }, `${request.actor} (live feed)`);
     await maybePostRivalryChat(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner });
     applied.push({ gameId: score.gameId, matchup: `${score.away} at ${score.home}`, final: `${score.awayScore}–${score.homeScore}`, winner });

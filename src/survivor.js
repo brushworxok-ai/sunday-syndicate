@@ -68,7 +68,10 @@ export function deriveSurvivorPool({ survivorPicks = [], players = [], results =
 
       let outcome = 'pending';
       if (result?.winner) {
-        if (result.winner === pick.team) {
+        if (result.winner === 'TIE') {
+          // A tie is not a loss — the player survives the week (no win credit).
+          outcome = 'tie';
+        } else if (result.winner === pick.team) {
           outcome = 'win';
           wins += 1;
         } else {

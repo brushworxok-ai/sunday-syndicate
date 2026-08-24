@@ -21,9 +21,13 @@ export function gradeGameAts(game, score) {
 }
 
 /** Validate a picks submission against a pool. Returns { ok } or { ok:false, error }. */
-export function validateCfbPicks({ pool, picks, tiebreaker }) {
+export function validateCfbPicks({ pool, picks, tiebreaker, now = new Date() }) {
   if (!pool) return { ok: false, error: 'Pool not found.' };
   if (pool.status !== 'open') return { ok: false, error: 'This pool is locked — picks can no longer be changed.' };
+  // Auto-lock at the first kickoff even if the commissioner forgot to lock —
+  // nobody gets to pick after games have started.
+  const firstKick = (pool.games ?? []).map((g) => new Date(g.date)).filter((d) => !Number.isNaN(d.getTime())).sort((a, b) => a - b)[0];
+  if (firstKick && now >= firstKick) return { ok: false, error: 'This pool locked at the first kickoff — picks can no longer be changed.' };
   if (!picks || typeof picks !== 'object' || Array.isArray(picks)) return { ok: false, error: 'Picks are required.' };
   const gameIds = new Set((pool.games ?? []).map((g) => g.id));
   const entries = Object.entries(picks);

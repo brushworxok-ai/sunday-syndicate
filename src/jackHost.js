@@ -183,7 +183,13 @@ export function buildWeeklyWinnerRecognition({ leaderboard = [], verified = fals
   if (!verified) return { status: 'pending', winners: [], message: 'Winner pending. Jack will wait for verified final results.' };
   if (!leaderboard.length) return { status: 'unavailable', winners: [], message: 'No verified player entries are available.' };
   const topScore = Math.max(...leaderboard.map((entry) => Number(entry.score)));
-  const tied = leaderboard.filter((entry) => Number(entry.score) === topScore);
+  let tied = leaderboard.filter((entry) => Number(entry.score) === topScore);
+  // Closest-without-going-over: when entries carry a computed tiebreakerRank
+  // (lower = better), the tie narrows to the best rank before co-winners.
+  if (tied.length > 1 && tied.every((entry) => Number.isFinite(Number(entry.tiebreakerRank)))) {
+    const bestRank = Math.min(...tied.map((entry) => Number(entry.tiebreakerRank)));
+    tied = tied.filter((entry) => Number(entry.tiebreakerRank) === bestRank);
+  }
   let winners = tied;
   let resolution = tied.length > 1 ? 'co_winners' : 'highest_score';
   if (tied.length > 1 && tiebreaker?.winnerId) {

@@ -1450,6 +1450,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .payment-row.claimed .payment-status { color: #ffd700; }
 .payment-missing { font-size: 0.8rem; color: #b06a6a; margin: 8px 0 0; }
 
+/* Tiebreaker — closest without going over */
+.tb-status { font-size: 0.76rem; color: #9a9a9a; margin: 0 0 10px; padding: 8px 12px; background: rgba(255, 215, 0, 0.06); border: 1px solid rgba(255, 215, 0, 0.18); border-radius: 10px; line-height: 1.45; }
+.tb-busted { color: #ff5d5d; font-style: normal; font-weight: 700; font-size: 0.66rem; letter-spacing: 0.04em; }
+.tb-actual { color: #7fdc92; font-style: normal; font-size: 0.68rem; }
+
 /* Reduced motion: strip all animations */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }

@@ -21,6 +21,7 @@ import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
 import { deriveSurvivorPool, findTeamGame } from './survivor.js';
 import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
+import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebreaker.js';
 import { creditBalance } from './credits.js';
 
 /* ── Simplified 5-tab nav with More menu ── */
@@ -239,9 +240,17 @@ function App() {
     0,
   );
 
+  // Tiebreaker: closest to the tiebreaker game's actual total WITHOUT going
+  // over — going over busts. Until that game's score is final, ties stand.
+  const weekTiebreaker = useMemo(() => getTiebreakerActual(currentGames, results), [currentGames, results]);
   const leaderboard = useMemo(() => weekSheets
-    .map((sheet) => ({ ...sheet, score: calcScore(sheet) }))
-    .sort((a, b) => b.score - a.score || a.tiebreaker - b.tiebreaker), [weekSheets, results]);
+    .map((sheet) => ({
+      ...sheet,
+      score: calcScore(sheet),
+      tiebreakerBusted: tiebreakerBusted(sheet.tiebreaker, weekTiebreaker.total),
+    }))
+    .sort((a, b) => b.score - a.score
+      || tiebreakerRank(a.tiebreaker, weekTiebreaker.total) - tiebreakerRank(b.tiebreaker, weekTiebreaker.total)), [weekSheets, results, weekTiebreaker]);
 
   // Exact clinch / alive / eliminated math for the current week
   const winPathsByEntry = useMemo(() => {
@@ -262,9 +271,13 @@ function App() {
       const ws = sheets.filter((s) => s.week === week);
       const games = getGames(week);
       const complete = games.length > 0 && games.every((g) => results[g.id]?.winner);
-      const scored = ws.map((s) => ({ ...s, score: calcScore(s) })).sort((a, b) => b.score - a.score || a.tiebreaker - b.tiebreaker);
+      const tbTotal = getTiebreakerActual(games, results).total;
+      const scored = ws.map((s) => ({ ...s, score: calcScore(s) }))
+        .sort((a, b) => b.score - a.score || tiebreakerRank(a.tiebreaker, tbTotal) - tiebreakerRank(b.tiebreaker, tbTotal));
       const top = scored[0];
-      const winners = complete && top ? scored.filter((s) => s.score === top.score && s.tiebreaker === top.tiebreaker) : [];
+      const winners = complete && top
+        ? scored.filter((s) => s.score === top.score && tiebreakerRank(s.tiebreaker, tbTotal) === tiebreakerRank(top.tiebreaker, tbTotal))
+        : [];
       const weekPot = ws.filter((s) => s.paid).length * ENTRY_FEE;
       const payout = (serverLeague?.payouts ?? []).find((p) => p.week === week && (p.pool ?? 'weekly') === 'weekly');
       weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
@@ -1327,7 +1340,7 @@ function App() {
               <div className="games-list">
                 {currentGames.map((game, index) => (
                   <article className={`game-card ${picks[game.id] ? 'picked' : ''}`} key={game.id}>
-                    <div className="game-meta"><span>{String(index + 1).padStart(2, '0')}</span><p>{game.time}</p>{game.isTiebreaker && <b>★ Tiebreaker game</b>}{liveByGame[game.id]?.state === 'in' && <b className="live-badge">● LIVE {liveByGame[game.id].away} {liveByGame[game.id].awayScore}–{liveByGame[game.id].homeScore} {liveByGame[game.id].home} · {liveByGame[game.id].detail}</b>}</div>
+                    <div className="game-meta"><span>{String(index + 1).padStart(2, '0')}</span><p>{game.time}</p>{game.id === weekTiebreaker.game?.id && <b>★ Tiebreaker game — guess its total points, closest without going over</b>}{liveByGame[game.id]?.state === 'in' && <b className="live-badge">● LIVE {liveByGame[game.id].away} {liveByGame[game.id].awayScore}–{liveByGame[game.id].homeScore} {liveByGame[game.id].home} · {liveByGame[game.id].detail}</b>}</div>
                     <div className="team-buttons">
                       <button type="button" className={picks[game.id] === game.away ? 'selected' : ''} style={{ '--team-color': TEAM_COLORS[game.away] }} onClick={() => choosePick(game.id, game.away)}><img className="team-logo" src={getTeamLogoUrl(game.away)} alt="" loading="lazy" /><small>{game.awayFull}</small><strong>{game.away}</strong><span>AWAY</span></button>
                       <i>at</i>
@@ -1518,13 +1531,19 @@ function App() {
               </section>
             )}
             {weekSheets.length ? <div className="standings-table">
+              {weekTiebreaker.game && (
+                <p className="tb-status">
+                  ★ Tiebreaker: total points in {weekTiebreaker.game.away} @ {weekTiebreaker.game.home} — closest without going over wins ties.
+                  {weekTiebreaker.total != null ? ` Final total: ${weekTiebreaker.total}.` : ' Awaiting that game’s final score.'}
+                </p>
+              )}
               <div className="table-head"><span>Rank</span><span>Player</span><span>Tiebreaker</span><span>Correct</span></div>
               {leaderboard.map((entry, index) => {
                 const path = winPathsByEntry[entry.id];
                 return <div className={`standing-row ${index === 0 && completedGames ? 'leader' : ''}`} key={entry.id}>
                   <span>#{index + 1}</span>
                   <strong>{entry.name}{index === 0 && completedGames ? '  ♛' : ''}{path && <i className={`path-badge ${path.status}`}>{{ clinched: 'CLINCHED', won: 'WINNER', alive: 'ALIVE', on_tiebreaker: 'TB DECIDES', eliminated: 'OUT' }[path.status]}</i>}</strong>
-                  <span>{entry.tiebreaker}</span>
+                  <span>{entry.tiebreaker}{entry.tiebreakerBusted && <em className="tb-busted"> BUST</em>}{!entry.tiebreakerBusted && weekTiebreaker.total != null && <em className="tb-actual">{weekTiebreaker.total - entry.tiebreaker === 0 ? ' ✓ NAILED IT' : ` (−${weekTiebreaker.total - entry.tiebreaker})`}</em>}</span>
                   <b>{entry.score}<small> / {completedGames || '—'}</small></b>
                 </div>;
               })}
@@ -1981,8 +2000,8 @@ function App() {
             <div className="rules-grid">
               <Rule number="01" title="Entry" text={`Each weekly sheet costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, and it goes to the most total correct picks combined across all 18 weeks, not the best single week.`} />
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. A locked sheet cannot be edited in this demo.`} />
-              <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot." />
-              <Rule number="04" title="Tiebreaker" text="Closest total without going over wins. Going over busts. If every tied player busts, the pot rolls over." />
+              <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
+              <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess takes it. Identical guesses split the pot." />
             </div>
           </StandardPage>
         )}

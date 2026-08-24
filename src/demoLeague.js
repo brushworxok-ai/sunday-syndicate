@@ -1,4 +1,5 @@
 import { GAMES, SEASON as DEMO_SEASON, WEEK } from './data.js';
+import { getWeekTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebreaker.js';
 
 export const TONE_LEVELS = ['none', 'light', 'competitive', 'maximum'];
 
@@ -93,10 +94,26 @@ export function scoreSheet(sheet, results = DEMO_RESULTS) {
 }
 
 export function buildLeaderboard(players = DEMO_PLAYERS, sheets = DEMO_SHEETS, results = DEMO_RESULTS) {
+  // Tiebreaker rule: closest to the tiebreaker game's ACTUAL total without
+  // going over; going over busts. Computed per sheet's own week so mixed-week
+  // input still ranks each sheet against the right game.
+  const tbTotalByWeek = new Map();
+  const actualFor = (week) => {
+    if (!tbTotalByWeek.has(week)) tbTotalByWeek.set(week, getWeekTiebreakerActual(week, results).total);
+    return tbTotalByWeek.get(week);
+  };
   return sheets.map((sheet) => {
     const player = players.find((candidate) => candidate.id === sheet.playerId);
-    return { ...sheet, score: scoreSheet(sheet, results), previousRank: player?.previousRank ?? null };
-  }).sort((a, b) => b.score - a.score || a.tiebreaker - b.tiebreaker)
+    const actual = actualFor(sheet.week ?? WEEK);
+    return {
+      ...sheet,
+      score: scoreSheet(sheet, results),
+      previousRank: player?.previousRank ?? null,
+      tiebreakerRank: tiebreakerRank(sheet.tiebreaker, actual),
+      tiebreakerBusted: tiebreakerBusted(sheet.tiebreaker, actual),
+      tiebreakerActual: actual,
+    };
+  }).sort((a, b) => b.score - a.score || a.tiebreakerRank - b.tiebreakerRank)
     .map((entry, index) => ({ ...entry, rank: index + 1, rankChange: entry.previousRank ? entry.previousRank - (index + 1) : 0 }));
 }
 
