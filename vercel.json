@@ -16,7 +16,7 @@
   },
   "crons": [
     {
-      "path": "/api/cron/jack-live-desk",
+      "path": "/api/cron/auto-pilot",
       "schedule": "0 16 * * *"
     }
   ]

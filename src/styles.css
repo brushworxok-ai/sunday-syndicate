@@ -1486,6 +1486,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .prop-settle-check { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: #cfcfcf; cursor: pointer; }
 .prop-settle-check input { accent-color: #39ff88; width: 16px; height: 16px; }
 .prop-settle-check em { color: #39ff88; font-style: normal; }
+.prop-auto-facts { display: grid; gap: 6px; padding: 12px 14px; border-radius: 12px; background: rgba(57, 255, 136, 0.06); border: 1px solid rgba(57, 255, 136, 0.2); font-size: 0.8rem; color: #cfcfcf; }
+.prop-auto-facts strong { color: #39ff88; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.autopilot-section { border: 1px solid rgba(57, 255, 136, 0.22); border-radius: 16px; padding: 20px; background: rgba(57, 255, 136, 0.04); display: grid; gap: 14px; margin-top: 20px; }
+.autopilot-section > p { font-size: 0.84rem; color: #bdbdbd; line-height: 1.5; }
+.autopilot-log { display: grid; gap: 8px; }
+.autopilot-log-row { display: flex; gap: 12px; align-items: baseline; font-size: 0.78rem; color: #cfcfcf; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.03); }
+.autopilot-log-row time { flex-shrink: 0; color: #39ff88; font-size: 0.7rem; white-space: nowrap; }
 
 /* ── Push notifications ── */
 .push-toggle-section { margin-top: 20px; }

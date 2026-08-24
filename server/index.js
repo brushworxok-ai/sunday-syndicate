@@ -233,6 +233,7 @@ async function autoStartSeasonIfDue(league) {
 app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   const league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
   if (!league) return response.status(404).json({ error: 'League not found.' });
+  maybeRunAutoPilot(); // fire-and-forget: commissioner chores run themselves on traffic
   return response.json(league);
 }));
 
@@ -1045,7 +1046,7 @@ async function fetchLiveScores(week) {
     const url = `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&week=${week}&dates=${SEASON}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8_000);
-    const upstream = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json' } });
+    const upstream = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json', 'user-agent': 'curl/8.5.0' } });
     clearTimeout(timer);
     if (!upstream.ok) throw new Error(`ESPN responded ${upstream.status}`);
     const payload = await upstream.json();
@@ -1297,6 +1298,103 @@ app.post('/api/leagues/:leagueId/props/settle', auth.requireAdmin, asyncRoute(as
   propResults[week] = { winners, settledAt: new Date().toISOString(), settledBy: request.actor ?? 'admin' };
   await store.updateLeagueSettings(request.params.leagueId, { ...settings, propResults });
   return response.json({ week, winners });
+}));
+
+/* ── Auto-settle props from ESPN final stats.
+   Passing/rushing = week-wide leaders from scoreboard game leaders.
+   First TD + turnovers O/U 4.5 = the week's kickoff (earliest) game. ── */
+const normalizeName = (value) => String(value ?? '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
+const namesMatch = (pick, actual) => {
+  const a = normalizeName(pick);
+  const b = normalizeName(actual);
+  if (!a || !b) return false;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+  const aParts = a.split(' ');
+  const bParts = b.split(' ');
+  // Last name matches and first initials agree ("P Mahomes" / "Pat Mahomes")
+  return aParts[aParts.length - 1] === bParts[bParts.length - 1] && aParts[0][0] === bParts[0][0];
+};
+
+async function fetchEspnJson(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const upstream = await fetch(url, { signal: controller.signal, headers: { accept: 'application/json', 'user-agent': 'curl/8.5.0' } });
+    if (!upstream.ok) throw new Error(`ESPN responded ${upstream.status}`);
+    return await upstream.json();
+  } finally { clearTimeout(timer); }
+}
+
+async function autoSettlePropsForWeek({ leagueId, week, force = false, actor = 'auto-pilot' }) {
+  const league = await store.getLeague(leagueId);
+  if (!league) return { error: 'League not found.', status: 404 };
+  const weekPicks = league.settings?.propPicks?.[week] ?? {};
+  if (!Object.keys(weekPicks).length) return { error: `No prop picks were submitted for Week ${week}.`, status: 422 };
+
+  const scoreboard = await fetchEspnJson(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&week=${week}&dates=${SEASON}`);
+  const events = scoreboard?.events ?? [];
+  if (!events.length) return { error: `ESPN has no games for Week ${week} yet.`, status: 422 };
+  const unfinished = events.filter((event) => !event?.status?.type?.completed);
+  if (unfinished.length && !force) {
+    return { error: `${unfinished.length} game(s) are not final yet. Wait for the week to wrap, or send force:true to settle with the games that have finished.`, status: 422 };
+  }
+
+  // Week-wide passing & rushing leaders from each game's leader block
+  const facts = { passing: null, rushing: null, firstTd: null, turnovers: null, turnoverCount: null };
+  let bestPass = -1; let bestRush = -1;
+  for (const event of events) {
+    for (const leaderBlock of event?.competitions?.[0]?.leaders ?? []) {
+      const top = leaderBlock?.leaders?.[0];
+      if (!top?.athlete?.displayName) continue;
+      const value = Number(top.value ?? 0);
+      if (leaderBlock.name === 'passingYards' && value > bestPass) { bestPass = value; facts.passing = { player: top.athlete.displayName, yards: value }; }
+      if (leaderBlock.name === 'rushingYards' && value > bestRush) { bestRush = value; facts.rushing = { player: top.athlete.displayName, yards: value }; }
+    }
+  }
+
+  // Kickoff game (earliest completed): first TD scorer + total turnovers O/U 4.5
+  const kickoff = [...events].filter((event) => event?.status?.type?.completed).sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+  if (kickoff) {
+    try {
+      const summary = await fetchEspnJson(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event=${kickoff.id}`);
+      const firstTdPlay = (summary?.scoringPlays ?? []).find((play) => /touchdown/i.test(play?.type?.text ?? ''));
+      if (firstTdPlay?.text) {
+        const match = firstTdPlay.text.match(/^([A-Za-z.'\- ]+?)\s+\d+\s+Yd/);
+        if (match) facts.firstTd = { player: match[1].trim(), play: firstTdPlay.text.slice(0, 120) };
+      }
+      let turnoverTotal = 0; let sawStat = false;
+      for (const team of summary?.boxscore?.teams ?? []) {
+        const stat = (team.statistics ?? []).find((s) => s.name === 'turnovers');
+        if (stat) { sawStat = true; turnoverTotal += Number(stat.displayValue ?? 0); }
+      }
+      if (sawStat) { facts.turnoverCount = turnoverTotal; facts.turnovers = turnoverTotal > 4.5 ? 'over' : 'under'; }
+    } catch (error) {
+      console.error('Prop auto-settle summary fetch failed:', error.message);
+    }
+  }
+
+  // Match every player's saved picks against the facts
+  const winners = { passing: [], rushing: [], firstTd: [], turnovers: [] };
+  for (const [playerId, picks] of Object.entries(weekPicks)) {
+    if (facts.passing && picks.passing && namesMatch(picks.passing, facts.passing.player)) winners.passing.push(playerId);
+    if (facts.rushing && picks.rushing && namesMatch(picks.rushing, facts.rushing.player)) winners.rushing.push(playerId);
+    if (facts.firstTd && picks.firstTd && namesMatch(picks.firstTd, facts.firstTd.player)) winners.firstTd.push(playerId);
+    if (facts.turnovers && picks.turnovers === facts.turnovers) winners.turnovers.push(playerId);
+  }
+
+  const settings = league.settings ?? {};
+  const propResults = { ...(settings.propResults ?? {}) };
+  propResults[week] = { winners, facts, settledAt: new Date().toISOString(), settledBy: actor, auto: true };
+  await store.updateLeagueSettings(leagueId, { ...settings, propResults });
+  return { week, winners, facts };
+}
+
+app.post('/api/leagues/:leagueId/props/auto-settle', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const week = Number(request.body?.week);
+  if (!Number.isInteger(week) || week < 1 || week > 18) return response.status(422).json({ error: 'A valid week (1-18) is required.' });
+  const result = await autoSettlePropsForWeek({ leagueId: request.params.leagueId, week, force: Boolean(request.body?.force), actor: request.actor ?? 'admin' });
+  if (result.error) return response.status(result.status ?? 422).json({ error: result.error });
+  return response.json(result);
 }));
 
 /* ── Season pool: $25 per player, best season record takes it all ── */
@@ -1713,7 +1811,7 @@ app.post('/api/push/subscribe', playerAuth.requirePlayer, asyncRoute(async (requ
   const sub = request.body?.subscription;
   if (!sub?.endpoint) return response.status(400).json({ error: 'Invalid subscription.' });
   const league = await store.getLeague(leagueId);
-  const pushSubs = league?.pushSubscriptions ?? {};
+  const pushSubs = league?.settings?.pushSubscriptions ?? {};
   pushSubs[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
   await store.updateLeagueSettings(leagueId, { ...(league?.settings ?? {}), pushSubscriptions: pushSubs });
   response.json({ ok: true });
@@ -1725,7 +1823,7 @@ app.post('/api/push/broadcast', auth.requireAdmin, asyncRoute(async (request, re
   const { title, body, url, tag } = request.body ?? {};
   if (!body) return response.status(400).json({ error: 'Message body required.' });
   const league = await store.getLeague(leagueId);
-  const subs = Object.entries(league?.pushSubscriptions ?? {});
+  const subs = Object.entries(league?.settings?.pushSubscriptions ?? {});
   let sent = 0;
   for (const [, sub] of subs) {
     try {
@@ -1748,7 +1846,7 @@ app.post('/api/push/deadline-reminder', auth.requireAdmin, asyncRoute(async (req
   const deadlineStr = deadline ? deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET' : 'soon';
   let sent = 0;
   for (const p of missing) {
-    const sub = (league?.pushSubscriptions ?? {})[p.id];
+    const sub = (league?.settings?.pushSubscriptions ?? {})[p.id];
     if (!sub) continue;
     try {
       await webpush.sendNotification(sub, JSON.stringify({
@@ -1761,6 +1859,134 @@ app.post('/api/push/deadline-reminder', auth.requireAdmin, asyncRoute(async (req
     } catch { /* expired */ }
   }
   response.json({ sent, missing: missing.length, week });
+}));
+
+/* ── COMMISSIONER AUTO-PILOT ─────────────────────────────────────────
+   Runs the commissioner's routine chores automatically:
+   1. Verify final scores from ESPN (results + rivalry chat)
+   2. Auto-settle prop picks once the week's games are all final
+   3. Push + SMS reminders to players missing sheets (24h and 3h before deadline)
+   Triggered by: Vercel cron (/api/cron/auto-pilot) AND opportunistically
+   (throttled) whenever anyone loads the league. Every action is logged to
+   settings.autoPilotLog so the commissioner can see what ran. ── */
+let autoPilotLastRun = 0;
+let autoPilotRunning = false;
+
+async function appendAutoPilotLog(league, entries) {
+  if (!entries.length) return;
+  const settings = (await store.getLeague(leagueId))?.settings ?? league.settings ?? {};
+  const log = [...entries.map((message) => ({ at: new Date().toISOString(), message })), ...(settings.autoPilotLog ?? [])].slice(0, 30);
+  await store.updateLeagueSettings(leagueId, { ...settings, autoPilotLog: log });
+}
+
+async function runAutoPilot({ source = 'traffic' } = {}) {
+  if (autoPilotRunning) return { skipped: 'already running' };
+  autoPilotRunning = true;
+  const actions = [];
+  try {
+    const week = getCurrentWeek();
+    const league = await store.getLeague(leagueId);
+    if (!league) return { skipped: 'no league' };
+    const settings = league.settings ?? {};
+
+    // 1. Verify finals from ESPN
+    try {
+      const feed = await fetchLiveScores(week);
+      const finals = (feed.scores ?? []).filter((s) => s.state === 'post' && s.completed);
+      let verified = 0;
+      for (const score of finals) {
+        const existing = (league.results ?? {})[score.gameId];
+        if (existing?.winner && existing?.verifiedAt) continue;
+        const winner = score.awayScore === score.homeScore ? 'TIE' : (score.awayScore > score.homeScore ? score.away : score.home);
+        await store.upsertResult(leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner }, 'auto-pilot');
+        await maybePostRivalryChat(leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner });
+        verified += 1;
+      }
+      if (verified) actions.push(`Verified ${verified} final score(s) for Week ${week} from ESPN.`);
+    } catch (error) { console.error('Auto-pilot score sync failed:', error.message); }
+
+    // 2. Auto-settle props when the whole week is final and picks exist
+    try {
+      const weekGames = getGames(week);
+      const finalsCount = Object.entries(league.results ?? {}).filter(([gameId, r]) => r?.winner && weekGames.some((g) => g.id === gameId)).length;
+      const hasPicks = Object.keys(settings.propPicks?.[week] ?? {}).length > 0;
+      const alreadySettled = Boolean(settings.propResults?.[week]);
+      if (hasPicks && !alreadySettled && weekGames.length && finalsCount === weekGames.length) {
+        const result = await autoSettlePropsForWeek({ leagueId, week, actor: 'auto-pilot' });
+        if (!result.error) actions.push(`Auto-settled Week ${week} props from ESPN (passing: ${result.facts?.passing?.player ?? '—'}, rushing: ${result.facts?.rushing?.player ?? '—'}).`);
+      }
+    } catch (error) { console.error('Auto-pilot prop settle failed:', error.message); }
+
+    // 3. Deadline reminders (24h and 3h windows, each sent once per week)
+    try {
+      const deadline = getWeekDeadline(week);
+      if (deadline && !isWeekLocked(week)) {
+        const hoursLeft = (deadline.getTime() - Date.now()) / 3_600_000;
+        const sentFlags = settings.autoPilotReminders ?? {};
+        const windowKey = hoursLeft <= 3 ? `${week}-3h` : hoursLeft <= 24 ? `${week}-24h` : null;
+        if (windowKey && !sentFlags[windowKey]) {
+          const submitted = new Set((league.sheets ?? []).filter((s) => s.week === week && s.playerId).map((s) => s.playerId));
+          const missing = (league.players ?? []).filter((p) => !submitted.has(p.id));
+          if (missing.length) {
+            const when = deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET';
+            // Push
+            let pushed = 0;
+            if (webpush) {
+              for (const p of missing) {
+                const sub = (settings.pushSubscriptions ?? {})[p.id];
+                if (!sub) continue;
+                try {
+                  await webpush.sendNotification(sub, JSON.stringify({ title: `Picks lock ${when}`, body: `${p.name}, your Week ${week} sheet isn't in. ~${Math.max(1, Math.round(hoursLeft))}h left.`, url: '/?view=picks', tag: `deadline-w${week}` }));
+                  pushed += 1;
+                } catch { /* expired sub */ }
+              }
+            }
+            // SMS through Jack
+            let texted = 0;
+            try {
+              const provider = createSmsProvider(process.env);
+              const messages = missing.map((p) => ({ playerId: p.id, text: `🏈 405 BadGuys: Ayo, it's Jack. Week ${week} sheets lock at ${when} (~${Math.max(1, Math.round(hoursLeft))}h). Yours is blank, dawg. Get your picks in.` }));
+              const broadcast = await sendJackBroadcast({ store, leagueId, provider, messages, actor: 'auto-pilot', kind: 'pick_reminder' });
+              texted = (broadcast?.deliveries ?? []).filter((d) => d.status === 'delivered' || d.status === 'queued').length;
+            } catch (error) { console.error('Auto-pilot SMS reminder failed:', error.message); }
+            const fresh = (await store.getLeague(leagueId))?.settings ?? settings;
+            await store.updateLeagueSettings(leagueId, { ...fresh, autoPilotReminders: { ...(fresh.autoPilotReminders ?? {}), [windowKey]: new Date().toISOString() } });
+            actions.push(`Reminded ${missing.length} player(s) missing Week ${week} sheets (${pushed} push, ${texted} text) — ${windowKey.endsWith('3h') ? '3-hour' : '24-hour'} warning.`);
+          }
+        }
+      }
+    } catch (error) { console.error('Auto-pilot reminders failed:', error.message); }
+
+    if (actions.length) await appendAutoPilotLog(league, actions.map((a) => `[${source}] ${a}`));
+    return { week, actions };
+  } finally {
+    autoPilotRunning = false;
+    autoPilotLastRun = Date.now();
+  }
+}
+
+function maybeRunAutoPilot() {
+  if (Date.now() - autoPilotLastRun < 10 * 60_000) return; // at most every 10 minutes
+  runAutoPilot({ source: 'traffic' }).catch((error) => console.error('Auto-pilot failed:', error.message));
+}
+
+/* Cron entrypoints (Vercel sends Authorization: Bearer CRON_SECRET when set) */
+const cronAuthorized = (request) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret) return request.get('authorization') === `Bearer ${secret}`;
+  return Boolean(request.get('x-vercel-cron')) || !isProduction;
+};
+
+app.all(['/api/cron/auto-pilot', '/api/cron/jack-live-desk'], asyncRoute(async (request, response) => {
+  if (!cronAuthorized(request)) return response.status(401).json({ error: 'Unauthorized.' });
+  const result = await runAutoPilot({ source: 'cron' });
+  return response.json(result);
+}));
+
+/* Admin: run auto-pilot on demand + view its log */
+app.post('/api/leagues/:leagueId/auto-pilot/run', auth.requireAdmin, asyncRoute(async (_request, response) => {
+  const result = await runAutoPilot({ source: 'manual' });
+  return response.json(result);
 }));
 
 if (isProduction && !process.env.VERCEL) {

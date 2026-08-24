@@ -110,7 +110,7 @@ function App() {
     { id: 'passing', label: 'Most Passing Yards', icon: '🎯', desc: 'Which QB throws for the most yards this week?' },
     { id: 'rushing', label: 'Most Rushing Yards', icon: '🏃', desc: 'Which RB racks up the most rushing yards?' },
     { id: 'firstTd', label: 'First Touchdown Scorer', icon: '🏈', desc: 'Who scores the first TD of the week?' },
-    { id: 'turnovers', label: 'Total Turnovers O/U', icon: '🔄', desc: 'Over or under on total turnovers this week?' },
+    { id: 'turnovers', label: 'Turnovers O/U (Kickoff Game)', icon: '🔄', desc: 'Over or under 4.5 total turnovers in the week\'s opening game?' },
   ], []);
   const [aiLoading, setAiLoading] = useState('');
   const [aiError, setAiError] = useState('');
@@ -181,6 +181,16 @@ function App() {
   };
 
   const [propSettleWinners, setPropSettleWinners] = useState({});
+  const autoSettleProps = async (force = false) => {
+    setServerBusy('prop-auto');
+    try {
+      const result = await apiRequest(`/api/leagues/${LEAGUE_ID}/props/auto-settle`, { method: 'POST', body: JSON.stringify({ week: selectedWeek, force }) });
+      await loadLeague();
+      const f = result.facts ?? {};
+      notify(`Auto-settled from ESPN: passing ${f.passing?.player ?? '—'}, rushing ${f.rushing?.player ?? '—'}, first TD ${f.firstTd?.player ?? '—'}, turnovers ${f.turnoverCount ?? '—'} (${f.turnovers ?? '—'}).`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
   const settlePropWeek = async () => {
     setServerBusy('prop-settle');
     try {
@@ -1713,7 +1723,19 @@ function App() {
                   const weekPicks = serverLeague?.settings?.propPicks?.[selectedWeek] ?? {};
                   const pickerIds = Object.keys(weekPicks);
                   if (!pickerIds.length) return <p className="muted">No prop picks submitted for {weekLabel} yet.</p>;
+                  const settled = serverLeague?.settings?.propResults?.[selectedWeek];
                   return <>
+                    <button className="button button-primary full" type="button" disabled={serverBusy === 'prop-auto'} onClick={() => autoSettleProps(false)}>{serverBusy === 'prop-auto' ? 'Pulling ESPN stats…' : `⚡ Auto-settle ${weekLabel} from ESPN`}</button>
+                    <p className="muted">Auto-settle pulls final stats from ESPN once the week wraps: week-wide passing &amp; rushing leaders, first TD and turnovers from the kickoff game. Checkboxes below stay available as a manual override.</p>
+                    {settled?.auto && settled.facts && (
+                      <div className="prop-auto-facts">
+                        <strong>ESPN results{settled.settledAt ? ` · ${new Date(settled.settledAt).toLocaleDateString()}` : ''}</strong>
+                        <span>🎯 Passing: {settled.facts.passing ? `${settled.facts.passing.player} (${settled.facts.passing.yards} yds)` : '—'}</span>
+                        <span>🏃 Rushing: {settled.facts.rushing ? `${settled.facts.rushing.player} (${settled.facts.rushing.yards} yds)` : '—'}</span>
+                        <span>🏈 First TD: {settled.facts.firstTd?.player ?? '—'}</span>
+                        <span>🔄 Turnovers: {settled.facts.turnoverCount ?? '—'} → {(settled.facts.turnovers ?? '—').toUpperCase()}</span>
+                      </div>
+                    )}
                     {PROP_CATEGORIES.map((cat) => (
                       <div className="prop-settle-cat" key={cat.id}>
                         <strong>{cat.icon} {cat.label}</strong>
@@ -2299,6 +2321,29 @@ function App() {
                   finally { setServerBusy(''); }
                 }}>{serverBusy === 'push-reminder' ? 'Sending…' : weekLocked ? '🔒 Week locked' : 'Push reminder to missing players'}</button>
               </div>
+            </section>
+            <section className="autopilot-section">
+              <div className="panel-heading"><div><span className="eyebrow dark">AUTO-PILOT</span><h2>Commissioner auto-pilot</h2></div><StatusPill state="pass">ON</StatusPill></div>
+              <p>The league runs itself: final scores verify from ESPN automatically, props settle the moment the week wraps, and players missing sheets get push + text reminders 24 hours and 3 hours before the deadline. It runs on a daily schedule and every time someone opens the app. Everything below happened without you lifting a finger.</p>
+              <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'autopilot-run'} onClick={async () => {
+                setServerBusy('autopilot-run');
+                try {
+                  const result = await apiRequest(`/api/leagues/${LEAGUE_ID}/auto-pilot/run`, { method: 'POST' });
+                  await loadLeague();
+                  notify(result.actions?.length ? `Auto-pilot ran: ${result.actions.join(' ')}` : 'Auto-pilot ran — nothing needed doing. All caught up.');
+                } catch (err) { notify(err.message); }
+                finally { setServerBusy(''); }
+              }}>{serverBusy === 'autopilot-run' ? 'Running…' : '⚡ Run auto-pilot now'}</button>
+              {(serverLeague?.settings?.autoPilotLog ?? []).length ? (
+                <div className="autopilot-log">
+                  {(serverLeague.settings.autoPilotLog ?? []).slice(0, 10).map((entry, index) => (
+                    <div className="autopilot-log-row" key={index}>
+                      <time>{new Date(entry.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</time>
+                      <span>{entry.message}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="muted">No automated actions yet — the log fills in as the season gets rolling.</p>}
             </section>
             <section className="cashapp-admin-section">
               <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Cash App Payment Link</h2></div></div>
