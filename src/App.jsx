@@ -21,6 +21,7 @@ import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
 import { deriveSurvivorPool, findTeamGame } from './survivor.js';
 import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
+import { creditBalance } from './credits.js';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
@@ -139,6 +140,9 @@ function App() {
   const [cfbMyPicks, setCfbMyPicks] = useState({});
   const [cfbTiebreaker, setCfbTiebreaker] = useState('');
   const [cfbBuilderOpen, setCfbBuilderOpen] = useState(false);
+
+  // Player credit form (admin)
+  const [creditForm, setCreditForm] = useState({ playerId: '', amount: '', reason: '' });
 
   const loadLeague = useCallback(async () => {
     try {
@@ -459,6 +463,59 @@ function App() {
     finally { setServerBusy(''); }
   };
 
+  // ── Player credits ──
+  const myCredit = useMemo(
+    () => (playerSession.authenticated ? creditBalance(serverLeague?.creditLedger ?? [], playerSession.playerId) : 0),
+    [serverLeague, playerSession],
+  );
+
+  const payCfbWithCredit = async () => {
+    if (!cfbPool) return;
+    setServerBusy('cfb-credit-pay');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/pay-with-credit`, { method: 'POST' });
+      await loadLeague();
+      notify(`Paid $${cfbPool.entryFee} from your credit — $${data.balance} left. You're locked and loaded. ✅`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const paySheetWithCredit = async (sheetId) => {
+    setServerBusy('sheet-credit-pay');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/pay-with-credit`, { method: 'POST' });
+      await loadLeague();
+      notify(`Entry paid from your credit — $${data.balance} left. ✅`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const addCredit = async () => {
+    if (!(await ensureAdmin())) return;
+    setServerBusy('credit-add');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/credits`, {
+        method: 'POST',
+        body: JSON.stringify({ playerId: creditForm.playerId, amount: Number(creditForm.amount), reason: creditForm.reason }),
+      });
+      await loadLeague();
+      setCreditForm((current) => ({ ...current, amount: '', reason: '' }));
+      notify(`Credit updated — new balance $${data.balance}.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const creditCfbWinners = async () => {
+    if (!cfbPool || !(await ensureAdmin())) return;
+    setServerBusy('cfb-credit-winners');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/credit-winners`, { method: 'POST' });
+      await loadLeague();
+      notify(`$${data.pot} pot credited: $${data.share} to ${data.winners.join(' & ')}. 🏆`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
   const chooseCfbPick = (gameId, side) => {
     if (cfbPool?.status !== 'open') return;
     setCfbMyPicks((current) => {
@@ -483,14 +540,14 @@ function App() {
     if (!name.trim()) return notify('Add your name before locking in.');
     if (Object.keys(picks).length !== currentGames.length) return notify(`Finish all ${currentGames.length} picks first.`);
     if (!tiebreaker || Number(tiebreaker) < 0) return notify('Add a valid tiebreaker total.');
-    if (!paid) return notify('Confirm your payment first.');
+    if (!paid && !playerSession.authenticated) return notify('Confirm your payment first.');
 
     setServerBusy('entry');
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/entries`, { method: 'POST', body: JSON.stringify({ name: name.trim(), handle: handle.trim(), picks, tiebreaker: Number(tiebreaker), paid, week: selectedWeek }) });
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/entries`, { method: 'POST', body: JSON.stringify({ name: name.trim(), handle: handle.trim(), picks, tiebreaker: Number(tiebreaker), paid, week: selectedWeek, playerId: playerSession.playerId ?? undefined }) });
       await loadLeague();
       setName(''); setHandle(''); setPicks({}); setTiebreaker(''); setPaid(false);
-      notify('Picks locked in and saved to the league database.');
+      notify(paid ? 'Picks locked in and saved to the league database.' : 'Picks locked in — now pay your entry from credit or the Cash App link.');
       setView('entries');
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
@@ -1255,7 +1312,22 @@ function App() {
               <label>Tiebreaker total<input type="number" min="0" value={tiebreaker} onChange={(event) => setTiebreaker(event.target.value)} placeholder="48" /></label>
               <p className="rule-note"><strong>Closest without going over wins.</strong> Going over means your tiebreaker is busted.</p>
               <label className="check-row"><input type="checkbox" checked={paid} onChange={(event) => setPaid(event.target.checked)} /><span>I confirm I sent ${ENTRY_FEE}</span></label>
-              {serverLeague?.settings?.cashAppPool?.url && (
+              {playerSession.authenticated && (() => {
+                const mySheet = weekSheets.find((s) => s.playerId === playerSession.playerId);
+                if (mySheet?.paid) return <div className="credit-paid-banner">✅ This week's entry is paid.</div>;
+                return (
+                  <div className="credit-chip-row">
+                    <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
+                    {mySheet && myCredit >= ENTRY_FEE && (
+                      <button className="button button-primary" type="button" disabled={serverBusy === 'sheet-credit-pay'} onClick={() => paySheetWithCredit(mySheet.id)}>
+                        {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from my credit`}
+                      </button>
+                    )}
+                    {!mySheet && myCredit >= ENTRY_FEE && <small className="muted">Lock in your sheet, then pay from credit in one tap.</small>}
+                  </div>
+                );
+              })()}
+              {serverLeague?.settings?.cashAppPool?.url && !weekSheets.find((s) => s.playerId === playerSession.playerId)?.paid && (
                 <div className="cashapp-steps">
                   <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
                     <span className="cashapp-icon">💵</span>
@@ -1644,7 +1716,23 @@ function App() {
                   <span className={`cfb-pool-status ${cfbPool.status}`}>{cfbPool.status === 'open' ? '🟢 Open for picks' : cfbPool.status === 'locked' ? '🔒 Locked' : '🏁 Final'}</span>
                 </div>
 
-                {serverLeague?.settings?.cashAppPool?.url && (
+                {/* Payment — credit first, Cash App as the backup */}
+                {playerSession.authenticated && cfbMyEntry?.paid && (
+                  <div className="credit-paid-banner">✅ Your entry is paid{cfbMyEntry.paidVia === 'credit' ? ' from your credit' : ''} — you're in the pot.</div>
+                )}
+                {playerSession.authenticated && !cfbMyEntry?.paid && (
+                  <div className="credit-chip-row">
+                    <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
+                    {cfbMyEntry && myCredit >= (cfbPool.entryFee || 0) && (
+                      <button className="button button-primary" type="button" disabled={serverBusy === 'cfb-credit-pay'} onClick={payCfbWithCredit}>
+                        {serverBusy === 'cfb-credit-pay' ? 'Paying…' : `Pay $${cfbPool.entryFee} from my credit`}
+                      </button>
+                    )}
+                    {!cfbMyEntry && <small className="muted">Lock in your picks below, then pay in one tap.</small>}
+                    {cfbMyEntry && myCredit < (cfbPool.entryFee || 0) && <small className="muted">Not enough credit for the ${cfbPool.entryFee} entry — use the Cash App link below.</small>}
+                  </div>
+                )}
+                {serverLeague?.settings?.cashAppPool?.url && !cfbMyEntry?.paid && (
                   <div className="cashapp-steps">
                     <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
                       <span className="cashapp-icon">💵</span>
@@ -1761,6 +1849,12 @@ function App() {
                     {cfbPool.status === 'open' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('locked')}>🔒 Lock picks</button>}
                     {cfbPool.status === 'locked' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('open')}>🔓 Reopen picks</button>}
                     <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-sync'} onClick={syncCfbScores}>{serverBusy === 'cfb-sync' ? 'Syncing…' : '⚡ Sync scores from ESPN'}</button>
+                    {cfbPool.status === 'final' && !cfbPool.potCredited && cfbBoard?.winners?.length > 0 && (
+                      <button className="button button-primary" type="button" disabled={serverBusy === 'cfb-credit-winners'} onClick={creditCfbWinners}>
+                        {serverBusy === 'cfb-credit-winners' ? 'Crediting…' : `💰 Credit pot to ${cfbBoard.winners.map((w) => w.name.split(' ')[0]).join(' & ')}`}
+                      </button>
+                    )}
+                    {cfbPool.potCredited && <span className="credit-chip">💰 Pot credited to winners</span>}
                   </div>
                 )}
               </section>
@@ -1895,6 +1989,54 @@ function App() {
                 </div>
                 {serverLeague?.settings?.cashAppPool?.url && (
                   <div className="cashapp-preview"><span>💵</span><div><strong>Active:</strong> <a href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">{serverLeague.settings.cashAppPool.label || 'Cash App Pool'} ↗</a></div></div>
+                )}
+              </div>
+            </section>
+            <section className="cashapp-admin-section">
+              <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Player Credits</h2></div></div>
+              <p>When a Cash App payment lands, add it here as credit — from then on that player pays entries with one tap and winnings can go straight back to their balance. The app only tracks the money; Cash App moves it.</p>
+              <div className="credit-balances">
+                {(serverLeague?.players ?? []).map((player) => {
+                  const balance = creditBalance(serverLeague?.creditLedger ?? [], player.id);
+                  return (
+                    <div className="credit-balance-row" key={player.id}>
+                      <span className="credit-balance-name">{player.name}</span>
+                      <span className={`credit-balance-amount ${balance > 0 ? 'positive' : ''}`}>${balance}</span>
+                    </div>
+                  );
+                })}
+                {!(serverLeague?.players ?? []).length && <p className="muted">No players yet.</p>}
+              </div>
+              <div className="cashapp-admin-form">
+                <label>Player
+                  <select value={creditForm.playerId} onChange={(e) => setCreditForm((c) => ({ ...c, playerId: e.target.value }))}>
+                    <option value="">Choose a player…</option>
+                    {(serverLeague?.players ?? []).map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}
+                  </select>
+                </label>
+                <div className="form-pair">
+                  <label>Amount <small>use a minus to deduct</small><input type="number" step="1" value={creditForm.amount} onChange={(e) => setCreditForm((c) => ({ ...c, amount: e.target.value }))} placeholder="20" /></label>
+                  <label>Reason<input type="text" maxLength="120" value={creditForm.reason} onChange={(e) => setCreditForm((c) => ({ ...c, reason: e.target.value }))} placeholder="Cash App received" /></label>
+                </div>
+                <div className="cashapp-admin-actions">
+                  <button className="button button-primary" type="button" disabled={!creditForm.playerId || !creditForm.amount || !creditForm.reason.trim() || serverBusy === 'credit-add'} onClick={addCredit}>
+                    {serverBusy === 'credit-add' ? 'Saving…' : 'Add / Deduct Credit'}
+                  </button>
+                </div>
+                {(serverLeague?.creditLedger ?? []).length > 0 && (
+                  <details className="credit-ledger">
+                    <summary>Full credit history ({serverLeague.creditLedger.length})</summary>
+                    <div className="credit-ledger-rows">
+                      {[...serverLeague.creditLedger].reverse().slice(0, 40).map((entry) => (
+                        <div className="credit-ledger-row" key={entry.id}>
+                          <span className={`credit-ledger-amount ${entry.amount > 0 ? 'positive' : 'negative'}`}>{entry.amount > 0 ? '+' : '−'}${Math.abs(entry.amount)}</span>
+                          <span className="credit-ledger-name">{(serverLeague.players ?? []).find((p) => p.id === entry.playerId)?.name ?? 'Player'}</span>
+                          <span className="credit-ledger-reason">{entry.reason}</span>
+                          <span className="credit-ledger-date">{new Date(entry.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                 )}
               </div>
             </section>

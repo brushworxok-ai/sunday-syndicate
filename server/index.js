@@ -290,7 +290,9 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   const name = String(input.name ?? '').trim().slice(0, 50);
   const picks = input.picks ?? {};
   if (!name) return response.status(422).json({ error: 'Name is required.' });
-  if (!input.paid) return response.status(422).json({ error: 'Payment confirmation is required.' });
+  // Signed-in players may submit unpaid and settle from credit or Cash App after;
+  // anonymous sheets still need the payment confirmation checkbox.
+  if (!input.paid && !input.playerId) return response.status(422).json({ error: 'Payment confirmation is required.' });
   if (!Number.isFinite(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0) return response.status(422).json({ error: 'A valid tiebreaker is required.' });
   const submittedWeek = Number(input.week) || getCurrentWeek();
   const weekGames = getGames(submittedWeek);
@@ -301,7 +303,7 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   }
   const everyPickValid = weekGames.every((game) => picks[game.id] === game.away || picks[game.id] === game.home);
   if (!everyPickValid || Object.keys(picks).length !== weekGames.length) return response.status(422).json({ error: `Exactly ${weekGames.length} valid picks are required for Week ${submittedWeek}.` });
-  const sheet = { id: `sheet-${randomUUID()}`, playerId: input.playerId ?? null, name, handle: String(input.handle ?? '').trim().slice(0, 50), picks, tiebreaker: Number(input.tiebreaker), paid: true, week: submittedWeek, submittedAt: new Date().toISOString() };
+  const sheet = { id: `sheet-${randomUUID()}`, playerId: input.playerId ?? null, name, handle: String(input.handle ?? '').trim().slice(0, 50), picks, tiebreaker: Number(input.tiebreaker), paid: Boolean(input.paid), week: submittedWeek, submittedAt: new Date().toISOString() };
   await store.createSheet(request.params.leagueId, sheet);
   return response.status(201).json(sheet);
 }));
@@ -1421,6 +1423,63 @@ app.post('/api/leagues/:leagueId/cfb-pool/:poolId/sync-scores', auth.requireAdmi
   pool.updatedAt = new Date().toISOString();
   await store.saveCfbPool(request.params.leagueId, pool);
   return response.json({ pool, updated, allFinal });
+}));
+
+/* ── Player credits — the app tracks money between friends; it never moves real money ── */
+app.post('/api/leagues/:leagueId/credits', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const playerId = String(request.body?.playerId ?? '');
+  if (!(league.players ?? []).some((p) => p.id === playerId)) return response.status(404).json({ error: 'Player not found.' });
+  const { validateCreditEntry, creditBalance } = await import('../src/credits.js');
+  const verdict = validateCreditEntry({ amount: request.body?.amount, reason: request.body?.reason });
+  if (!verdict.ok) return response.status(422).json({ error: verdict.error });
+  const balance = creditBalance(league.creditLedger ?? [], playerId);
+  if (balance + verdict.value < 0) return response.status(422).json({ error: `That would put the balance below $0 (current: $${balance}).` });
+  const entry = { id: randomUUID(), playerId, amount: verdict.value, reason: String(request.body.reason).trim().slice(0, 120), by: 'admin', at: new Date().toISOString() };
+  await store.addCreditEntry(request.params.leagueId, entry);
+  return response.status(201).json({ entry, balance: Math.round((balance + verdict.value) * 100) / 100 });
+}));
+
+app.post('/api/leagues/:leagueId/cfb-pool/:poolId/pay-with-credit', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const result = await store.payCfbEntryWithCredit(request.params.leagueId, request.params.poolId, request.player.id, request.player.name);
+  if (!result) return response.status(404).json({ error: 'Pool not found.' });
+  if (!result.ok) return response.status(422).json({ error: result.error });
+  return response.json(result);
+}));
+
+app.post('/api/leagues/:leagueId/sheets/:sheetId/pay-with-credit', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const fee = Number(league.settings?.entryFee) || 20;
+  const result = await store.paySheetWithCredit(request.params.leagueId, request.params.sheetId, request.player.id, request.player.name, fee);
+  if (!result) return response.status(404).json({ error: 'Sheet not found.' });
+  if (!result.ok) return response.status(422).json({ error: result.error });
+  return response.json(result);
+}));
+
+app.post('/api/leagues/:leagueId/cfb-pool/:poolId/credit-winners', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
+  if (!pool) return response.status(404).json({ error: 'Pool not found.' });
+  if (pool.status !== 'final') return response.status(422).json({ error: 'Sync scores until every game is final before paying out.' });
+  if (pool.potCredited) return response.status(409).json({ error: 'This pot was already credited to the winners.' });
+  const { gradeCfbPool } = await import('../src/cfbPool.js');
+  const board = gradeCfbPool(pool);
+  if (!board.complete || !board.winners.length) return response.status(422).json({ error: 'No winners to credit yet.' });
+  const pot = Object.values(pool.entries ?? {}).filter((e) => e.paid).length * (Number(pool.entryFee) || 0);
+  if (pot <= 0) return response.status(422).json({ error: 'The pot is $0 — mark entries paid first.' });
+  const share = Math.round((pot / board.winners.length) * 100) / 100;
+  const at = new Date().toISOString();
+  for (const winner of board.winners) {
+    await store.addCreditEntry(request.params.leagueId, {
+      id: randomUUID(), playerId: winner.playerId, amount: share,
+      reason: `CFB Week ${pool.week} pot — winner${board.winners.length > 1 ? ' (split)' : ''}`, by: 'admin', at,
+    });
+  }
+  pool.potCredited = true;
+  pool.updatedAt = at;
+  await store.saveCfbPool(request.params.leagueId, pool);
+  return response.json({ pot, share, winners: board.winners.map((w) => w.name) });
 }));
 
 /* ── Payout tracking ── */

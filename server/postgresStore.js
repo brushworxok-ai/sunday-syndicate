@@ -107,7 +107,12 @@ function publicLeague(state) {
     survivorPicks: clone(state.survivorPicks ?? []).sort((a, b) => Number(a.week) - Number(b.week)),
     payouts: clone(state.payouts ?? []).sort(byNewest('paidAt')),
     cfbPools: clone(state.cfbPools ?? []).sort(byNewest('createdAt')),
+    creditLedger: clone(state.creditLedger ?? []).sort((a, b) => String(a.at).localeCompare(String(b.at))),
   };
+}
+
+function ledgerBalance(ledger, playerId) {
+  return Math.round((ledger ?? []).filter((e) => e.playerId === playerId).reduce((sum, e) => sum + Number(e.amount || 0), 0) * 100) / 100;
 }
 
 export class PostgresLeagueStore {
@@ -372,6 +377,57 @@ export class PostgresLeagueStore {
       pool.entries[entry.playerId] = clone(entry);
       draft.auditLog.push(auditEntry('cfb_pool.picks_saved', `${entry.name} locked CFB Week ${pool.week} picks`, entry.playerId, { poolId }));
       return clone(pool);
+    });
+  }
+
+  async getCreditBalance(leagueId, playerId) {
+    const state = await this.readState(leagueId);
+    return ledgerBalance(state?.creditLedger, playerId);
+  }
+
+  async addCreditEntry(leagueId, entry) {
+    return this.mutateLeague(leagueId, (draft) => {
+      draft.creditLedger ??= [];
+      draft.creditLedger.push(clone(entry));
+      draft.auditLog.push(auditEntry('credit.entry', `${entry.amount > 0 ? '+' : ''}$${Math.abs(entry.amount)} ${entry.amount > 0 ? 'credited to' : 'debited from'} player for: ${entry.reason}`, entry.by, { playerId: entry.playerId, amount: entry.amount }, entry.at));
+      return entry;
+    });
+  }
+
+  async payCfbEntryWithCredit(leagueId, poolId, playerId, playerName) {
+    return this.mutateLeague(leagueId, (draft) => {
+      const pool = (draft.cfbPools ?? []).find((item) => item.id === poolId);
+      if (!pool) return { ok: false, error: 'Pool not found.' };
+      const entry = pool.entries?.[playerId];
+      if (!entry) return { ok: false, error: 'Submit your picks first, then pay.' };
+      if (entry.paid) return { ok: false, error: 'This entry is already paid.' };
+      const fee = Number(pool.entryFee) || 0;
+      const balance = ledgerBalance(draft.creditLedger, playerId);
+      if (balance < fee) return { ok: false, error: `Not enough credit — you have $${balance}, entry is $${fee}.` };
+      const at = new Date().toISOString();
+      draft.creditLedger ??= [];
+      if (fee > 0) draft.creditLedger.push({ id: randomUUID(), playerId, amount: -fee, reason: `CFB Week ${pool.week} entry fee`, by: playerId, at });
+      entry.paid = true;
+      entry.paidVia = 'credit';
+      draft.auditLog.push(auditEntry('credit.entry', `-$${fee} debited from ${playerName} for CFB Week ${pool.week} entry (paid from credit)`, playerId, { playerId, amount: -fee, poolId }, at));
+      return { ok: true, entry: clone(entry), balance: Math.round((balance - fee) * 100) / 100 };
+    });
+  }
+
+  async paySheetWithCredit(leagueId, sheetId, playerId, playerName, fee) {
+    return this.mutateLeague(leagueId, (draft) => {
+      const sheet = (draft.sheets ?? []).find((item) => item.id === sheetId);
+      if (!sheet) return { ok: false, error: 'Sheet not found.' };
+      if (sheet.playerId !== playerId) return { ok: false, error: 'You can only pay for your own sheet.' };
+      if (sheet.paid) return { ok: false, error: 'This sheet is already paid.' };
+      const balance = ledgerBalance(draft.creditLedger, playerId);
+      if (balance < fee) return { ok: false, error: `Not enough credit — you have $${balance}, entry is $${fee}.` };
+      const at = new Date().toISOString();
+      draft.creditLedger ??= [];
+      if (fee > 0) draft.creditLedger.push({ id: randomUUID(), playerId, amount: -fee, reason: `Week ${sheet.week} entry fee`, by: playerId, at });
+      sheet.paid = true;
+      draft.auditLog.push(auditEntry('credit.entry', `-$${fee} debited from ${playerName} for Week ${sheet.week} sheet (paid from credit)`, playerId, { playerId, amount: -fee, sheetId }, at));
+      return { ok: true, balance: Math.round((balance - fee) * 100) / 100 };
     });
   }
 

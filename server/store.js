@@ -138,6 +138,16 @@ export class LeagueStore {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_cfb_pools_league ON cfb_pools(league_id);
+      CREATE TABLE IF NOT EXISTS credit_ledger (
+        id TEXT PRIMARY KEY,
+        league_id TEXT NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+        player_id TEXT NOT NULL,
+        amount REAL NOT NULL,
+        reason TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_credit_league_player ON credit_ledger(league_id, player_id);
       CREATE INDEX IF NOT EXISTS idx_audit_league_time ON audit_logs(league_id, event_at);
       CREATE INDEX IF NOT EXISTS idx_recaps_league_week ON recaps(league_id, week);
       CREATE INDEX IF NOT EXISTS idx_bets_league ON side_bets(league_id);
@@ -241,7 +251,8 @@ export class LeagueStore {
     const survivorPicks = this.db.prepare('SELECT * FROM survivor_picks WHERE league_id = ? ORDER BY week, picked_at').all(leagueId).map((row) => ({ playerId: row.player_id, week: row.week, team: row.team, pickedAt: row.picked_at }));
     const payouts = this.db.prepare('SELECT data_json FROM payouts WHERE league_id = ? ORDER BY created_at DESC').all(leagueId).map((row) => parse(row.data_json, {}));
     const cfbPools = this.db.prepare('SELECT data_json FROM cfb_pools WHERE league_id = ? ORDER BY created_at DESC').all(leagueId).map((row) => parse(row.data_json, {}));
-    return { id: league.id, name: league.name, week: league.week, settings: parse(league.settings_json, {}), players, sheets, results, recaps, latestRecap: recaps[0] ?? null, sideBets, broadcasts, latestBroadcast: broadcasts[0] ?? null, chat, auditLog, consentRecords, survivorPicks, payouts, cfbPools };
+    const creditLedger = this.db.prepare('SELECT * FROM credit_ledger WHERE league_id = ? ORDER BY created_at').all(leagueId).map((row) => ({ id: row.id, playerId: row.player_id, amount: row.amount, reason: row.reason, by: row.created_by, at: row.created_at }));
+    return { id: league.id, name: league.name, week: league.week, settings: parse(league.settings_json, {}), players, sheets, results, recaps, latestRecap: recaps[0] ?? null, sideBets, broadcasts, latestBroadcast: broadcasts[0] ?? null, chat, auditLog, consentRecords, survivorPicks, payouts, cfbPools, creditLedger };
   }
 
   getPlayer(playerId) {
@@ -410,6 +421,68 @@ export class LeagueStore {
       .run(stringify(pool), new Date().toISOString(), leagueId, poolId);
     this.writeAudit(leagueId, 'cfb_pool.picks_saved', `${entry.name} locked CFB Week ${pool.week} picks`, entry.playerId, { poolId });
     return pool;
+  }
+
+  getCreditBalance(leagueId, playerId) {
+    const row = this.db.prepare('SELECT COALESCE(SUM(amount), 0) AS balance FROM credit_ledger WHERE league_id = ? AND player_id = ?').get(leagueId, playerId);
+    return Math.round((row?.balance ?? 0) * 100) / 100;
+  }
+
+  addCreditEntry(leagueId, entry) {
+    this.db.prepare('INSERT INTO credit_ledger (id, league_id, player_id, amount, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(entry.id, leagueId, entry.playerId, entry.amount, entry.reason, entry.by, entry.at);
+    this.writeAudit(leagueId, 'credit.entry', `${entry.amount > 0 ? '+' : ''}$${Math.abs(entry.amount)} ${entry.amount > 0 ? 'credited to' : 'debited from'} player for: ${entry.reason}`, entry.by, { playerId: entry.playerId, amount: entry.amount });
+    return entry;
+  }
+
+  // Atomically deduct entry fee from credit and mark the CFB pool entry paid.
+  payCfbEntryWithCredit(leagueId, poolId, playerId, playerName) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const pool = this.getCfbPool(leagueId, poolId);
+      if (!pool) { this.db.exec('ROLLBACK'); return { ok: false, error: 'Pool not found.' }; }
+      const entry = pool.entries?.[playerId];
+      if (!entry) { this.db.exec('ROLLBACK'); return { ok: false, error: 'Submit your picks first, then pay.' }; }
+      if (entry.paid) { this.db.exec('ROLLBACK'); return { ok: false, error: 'This entry is already paid.' }; }
+      const fee = Number(pool.entryFee) || 0;
+      const balance = this.getCreditBalance(leagueId, playerId);
+      if (balance < fee) { this.db.exec('ROLLBACK'); return { ok: false, error: `Not enough credit — you have $${balance}, entry is $${fee}.` }; }
+      const at = new Date().toISOString();
+      if (fee > 0) {
+        this.db.prepare('INSERT INTO credit_ledger (id, league_id, player_id, amount, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(randomUUID(), leagueId, playerId, -fee, `CFB Week ${pool.week} entry fee`, playerId, at);
+      }
+      entry.paid = true;
+      entry.paidVia = 'credit';
+      pool.entries[playerId] = entry;
+      this.db.prepare('UPDATE cfb_pools SET data_json = ?, updated_at = ? WHERE league_id = ? AND id = ?')
+        .run(stringify(pool), at, leagueId, poolId);
+      this.writeAudit(leagueId, 'credit.entry', `-$${fee} debited from ${playerName} for CFB Week ${pool.week} entry (paid from credit)`, playerId, { playerId, amount: -fee, poolId }, at, { inTransaction: true });
+      this.db.exec('COMMIT');
+      return { ok: true, entry, balance: balance - fee };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  // Atomically deduct entry fee from credit and mark a weekly sheet paid.
+  paySheetWithCredit(leagueId, sheetId, playerId, playerName, fee) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.db.prepare('SELECT * FROM sheets WHERE league_id = ? AND id = ?').get(leagueId, sheetId);
+      if (!row) { this.db.exec('ROLLBACK'); return { ok: false, error: 'Sheet not found.' }; }
+      if (row.player_id !== playerId) { this.db.exec('ROLLBACK'); return { ok: false, error: 'You can only pay for your own sheet.' }; }
+      if (row.paid) { this.db.exec('ROLLBACK'); return { ok: false, error: 'This sheet is already paid.' }; }
+      const balance = this.getCreditBalance(leagueId, playerId);
+      if (balance < fee) { this.db.exec('ROLLBACK'); return { ok: false, error: `Not enough credit — you have $${balance}, entry is $${fee}.` }; }
+      const at = new Date().toISOString();
+      if (fee > 0) {
+        this.db.prepare('INSERT INTO credit_ledger (id, league_id, player_id, amount, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(randomUUID(), leagueId, playerId, -fee, `Week ${row.week} entry fee`, playerId, at);
+      }
+      this.db.prepare('UPDATE sheets SET paid = 1 WHERE league_id = ? AND id = ?').run(leagueId, sheetId);
+      this.writeAudit(leagueId, 'credit.entry', `-$${fee} debited from ${playerName} for Week ${row.week} sheet (paid from credit)`, playerId, { playerId, amount: -fee, sheetId }, at, { inTransaction: true });
+      this.db.exec('COMMIT');
+      return { ok: true, balance: balance - fee };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   savePayout(leagueId, payout) {
