@@ -124,6 +124,13 @@ export class PostgresLeagueStore {
 
   async migrate() {
     await this.sql`
+      CREATE TABLE IF NOT EXISTS app_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+    await this.sql`
       CREATE TABLE IF NOT EXISTS league_states (
         league_id TEXT PRIMARY KEY,
         data JSONB NOT NULL,
@@ -399,6 +406,19 @@ export class PostgresLeagueStore {
       draft.auditLog.push(auditEntry('cfb_pool.picks_saved', `${entry.name} locked CFB Week ${pool.week} picks`, entry.playerId, { poolId }));
       return clone(pool);
     });
+  }
+
+  async getConfig(key) {
+    const rows = await this.sql`SELECT value FROM app_config WHERE key = ${key}`;
+    return rows[0]?.value ?? null;
+  }
+
+  async setConfig(key, value) {
+    await this.sql`
+      INSERT INTO app_config (key, value, updated_at) VALUES (${key}, ${value}, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    `;
+    return true;
   }
 
   async getCreditBalance(leagueId, playerId) {

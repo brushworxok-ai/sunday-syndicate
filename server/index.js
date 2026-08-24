@@ -45,6 +45,8 @@ const port = Number(process.env.PORT) || 8787;
 const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 const databasePath = process.env.DATABASE_PATH || path.join(projectRoot, 'work', 'sunday-syndicate.sqlite');
 const store = await createLeagueStore({ databaseUrl: process.env.DATABASE_URL, databasePath });
+const { makeGeminiKeyResolver, invalidateGeminiKeyCache } = await import('./geminiKey.js');
+const getGeminiKey = makeGeminiKeyResolver(store);
 await store.seedDemo();
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -66,11 +68,13 @@ app.use(express.json({ limit: '64kb' }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
 
-app.get('/api/health', (_request, response) => {
+app.get('/api/health', asyncRoute(async (_request, response) => {
+  const geminiKey = await getGeminiKey().catch(() => ({ value: null, source: 'none' }));
   response.json({
     ok: true,
     database: store.kind,
-    geminiConfigured: Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_api_key_here'),
+    geminiConfigured: Boolean(geminiKey.value),
+    geminiKeySource: geminiKey.source,
     model,
     smsProvider: ['twilio', 'textbelt'].includes(process.env.SMS_PROVIDER) ? process.env.SMS_PROVIDER : 'demo',
     twilioConfigured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_MESSAGING_SERVICE_SID),
@@ -85,7 +89,35 @@ app.get('/api/health', (_request, response) => {
       ? Boolean(process.env.JACK_TTS_API_KEY && process.env.JACK_TTS_VOICE_ID)
       : false,
   });
-});
+}));
+
+/* ── Admin config overrides — lets the commissioner fix a stale hosting env var
+   (e.g. GEMINI_API_KEY on Vercel) from inside the app. The value is validated
+   with a live Gemini call before saving and is never echoed back. ── */
+app.patch('/api/admin/config', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const key = String(request.body?.key ?? '');
+  const value = typeof request.body?.value === 'string' ? request.body.value.trim() : '';
+  const ALLOWED = new Set(['GEMINI_API_KEY']);
+  if (!ALLOWED.has(key)) return response.status(422).json({ error: 'That config key cannot be set here.' });
+  if (key === 'GEMINI_API_KEY') {
+    if (!value) {
+      await store.setConfig(key, '');
+      invalidateGeminiKeyCache();
+      return response.json({ ok: true, key, cleared: true });
+    }
+    try {
+      const probe = new GoogleGenAI({ apiKey: value });
+      const result = await probe.models.generateContent({ model, contents: 'Reply with the word ok.', config: { maxOutputTokens: 512 } });
+      if (!result?.text) throw new Error('empty response');
+    } catch (error) {
+      return response.status(422).json({ error: `That key did not work against Gemini (${String(error.message ?? error).slice(0, 120)}). Nothing saved.` });
+    }
+  }
+  await store.setConfig(key, value);
+  invalidateGeminiKeyCache();
+  try { await store.writeAudit('league-sunday-syndicate-demo', 'admin.config_updated', `${key} updated via admin config (validated live)`, 'admin', { key }); } catch { /* audit is best-effort */ }
+  return response.json({ ok: true, key, validated: true });
+}));
 
 /* ── OTP verification (TextBelt) ── */
 const OTP_STORE = new Map(); // key: phoneE164, value: { code, expiresAt, attempts }
@@ -368,8 +400,8 @@ app.put('/api/leagues/:leagueId/results/:gameId', auth.requireAdmin, asyncRoute(
 }));
 
 app.post('/api/leagues/:leagueId/recaps/generate', auth.requireAdmin, asyncRoute(async (request, response) => {
-  const geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_api_key_here');
-  const aiClient = geminiConfigured ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
+  const geminiKey = await getGeminiKey();
+  const aiClient = geminiKey.value ? new GoogleGenAI({ apiKey: geminiKey.value }) : null;
   const recap = await generateWeeklyRecap({ store, leagueId: request.params.leagueId, aiClient, model, actor: request.actor });
   return response.status(201).json(recap);
 }));
@@ -502,7 +534,7 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
   const league = await store.getLeague(request.params.leagueId);
   if (!league) return response.status(404).json({ error: 'League not found.' });
 
-  const geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_api_key_here');
+  const geminiConfigured = Boolean((await getGeminiKey()).value);
   const currentWeek = getCurrentWeek();
   const weekGames = getGames(currentWeek);
   const weekLabel = SCHEDULE.find((w) => w.week === currentWeek)?.label ?? `Week ${currentWeek}`;
@@ -647,7 +679,7 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
   try {
     const { buildPrompt } = await import('./prompts.js');
     const { systemInstruction, prompt } = buildPrompt('assistant', { question, history, context });
-    const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const client = new GoogleGenAI({ apiKey: (await getGeminiKey()).value });
     const result = await client.models.generateContent({
       model,
       contents: prompt,
@@ -729,7 +761,7 @@ app.patch('/api/leagues/:leagueId/players/:playerId/jack-policy', auth.requireAd
 
 /* ── Jack Weekly Roast Generation ── */
 app.post('/api/leagues/:leagueId/jack/weekly-roast', auth.requireAdmin, asyncRoute(async (request, response) => {
-  const geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_api_key_here');
+  const geminiConfigured = Boolean((await getGeminiKey()).value);
   if (!geminiConfigured) return response.status(503).json({ error: 'Gemini API key is not configured.' });
 
   const league = await store.getLeague(request.params.leagueId);
@@ -743,7 +775,7 @@ app.post('/api/leagues/:leagueId/jack/weekly-roast', auth.requireAdmin, asyncRou
 
   const leaderboard = buildLeaderboard(league.players, (league.sheets ?? []).filter((s) => s.week === currentWeek), league.results);
   const { buildPrompt } = await import('./prompts.js');
-  const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const client = new GoogleGenAI({ apiKey: (await getGeminiKey()).value });
 
   const roasts = [];
   for (const entry of leaderboard) {
@@ -787,7 +819,7 @@ app.get('/api/leagues/:leagueId/recap-show', asyncRoute(async (request, response
   const facts = calculateLeagueFacts(league);
 
   // Build per-player roasts if Gemini is configured
-  const geminiConfigured = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_api_key_here');
+  const geminiConfigured = Boolean((await getGeminiKey()).value);
   const playerMemories = buildSeasonMemories(league, currentWeek);
   const winnerRecognition = computeWinnerRecognition(league, currentWeek);
   const winnerIds = new Set(winnerRecognition?.protectedPlayerIds ?? []);
@@ -857,7 +889,7 @@ app.get('/api/leagues/:leagueId/recap-show', asyncRoute(async (request, response
   if (geminiConfigured) {
     const leaderboard = buildLeaderboard(league.players, (league.sheets ?? []).filter((s) => s.week === currentWeek), league.results);
     const { buildPrompt } = await import('./prompts.js');
-    const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const client = new GoogleGenAI({ apiKey: (await getGeminiKey()).value });
 
     for (const entry of leaderboard) {
       const player = (league.players ?? []).find((p) => p.id === entry.playerId);
@@ -897,7 +929,7 @@ app.get('/api/leagues/:leagueId/recap-show', asyncRoute(async (request, response
   if (geminiConfigured && facts.winner) {
     try {
       const { buildPrompt } = await import('./prompts.js');
-      const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const client = new GoogleGenAI({ apiKey: (await getGeminiKey()).value });
       const { systemInstruction, prompt } = buildPrompt('recapShow', {
         week: league.week,
         winnerName: facts.winner.name,
@@ -1600,9 +1632,10 @@ app.post('/api/tts', asyncRoute(async (request, response) => {
 }));
 
 app.post('/api/gemini', asyncRoute(async (request, response) => {
-  if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_api_key_here') return response.status(503).json({ error: 'Gemini is not configured. Add GEMINI_API_KEY to .env and restart the server.' });
+  const geminiKey = await getGeminiKey();
+  if (!geminiKey.value) return response.status(503).json({ error: 'Gemini is not configured. Add GEMINI_API_KEY to .env and restart the server.' });
   const { generateGeminiText } = await import('./geminiService.js');
-  const generated = await generateGeminiText({ client: new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }), model, action: request.body?.action, payload: request.body?.payload });
+  const generated = await generateGeminiText({ client: new GoogleGenAI({ apiKey: geminiKey.value }), model, action: request.body?.action, payload: request.body?.payload });
   return response.json(generated);
 }));
 

@@ -138,6 +138,11 @@ export class LeagueStore {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_cfb_pools_league ON cfb_pools(league_id);
+      CREATE TABLE IF NOT EXISTS app_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS credit_ledger (
         id TEXT PRIMARY KEY,
         league_id TEXT NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
@@ -446,6 +451,18 @@ export class LeagueStore {
       .run(stringify(pool), new Date().toISOString(), leagueId, poolId);
     this.writeAudit(leagueId, 'cfb_pool.picks_saved', `${entry.name} locked CFB Week ${pool.week} picks`, entry.playerId, { poolId });
     return pool;
+  }
+
+  getConfig(key) {
+    const row = this.db.prepare('SELECT value FROM app_config WHERE key = ?').get(key);
+    return row ? row.value : null;
+  }
+
+  setConfig(key, value) {
+    this.db.prepare(`INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
+      .run(key, value, new Date().toISOString());
+    return true;
   }
 
   getCreditBalance(leagueId, playerId) {
