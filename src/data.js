@@ -7,6 +7,7 @@
 
 export const SEASON = 2026;
 export const ENTRY_FEE = 20;
+export const DEADLINE_HOURS_BEFORE_KICKOFF = 5;
 
 export const TEAMS = {
   ARI: 'Arizona Cardinals',
@@ -561,9 +562,9 @@ function etOffset(dateStr) {
 }
 
 /**
- * Sheet-submission deadline for a week: the first scheduled kickoff.
+ * Sheet-submission deadline for a week: 5 hours before the first scheduled kickoff.
  * Games with TBA times are ignored when a firm kickoff exists; if every game
- * is TBA, the deadline falls back to 1:00 PM ET on the earliest game date.
+ * is TBA, the deadline falls back to 5 hours before 1:00 PM ET on the earliest game date.
  */
 export function getWeekDeadline(weekNum) {
   const games = getGames(weekNum);
@@ -575,7 +576,8 @@ export function getWeekDeadline(weekNum) {
     return new Date(`${game.date}T${time}${etOffset(game.date)}`);
   }).filter((date) => !Number.isNaN(date.getTime()));
   if (!kickoffs.length) return null;
-  return kickoffs.sort((a, b) => a - b)[0];
+  const firstKickoff = kickoffs.sort((a, b) => a - b)[0];
+  return new Date(firstKickoff.getTime() - DEADLINE_HOURS_BEFORE_KICKOFF * 3_600_000);
 }
 
 /** True once a week's submission deadline has passed */

@@ -22,7 +22,7 @@ export function findTeamGame(games, team) {
  */
 export function validateSurvivorPick({ playerId, week, team, survivorPicks = [], results = {}, players = [], isWeekLocked }) {
   if (!team || !TEAMS[team]) return { ok: false, error: `${team || '(empty)'} is not a valid NFL team.` };
-  if (typeof isWeekLocked === 'function' && isWeekLocked(week)) return { ok: false, error: `Week ${week} is locked — picks are due before the first kickoff.` };
+  if (typeof isWeekLocked === 'function' && isWeekLocked(week)) return { ok: false, error: `Week ${week} is locked — picks are due 5 hours before the first kickoff.` };
 
   // Check the team actually plays this week
   const weekGames = getGames(week);

@@ -14,7 +14,7 @@ async function getTwilioModule() {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, SEASON, WEEK, TEAMS } from '../src/data.js';
+import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, SEASON, WEEK, TEAMS } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
 import { ModerationError } from './moderation.js';
 import { DEMO_LEAGUE, buildLeaderboard, scoreSheet } from '../src/demoLeague.js';
@@ -331,7 +331,7 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   if (!weekGames.length) return response.status(422).json({ error: `No games found for Week ${submittedWeek}.` });
   if (isWeekLocked(submittedWeek)) {
     const deadline = getWeekDeadline(submittedWeek);
-    return response.status(422).json({ error: `Week ${submittedWeek} is locked. Sheets were due before the first kickoff${deadline ? ` (${deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET)` : ''}. See you next week.` });
+    return response.status(422).json({ error: `Week ${submittedWeek} is locked. Sheets were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff${deadline ? ` (${deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET)` : ''}. See you next week.` });
   }
   const everyPickValid = weekGames.every((game) => picks[game.id] === game.away || picks[game.id] === game.home);
   if (!everyPickValid || Object.keys(picks).length !== weekGames.length) return response.status(422).json({ error: `Exactly ${weekGames.length} valid picks are required for Week ${submittedWeek}.` });
@@ -593,7 +593,7 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
       `Pick one winner for every game (straight up, no spread).`,
       `One point per correct pick. Highest total wins the weekly pot. A game that ends in a TIE counts as no point for anyone.`,
       `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess wins. Identical guesses split the pot.`,
-      `DEADLINE: sheets lock at the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
+      `DEADLINE: sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
       `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. It goes to the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week or best single sheet. Paid out after Week 18.`,
       `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you; a TIE counts as surviving. Last one standing wins.`,
       `CFB PICK-EM POOLS: separate college football pools where players pick every game AGAINST THE SPREAD. Best ATS record wins that pool's pot; tiebreaker is closest to the total points of the last game.`,
@@ -1638,6 +1638,81 @@ app.post('/api/gemini', asyncRoute(async (request, response) => {
   const { generateGeminiText } = await import('./geminiService.js');
   const generated = await generateGeminiText({ client: new GoogleGenAI({ apiKey: geminiKey.value }), model, action: request.body?.action, payload: request.body?.payload });
   return response.json(generated);
+}));
+
+/* ── Push notifications (Web Push) ── */
+const vapidPublic = process.env.VAPID_PUBLIC_KEY || '';
+const vapidPrivate = process.env.VAPID_PRIVATE_KEY || '';
+const vapidSubject = process.env.VAPID_SUBJECT || 'mailto:admin@405badguys.com';
+let webpush = null;
+if (vapidPublic && vapidPrivate) {
+  try {
+    const wp = (await import('web-push')).default;
+    wp.setVapidDetails(vapidSubject, vapidPublic, vapidPrivate);
+    webpush = wp;
+    console.log('Web Push configured with VAPID keys.');
+  } catch { console.log('web-push not available — push disabled.'); }
+}
+
+app.get('/api/push/vapid-public', (_request, response) => {
+  if (!vapidPublic) return response.status(503).json({ error: 'Push notifications not configured.' });
+  response.json({ vapidPublicKey: vapidPublic });
+});
+
+// Save push subscription for a player
+app.post('/api/push/subscribe', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
+  const sub = request.body?.subscription;
+  if (!sub?.endpoint) return response.status(400).json({ error: 'Invalid subscription.' });
+  const league = await store.getLeague(leagueId);
+  const pushSubs = league?.pushSubscriptions ?? {};
+  pushSubs[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
+  await store.updateLeagueSettings(leagueId, { ...(league?.settings ?? {}), pushSubscriptions: pushSubs });
+  response.json({ ok: true });
+}));
+
+// Admin: send push to all subscribed players
+app.post('/api/push/broadcast', auth.requireAdmin, asyncRoute(async (request, response) => {
+  if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
+  const { title, body, url, tag } = request.body ?? {};
+  if (!body) return response.status(400).json({ error: 'Message body required.' });
+  const league = await store.getLeague(leagueId);
+  const subs = Object.entries(league?.pushSubscriptions ?? {});
+  let sent = 0;
+  for (const [, sub] of subs) {
+    try {
+      await webpush.sendNotification(sub, JSON.stringify({ title: title || '405 Bad Guys Parlays', body, url: url || '/', tag: tag || 'broadcast' }));
+      sent++;
+    } catch { /* subscription expired or invalid */ }
+  }
+  response.json({ sent, total: subs.length });
+}));
+
+// Send deadline reminder push to players without sheets
+app.post('/api/push/deadline-reminder', auth.requireAdmin, asyncRoute(async (request, response) => {
+  if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
+  const week = Number(request.body?.week) || getCurrentWeek();
+  if (isWeekLocked(week)) return response.status(422).json({ error: `Week ${week} is already locked.` });
+  const league = await store.getLeague(leagueId);
+  const submitted = new Set((league?.sheets ?? []).filter((s) => s.week === week).map((s) => s.playerId));
+  const missing = (league?.players ?? []).filter((p) => p.id && !submitted.has(p.id));
+  const deadline = getWeekDeadline(week);
+  const deadlineStr = deadline ? deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET' : 'soon';
+  let sent = 0;
+  for (const p of missing) {
+    const sub = (league?.pushSubscriptions ?? {})[p.id];
+    if (!sub) continue;
+    try {
+      await webpush.sendNotification(sub, JSON.stringify({
+        title: 'Picks due ' + deadlineStr,
+        body: `Hey ${p.name ?? 'player'}, your Week ${week} sheet isn't in yet. Don't let Jack roast you for being late.`,
+        url: '/?view=picks',
+        tag: `deadline-w${week}`,
+      }));
+      sent++;
+    } catch { /* expired */ }
+  }
+  response.json({ sent, missing: missing.length, week });
 }));
 
 if (isProduction && !process.env.VERCEL) {

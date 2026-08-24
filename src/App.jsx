@@ -15,7 +15,7 @@ class ErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import { EMOJIS, ENTRY_FEE, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, formatCountdown, TEAMS, TEAM_COLORS, getTeamLogoUrl } from './data.js';
+import { EMOJIS, ENTRY_FEE, DEADLINE_HOURS_BEFORE_KICKOFF, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, formatCountdown, TEAMS, TEAM_COLORS, getTeamLogoUrl } from './data.js';
 import { DEMO_CHAT, DEMO_LEAGUE } from './demoLeague.js';
 import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
@@ -36,6 +36,7 @@ const MAIN_NAV = [
 const MORE_ITEMS = [
   ['season',   'Season',           '🏆', 'Full-season standings & payouts'],
   ['survivor', 'Survivor',         '🛡️', "One team a week. Lose once, you're out."],
+  ['props',    'Prop Picks',       '🎯', 'Passing, rushing, first TD & more'],
   ['cfb',      'College FB',       '🏟️', 'CFB rankings, games & pick-em pools'],
   ['entries',  'Locked Entries',   '📋', 'View submitted pick sheets'],
   ['players',  'Player Settings',  '👤', 'Preferences & consent'],
@@ -98,6 +99,19 @@ function App() {
   const [toast, setToast] = useState('');
   const [aiStatus, setAiStatus] = useState({ checked: false, configured: false, model: '', database: '', smsProvider: 'demo', twilioConfigured: false });
   const [aiResult, setAiResult] = useState({ recap: DEMO_LEAGUE.recap.finalText, picks: '', trashTalk: '' });
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushSupported] = useState(() => 'serviceWorker' in navigator && 'PushManager' in window);
+
+  // Prop picks state
+  const [propPicks, setPropPicks] = useState({});
+  const PROP_CATEGORIES = useMemo(() => [
+    { id: 'passing', label: 'Most Passing Yards', icon: '🎯', desc: 'Which QB throws for the most yards this week?' },
+    { id: 'rushing', label: 'Most Rushing Yards', icon: '🏃', desc: 'Which RB racks up the most rushing yards?' },
+    { id: 'firstTd', label: 'First Touchdown Scorer', icon: '🏈', desc: 'Who scores the first TD of the week?' },
+    { id: 'turnovers', label: 'Total Turnovers O/U', icon: '🔄', desc: 'Over or under on total turnovers this week?' },
+  ], []);
   const [aiLoading, setAiLoading] = useState('');
   const [aiError, setAiError] = useState('');
   const [trashTone, setTrashTone] = useState('playful');
@@ -161,6 +175,17 @@ function App() {
     } catch (error) {
       setServerError(error.message);
       return null;
+    }
+  }, []);
+
+  // Deep-link: open the view specified in ?view= (e.g. invite links)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const v = params.get('view');
+    if (v) {
+      const valid = [...MAIN_NAV.map(([id]) => id), ...MORE_ITEMS.map(([id]) => id)];
+      if (valid.includes(v)) setView(v);
+      else if (v === 'join') setShowWelcome(true);
     }
   }, []);
 
@@ -583,7 +608,7 @@ function App() {
   };
 
   const submit = async () => {
-    if (weekLocked) return notify(`${weekLabel} is locked — sheets were due before the first kickoff.`);
+    if (weekLocked) return notify(`${weekLabel} is locked — sheets were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff.`);
     if (!name.trim()) return notify('Add your name before locking in.');
     if (Object.keys(picks).length !== currentGames.length) return notify(`Finish all ${currentGames.length} picks first.`);
     if (!tiebreaker || Number(tiebreaker) < 0) return notify('Add a valid tiebreaker total.');
@@ -899,6 +924,68 @@ function App() {
     finally { setServerBusy(''); }
   };
 
+  const shareInviteLink = async () => {
+    const url = `${window.location.origin}/?view=join`;
+    const shareData = {
+      title: '405 BAD GUYS PARLAYS',
+      text: `Join our NFL pick'em league — $${ENTRY_FEE}/week, winner takes the pot. Tap to join:`,
+      url,
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+      } else {
+        await navigator.clipboard.writeText(`${shareData.text}\n${url}`);
+        setShareCopied(true);
+        setTimeout(() => setShareCopied(false), 2500);
+        notify('Invite link copied to clipboard.');
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        try {
+          await navigator.clipboard.writeText(`${shareData.text}\n${url}`);
+          setShareCopied(true);
+          setTimeout(() => setShareCopied(false), 2500);
+          notify('Invite link copied to clipboard.');
+        } catch { notify('Could not copy link — share manually.'); }
+      }
+    }
+  };
+
+  // Register service worker and check push status
+  useEffect(() => {
+    if (!pushSupported) return;
+    navigator.serviceWorker.register('/sw.js').then(async (reg) => {
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) setPushEnabled(true);
+    }).catch(() => {});
+  }, [pushSupported]);
+
+  const togglePushNotifications = async () => {
+    if (!pushSupported) return notify('Push notifications are not supported in this browser.');
+    if (!playerSession.authenticated) return notify('Sign in first to enable notifications.');
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (pushEnabled) {
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) await sub.unsubscribe();
+        setPushEnabled(false);
+        notify('Push notifications disabled.');
+        return;
+      }
+      const vapidResp = await apiRequest('/api/push/vapid-public');
+      if (!vapidResp.vapidPublicKey) return notify('Push not configured on the server yet.');
+      const applicationServerKey = Uint8Array.from(atob(vapidResp.vapidPublicKey.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+      const subscription = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+      await apiRequest('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription }) });
+      setPushEnabled(true);
+      notify('Push notifications enabled — you\'ll get deadline reminders and results alerts.');
+    } catch (err) {
+      if (err.name === 'NotAllowedError') notify('Notification permission was denied. Enable it in your browser settings.');
+      else notify(err.message || 'Could not enable push notifications.');
+    }
+  };
+
   const toggleSeasonPaid = async (playerId) => {
     if (!(await ensureAdmin())) return;
     const pool = serverLeague?.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
@@ -1039,7 +1126,7 @@ function App() {
   };
 
   // Determine active tab (map sub-views to parent)
-  const activeTab = ['season', 'survivor', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin'].includes(view) ? 'more' : view;
+  const activeTab = ['season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin'].includes(view) ? 'more' : view;
 
   return (
     <div className="app-shell">
@@ -1208,6 +1295,7 @@ function App() {
                   {playerSession.authenticated && (
                     <button className="button button-ghost" type="button" onClick={() => setView('results')}>View standings</button>
                   )}
+                  <button className="button button-invite" type="button" onClick={shareInviteLink}>{shareCopied ? '✓ Copied!' : '📤 Invite friends'}</button>
                 </div>
               </div>
               <div className="hero-scorecard">
@@ -1334,8 +1422,8 @@ function App() {
               <div className="page-title"><span className="eyebrow dark">{weekLabel.toUpperCase()}</span><h1>Build your sheet</h1><p>Pick one winner in every matchup. Your choices stay private on this device until you lock them in.</p>{currentByeTeams.length > 0 && <p className="bye-notice"><strong>Bye teams:</strong> {currentByeTeams.map(t => TEAMS[t]).join(', ')}</p>}</div>
               <div className={`deadline-banner ${weekLocked ? 'locked' : ''}`}>
                 {weekLocked
-                  ? <><span className="deadline-icon">🔒</span><div><strong>Sheets are locked for {weekLabel}.</strong><p>The first game has kicked off. See you next week — Jack remembers who was late.</p></div></>
-                  : <><span className="deadline-icon">⏱</span><div><strong>Sheets lock in {deadlineCountdown || 'less than a minute'}.</strong><p>Deadline: {weekDeadline ? weekDeadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + ' ET (first kickoff)' : 'first kickoff'}.</p></div></>}
+                  ? <><span className="deadline-icon">🔒</span><div><strong>Sheets are locked for {weekLabel}.</strong><p>Deadline passed — {DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff. See you next week.</p></div></>
+                  : <><span className="deadline-icon">⏱</span><div><strong>Sheets lock in {deadlineCountdown || 'less than a minute'}.</strong><p>Deadline: {weekDeadline ? weekDeadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + ` ET (${DEADLINE_HOURS_BEFORE_KICKOFF}h before kickoff)` : `${DEADLINE_HOURS_BEFORE_KICKOFF}h before first kickoff`}.</p></div></>}
               </div>
               <div className="games-list">
                 {currentGames.map((game, index) => (
@@ -1504,6 +1592,50 @@ function App() {
           </StandardPage>
         )}
 
+        {view === 'props' && (
+          <StandardPage eyebrow={weekLabel.toUpperCase()} title="Prop picks" subtitle="Side action on individual player performances. Bragging rights and bonus pots.">
+            <PlayerSessionPanel players={proofLeague.players} session={playerSession} login={playerLogin} setLogin={setPlayerLogin} onLogin={loginPlayer} onLogout={logoutPlayer} busy={serverBusy === 'player-login'} />
+            {!playerSession.authenticated ? (
+              <p className="muted">Sign in above to make your prop picks for {weekLabel}.</p>
+            ) : (
+              <div className="prop-picks-grid">
+                {PROP_CATEGORIES.map((cat) => (
+                  <section className="prop-card" key={cat.id}>
+                    <div className="prop-header">
+                      <span className="prop-icon">{cat.icon}</span>
+                      <div><h3>{cat.label}</h3><p>{cat.desc}</p></div>
+                    </div>
+                    {cat.id === 'turnovers' ? (
+                      <div className="prop-ou-row">
+                        <span className="prop-ou-line">Line: 4.5 turnovers</span>
+                        <div className="prop-ou-buttons">
+                          <button type="button" className={`prop-ou ${propPicks.turnovers === 'over' ? 'selected' : ''}`} onClick={() => setPropPicks((p) => ({ ...p, turnovers: 'over' }))}>OVER</button>
+                          <button type="button" className={`prop-ou ${propPicks.turnovers === 'under' ? 'selected' : ''}`} onClick={() => setPropPicks((p) => ({ ...p, turnovers: 'under' }))}>UNDER</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="prop-player-select">
+                        <input
+                          type="text"
+                          className="prop-input"
+                          placeholder={cat.id === 'firstTd' ? 'Player name (e.g. Tyreek Hill)' : cat.id === 'passing' ? 'QB name (e.g. Patrick Mahomes)' : 'RB name (e.g. Derrick Henry)'}
+                          value={propPicks[cat.id] || ''}
+                          onChange={(e) => setPropPicks((p) => ({ ...p, [cat.id]: e.target.value }))}
+                        />
+                      </div>
+                    )}
+                    {propPicks[cat.id] && <span className="prop-locked-badge">Your pick: {propPicks[cat.id]}</span>}
+                  </section>
+                ))}
+                <button className="button button-primary full" type="button" disabled={weekLocked || !Object.keys(propPicks).length} onClick={() => {
+                  notify(`Prop picks saved: ${Object.entries(propPicks).map(([k, v]) => `${k}: ${v}`).join(', ')}`);
+                }}>{weekLocked ? '🔒 Week locked' : 'Save prop picks →'}</button>
+                <p className="muted prop-disclaimer">Prop picks are for fun within your league. Results are settled by the commissioner after games wrap.</p>
+              </div>
+            )}
+          </StandardPage>
+        )}
+
         {view === 'entries' && (
           <StandardPage eyebrow={weekLabel.toUpperCase()} title="Locked entries" subtitle="Picks remain hidden here; the commissioner can score them after results arrive.">
             {weekSheets.length ? <div className="entry-list">{weekSheets.map((sheet, index) => (
@@ -1581,6 +1713,16 @@ function App() {
                 <small>{serverBusy === `player-${player.id}` ? 'Saving…' : `Last tone update ${new Date(player.trashTalk.updatedAt).toLocaleString()}`}</small>
               </article>)}
             </div>
+            {pushSupported && playerSession.authenticated && (
+              <section className="push-toggle-section">
+                <div className="panel">
+                  <div className="panel-heading"><div><span className="eyebrow dark">NOTIFICATIONS</span><h2>Push alerts</h2></div></div>
+                  <p className="muted">Get notified when the deadline is approaching, when results post, and when the commissioner has announcements.</p>
+                  <button className={`button ${pushEnabled ? 'button-ghost' : 'button-primary'}`} type="button" onClick={togglePushNotifications}>{pushEnabled ? '🔕 Disable push notifications' : '🔔 Enable push notifications'}</button>
+                  {pushEnabled && <p className="push-status-on">Push notifications are active on this device.</p>}
+                </div>
+              </section>
+            )}
             <section className="consent-history">
               <div className="proof-heading"><div><span className="proof-step">LOG</span><h2>Immutable consent history</h2></div><StatusPill state="pass">{proofLeague.consentRecords?.length ?? 0} records</StatusPill></div>
               <div>{(proofLeague.consentRecords ?? []).slice(0, 12).map((record) => <article key={record.id}><time>{new Date(record.recordedAt).toLocaleString()}</time><strong>{demoPlayerName(record.playerId)}</strong><span>{record.channel.replaceAll('_', ' ')}</span><StatusPill state={record.status === 'opted_out' || record.status === 'none' ? 'neutral' : 'pass'}>{record.status.replaceAll('_', ' ')}</StatusPill><small>{record.source.replaceAll('_', ' ')}</small></article>)}</div>
@@ -2002,6 +2144,7 @@ function App() {
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. A locked sheet cannot be edited in this demo.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
               <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess takes it. Identical guesses split the pot." />
+              <Rule number="05" title="Deadline" text={`Sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the week's first kickoff. Late sheets are rejected — no exceptions. The countdown is always visible on the Picks page.`} />
             </div>
           </StandardPage>
         )}
@@ -2036,6 +2179,17 @@ function App() {
               <div className="jack-text-row">
                 <div><strong>🎬 Jack's Weekly Recap Show</strong><p>Full-screen animated slideshow with standings, winner spotlight, movers, roasts, and Jack's AI commentary. Auto-advances with manual controls.</p></div>
                 <button className="button button-primary" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading show…' : '▶ Launch Recap Show'}</button>
+              </div>
+              <div className="jack-text-row">
+                <div><strong>🔔 Push deadline reminder</strong><p>Send a push notification to all players who haven't submitted their picks yet. Only reaches players who enabled push notifications.</p></div>
+                <button className="button button-send" type="button" disabled={weekLocked || serverBusy === 'push-reminder'} onClick={async () => {
+                  setServerBusy('push-reminder');
+                  try {
+                    const result = await apiRequest('/api/push/deadline-reminder', { method: 'POST', body: JSON.stringify({ week: selectedWeek }) });
+                    notify(`Deadline reminder sent to ${result.sent} of ${result.missing} missing players.`);
+                  } catch (err) { notify(err.message); }
+                  finally { setServerBusy(''); }
+                }}>{serverBusy === 'push-reminder' ? 'Sending…' : weekLocked ? '🔒 Week locked' : 'Push reminder to missing players'}</button>
               </div>
             </section>
             <section className="cashapp-admin-section">

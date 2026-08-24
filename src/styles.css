@@ -1455,6 +1455,33 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .tb-busted { color: #ff5d5d; font-style: normal; font-weight: 700; font-size: 0.66rem; letter-spacing: 0.04em; }
 .tb-actual { color: #7fdc92; font-style: normal; font-size: 0.68rem; }
 
+/* ── Invite button ── */
+.button-invite { background: transparent; border: 1.5px solid #00ff87; color: #00ff87; padding: 10px 18px; border-radius: 10px; font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+.button-invite:hover { background: rgba(0, 255, 135, 0.1); }
+
+/* ── Prop Picks ── */
+.prop-picks-grid { display: flex; flex-direction: column; gap: 16px; }
+.prop-card { background: #0f1020; border: 1px solid #1e2040; border-radius: 14px; padding: 18px; }
+.prop-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.prop-icon { font-size: 1.6rem; flex-shrink: 0; }
+.prop-header h3 { font-size: 1rem; font-weight: 700; color: #eee; margin: 0; }
+.prop-header p { font-size: 0.78rem; color: #888; margin: 2px 0 0; }
+.prop-ou-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.prop-ou-line { font-size: 0.88rem; color: #ccc; font-weight: 600; }
+.prop-ou-buttons { display: flex; gap: 8px; }
+.prop-ou { padding: 10px 24px; border-radius: 8px; border: 1.5px solid #333; background: transparent; color: #bbb; font-weight: 700; cursor: pointer; transition: all 0.15s; }
+.prop-ou:hover { border-color: #00ff87; color: #00ff87; }
+.prop-ou.selected { background: #00ff87; color: #000; border-color: #00ff87; }
+.prop-player-select { display: flex; gap: 8px; }
+.prop-input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1.5px solid #333; background: #111; color: #eee; font-size: 0.88rem; }
+.prop-input:focus { border-color: #00ff87; outline: none; }
+.prop-locked-badge { display: inline-block; font-size: 0.76rem; color: #00ff87; background: rgba(0, 255, 135, 0.08); border: 1px solid rgba(0, 255, 135, 0.25); border-radius: 999px; padding: 4px 12px; margin-top: 8px; }
+.prop-disclaimer { font-size: 0.72rem; color: #666; text-align: center; margin-top: 4px; }
+
+/* ── Push notifications ── */
+.push-toggle-section { margin-top: 20px; }
+.push-status-on { font-size: 0.78rem; color: #00ff87; margin-top: 8px; }
+
 /* Reduced motion: strip all animations */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
