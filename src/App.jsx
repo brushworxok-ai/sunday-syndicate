@@ -1385,10 +1385,10 @@ function App() {
                 <div className="cashapp-steps">
                   <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
                     <span className="cashapp-icon">💵</span>
-                    <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App Pool'}</strong><small>1. Tap here → 2. Pay ${ENTRY_FEE} → 3. Check the box above</small></div>
+                    <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App'}</strong><small>{'1. Tap here → 2. Send $'}{ENTRY_FEE}{' → 3. Come back & tap "I sent it"'}</small></div>
                     <span className="cashapp-arrow">↗</span>
                   </a>
-                  <small className="muted">Works without Cash App too — the pool page takes Apple Pay & Google Pay.</small>
+                  <small className="muted">Opens Cash App to send your entry fee directly to the commissioner.</small>
                 </div>
               )}
               <button className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Locking in…' : <>Lock in picks <span>→</span></>}</button>
@@ -1534,7 +1534,7 @@ function App() {
               {weekTiebreaker.game && (
                 <p className="tb-status">
                   ★ Tiebreaker: total points in {weekTiebreaker.game.away} @ {weekTiebreaker.game.home} — closest without going over wins ties.
-                  {weekTiebreaker.total != null ? ` Final total: ${weekTiebreaker.total}.` : ' Awaiting that game’s final score.'}
+                  {weekTiebreaker.total != null ? ` Final total: ${weekTiebreaker.total}.` : " Awaiting that game's final score."}
                 </p>
               )}
               <div className="table-head"><span>Rank</span><span>Player</span><span>Tiebreaker</span><span>Correct</span></div>
@@ -1802,10 +1802,10 @@ function App() {
                   <div className="cashapp-steps">
                     <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
                       <span className="cashapp-icon">💵</span>
-                      <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay Entry Fee'}</strong><small>Step 1: Tap here · Step 2: Pay ${cfbPool.entryFee} in Cash App · Step 3: You're in</small></div>
+                      <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay Entry Fee'}</strong><small>{'Step 1: Tap here · Step 2: Send $'}{cfbPool.entryFee}{' · Step 3: Tap "I sent it"'}</small></div>
                       <span className="cashapp-arrow">↗</span>
                     </a>
-                    <small className="muted">No Cash App? The pool link also takes Apple Pay & Google Pay. The commissioner marks you paid once it lands.</small>
+                    <small className="muted">Opens Cash App to send your entry fee. The commissioner confirms once it lands.</small>
                   </div>
                 )}
 
@@ -1927,7 +1927,7 @@ function App() {
             )}
 
             {!cfbPool && !cfbBuilderOpen && (
-              <div className="cfb-empty pool-hint"><span>🏆</span><p>No pick-em pool for Week {cfbWeek} yet.{isComm ? ' Tap “Build Pool” above, pick 3–20 games from the list, and the pool goes live.' : ' The commissioner hasn’t built this week’s slate yet — check back soon.'}</p></div>
+              <div className="cfb-empty pool-hint"><span>🏆</span><p>No pick-em pool for Week {cfbWeek} yet.{isComm ? ' Tap "Build Pool" above, pick 3–20 games from the list, and the pool goes live.' : " The commissioner hasn't built this week's slate yet — check back soon."}</p></div>
             )}
 
             {cfbRankings && (
@@ -2039,15 +2039,18 @@ function App() {
               </div>
             </section>
             <section className="cashapp-admin-section">
-              <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Cash App Pool Link</h2></div></div>
-              <p>One shared payment link for the whole league. Players tap it, pay the entry fee, and you mark them paid — no chasing handles.</p>
+              <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Cash App Payment Link</h2></div></div>
+              <p>One shared payment link for the whole league. Players tap it, send the entry fee, then mark it sent. You confirm with one tap.</p>
               <ol className="cashapp-howto">
-                <li>In Cash App, tap the <strong>$</strong> tab → <strong>Pools</strong> → <strong>Create Pool</strong>. Name it (e.g. “Sunday Syndicate Week 1”) and set a goal if you want.</li>
-                <li>Tap <strong>Share</strong> and copy the pool link — it looks like <code>cash.app/pool/…</code></li>
-                <li>Paste it below and save. The pay button shows up on the Picks page and inside every CFB pool automatically. Friends without Cash App can still pay through the link with Apple Pay or Google Pay.</li>
+                <li>{'Your Cash App link is '}
+                  <code>{'https://cash.app/$Tique'}</code>
+                  {' — paste it below (or use any Cash App link you want).'}
+                </li>
+                <li>Hit <strong>Save</strong>. The green pay button shows up on the Picks page and inside every CFB pool automatically.</li>
+                <li>{'Players tap the button → Cash App opens → they send $'}{ENTRY_FEE}{' → they mark "I sent it" in the app → you one-tap confirm.'}</li>
               </ol>
               <div className="cashapp-admin-form">
-                <label>Pool URL<input type="url" value={cashAppPoolUrl || serverLeague?.settings?.cashAppPool?.url || ''} onChange={(e) => setCashAppPoolUrl(e.target.value)} placeholder="https://cash.app/pool/..." /></label>
+                <label>Cash App URL<input type="url" value={cashAppPoolUrl || serverLeague?.settings?.cashAppPool?.url || ''} onChange={(e) => setCashAppPoolUrl(e.target.value)} placeholder="https://cash.app/$Tique" /></label>
                 <label>Button label <small>optional</small><input type="text" value={cashAppPoolLabel || serverLeague?.settings?.cashAppPool?.label || ''} onChange={(e) => setCashAppPoolLabel(e.target.value)} placeholder="Pay $20 Entry Fee" maxLength="80" /></label>
                 <div className="cashapp-admin-actions">
                   <button className="button button-primary" type="button" onClick={() => saveCashAppPool()} disabled={serverBusy === 'cashapp-pool'}>{serverBusy === 'cashapp-pool' ? 'Saving…' : 'Save Pool Link'}</button>
