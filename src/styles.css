@@ -1438,6 +1438,18 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .credit-ledger-date { color: #555; white-space: nowrap; }
 .cashapp-admin-form select { background: #0a0a0a; border: 1px solid #333; border-radius: 8px; padding: 10px 12px; color: #fff; font-size: 0.88rem; }
 
+/* ── Payment claims + Payment Center ── */
+.claim-waiting { font-size: 0.76rem; color: #ffd700; background: rgba(255, 215, 0, 0.08); border: 1px solid rgba(255, 215, 0, 0.3); border-radius: 999px; padding: 6px 12px; }
+.cfb-paid-toggle.claimed { color: #ffd700; border-color: rgba(255, 215, 0, 0.5); background: rgba(255, 215, 0, 0.08); }
+.payment-center { display: flex; flex-direction: column; gap: 6px; }
+.payment-row { display: flex; align-items: center; gap: 10px; background: #0c0c0c; border: 1px solid #242424; border-radius: 10px; padding: 8px 12px; font-size: 0.82rem; flex-wrap: wrap; }
+.payment-row.claimed { border-color: rgba(255, 215, 0, 0.4); }
+.payment-name { font-weight: 700; color: #ddd; }
+.payment-week { font-size: 0.7rem; color: #777; }
+.payment-status { flex: 1; color: #999; font-size: 0.76rem; min-width: 8rem; }
+.payment-row.claimed .payment-status { color: #ffd700; }
+.payment-missing { font-size: 0.8rem; color: #b06a6a; margin: 8px 0 0; }
+
 /* Reduced motion: strip all animations */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }

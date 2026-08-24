@@ -251,9 +251,30 @@ export class PostgresLeagueStore {
 
   async createSheet(leagueId, sheet) {
     return this.mutateLeague(leagueId, (draft) => {
+      // One sheet per player per week: a signed-in resubmission REPLACES the
+      // old sheet (keeping paid status if the old one was already paid).
+      let replaced = false;
+      if (sheet.playerId) {
+        const index = (draft.sheets ?? []).findIndex((item) => item.playerId === sheet.playerId && item.week === sheet.week);
+        if (index >= 0) {
+          if (draft.sheets[index].paid) sheet.paid = true;
+          draft.sheets.splice(index, 1);
+          replaced = true;
+        }
+      }
       draft.sheets.push(clone(sheet));
-      draft.auditLog.push(auditEntry('sheet.submitted', `${sheet.name} locked a Week ${sheet.week} sheet`, sheet.playerId ?? sheet.name, { sheetId: sheet.id }));
+      draft.auditLog.push(auditEntry('sheet.submitted', `${sheet.name} ${replaced ? 'updated their' : 'locked a'} Week ${sheet.week} sheet`, sheet.playerId ?? sheet.name, { sheetId: sheet.id, replaced }));
       return sheet;
+    });
+  }
+
+  async updateSheetFields(leagueId, sheetId, fields) {
+    return this.mutateLeague(leagueId, (draft) => {
+      const sheet = (draft.sheets ?? []).find((item) => item.id === sheetId);
+      if (!sheet) return null;
+      if ('paid' in fields) sheet.paid = Boolean(fields.paid);
+      if ('paymentClaim' in fields) sheet.paymentClaim = fields.paymentClaim ? clone(fields.paymentClaim) : null;
+      return { id: sheet.id, playerId: sheet.playerId, week: sheet.week, name: sheet.name, paid: sheet.paid, paymentClaim: clone(sheet.paymentClaim ?? null) };
     });
   }
 

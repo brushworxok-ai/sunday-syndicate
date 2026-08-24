@@ -1507,16 +1507,54 @@ app.post('/api/leagues/:leagueId/cfb-pool/:poolId/credit-winners', auth.requireA
   if (pot <= 0) return response.status(422).json({ error: 'The pot is $0 — mark entries paid first.' });
   const share = Math.round((pot / board.winners.length) * 100) / 100;
   const at = new Date().toISOString();
+  const reason = `CFB Week ${pool.week} pot — winner${board.winners.length > 1 ? ' (split)' : ''}`;
+  // Idempotent: skip any winner who already has this exact pot credit (protects
+  // against a retry after a partial failure double-crediting someone).
+  const league = await store.getLeague(request.params.leagueId);
+  const alreadyCredited = new Set((league?.creditLedger ?? []).filter((e) => e.reason === reason && e.amount === share).map((e) => e.playerId));
   for (const winner of board.winners) {
+    if (alreadyCredited.has(winner.playerId)) continue;
     await store.addCreditEntry(request.params.leagueId, {
-      id: randomUUID(), playerId: winner.playerId, amount: share,
-      reason: `CFB Week ${pool.week} pot — winner${board.winners.length > 1 ? ' (split)' : ''}`, by: 'admin', at,
+      id: randomUUID(), playerId: winner.playerId, amount: share, reason, by: 'admin', at,
     });
   }
   pool.potCredited = true;
   pool.updatedAt = at;
   await store.saveCfbPool(request.params.leagueId, pool);
   return response.json({ pot, share, winners: board.winners.map((w) => w.name) });
+}));
+
+/* ── Payment claims — player says "I sent it", commissioner confirms in one tap ── */
+app.post('/api/leagues/:leagueId/sheets/:sheetId/claim-payment', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const sheet = (league.sheets ?? []).find((s) => s.id === request.params.sheetId);
+  if (!sheet) return response.status(404).json({ error: 'Sheet not found.' });
+  if (sheet.playerId !== request.player.id) return response.status(403).json({ error: 'You can only claim payment for your own sheet.' });
+  if (sheet.paid) return response.status(422).json({ error: 'This sheet is already marked paid.' });
+  const paymentClaim = { claimedAt: new Date().toISOString(), method: 'cashapp', amount: Number(league.settings?.entryFee) || 20 };
+  const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paymentClaim });
+  await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${paymentClaim.amount} for Week ${sheet.week}`, request.player.id, { sheetId: sheet.id });
+  return response.json(updated);
+}));
+
+app.post('/api/leagues/:leagueId/cfb-pool/:poolId/claim-payment', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
+  if (!pool) return response.status(404).json({ error: 'Pool not found.' });
+  const entry = pool.entries?.[request.player.id];
+  if (!entry) return response.status(422).json({ error: 'Submit your picks first, then claim your payment.' });
+  if (entry.paid) return response.status(422).json({ error: 'This entry is already marked paid.' });
+  entry.paymentClaim = { claimedAt: new Date().toISOString(), method: 'cashapp', amount: Number(pool.entryFee) || 0 };
+  await store.saveCfbPoolEntry(request.params.leagueId, request.params.poolId, entry);
+  await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${entry.paymentClaim.amount} for CFB Week ${pool.week}`, request.player.id, { poolId: pool.id });
+  return response.json({ entry });
+}));
+
+app.patch('/api/leagues/:leagueId/sheets/:sheetId/paid', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paid: Boolean(request.body?.paid) });
+  if (!updated) return response.status(404).json({ error: 'Sheet not found.' });
+  await store.writeAudit(request.params.leagueId, 'sheet.paid_updated', `${updated.name}'s Week ${updated.week} sheet marked ${updated.paid ? 'PAID' : 'unpaid'}`, 'admin', { sheetId: updated.id });
+  return response.json(updated);
 }));
 
 /* ── Payout tracking ── */

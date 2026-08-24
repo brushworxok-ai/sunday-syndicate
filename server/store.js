@@ -152,6 +152,11 @@ export class LeagueStore {
       CREATE INDEX IF NOT EXISTS idx_recaps_league_week ON recaps(league_id, week);
       CREATE INDEX IF NOT EXISTS idx_bets_league ON side_bets(league_id);
     `);
+    // Add sheets.claim_json for payment claims (guarded — older DBs lack it).
+    const sheetCols = this.db.prepare('PRAGMA table_info(sheets)').all();
+    if (!sheetCols.some((col) => col.name === 'claim_json')) {
+      this.db.exec('ALTER TABLE sheets ADD COLUMN claim_json TEXT');
+    }
     // Legacy databases created broadcasts.recap_id as NOT NULL with an FK,
     // which blocks standalone Jack broadcasts. Rebuild the table if needed.
     const recapCol = this.db.prepare('PRAGMA table_info(broadcasts)').all().find((col) => col.name === 'recap_id');
@@ -239,7 +244,7 @@ export class LeagueStore {
       trashTalk: parse(row.trash_talk_json, {}),
     }));
     const sheets = this.db.prepare('SELECT * FROM sheets WHERE league_id = ? ORDER BY submitted_at').all(leagueId).map((row) => ({
-      id: row.id, playerId: row.player_id, name: row.name, handle: row.handle, picks: parse(row.picks_json, {}), tiebreaker: row.tiebreaker, paid: Boolean(row.paid), week: row.week, submittedAt: row.submitted_at,
+      id: row.id, playerId: row.player_id, name: row.name, handle: row.handle, picks: parse(row.picks_json, {}), tiebreaker: row.tiebreaker, paid: Boolean(row.paid), week: row.week, submittedAt: row.submitted_at, paymentClaim: parse(row.claim_json, null),
     }));
     const results = Object.fromEntries(this.db.prepare('SELECT * FROM results WHERE league_id = ? ORDER BY game_id').all(leagueId).map((row) => [row.game_id, { ...parse(row.result_json, {}), verifiedAt: row.verified_at, verifiedBy: row.verified_by }]));
     const recaps = this.db.prepare('SELECT data_json FROM recaps WHERE league_id = ? ORDER BY created_at DESC').all(leagueId).map((row) => parse(row.data_json, {}));
@@ -304,10 +309,30 @@ export class LeagueStore {
   }
 
   createSheet(leagueId, sheet) {
+    // One sheet per player per week: a signed-in resubmission REPLACES the
+    // old sheet (keeping paid status if the old one was already paid).
+    let replaced = false;
+    if (sheet.playerId) {
+      const existing = this.db.prepare('SELECT id, paid FROM sheets WHERE league_id = ? AND player_id = ? AND week = ?').get(leagueId, sheet.playerId, sheet.week);
+      if (existing) {
+        if (existing.paid) sheet.paid = true;
+        this.db.prepare('DELETE FROM sheets WHERE id = ?').run(existing.id);
+        replaced = true;
+      }
+    }
     this.db.prepare(`INSERT INTO sheets (id, league_id, player_id, name, handle, picks_json, tiebreaker, paid, week, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(sheet.id, leagueId, sheet.playerId ?? null, sheet.name, sheet.handle ?? '', stringify(sheet.picks), sheet.tiebreaker, sheet.paid ? 1 : 0, sheet.week, sheet.submittedAt);
-    this.writeAudit(leagueId, 'sheet.submitted', `${sheet.name} locked a Week ${sheet.week} sheet`, sheet.playerId ?? sheet.name, { sheetId: sheet.id });
+    this.writeAudit(leagueId, 'sheet.submitted', `${sheet.name} ${replaced ? 'updated their' : 'locked a'} Week ${sheet.week} sheet`, sheet.playerId ?? sheet.name, { sheetId: sheet.id, replaced });
     return sheet;
+  }
+
+  updateSheetFields(leagueId, sheetId, fields) {
+    const row = this.db.prepare('SELECT * FROM sheets WHERE league_id = ? AND id = ?').get(leagueId, sheetId);
+    if (!row) return null;
+    if ('paid' in fields) this.db.prepare('UPDATE sheets SET paid = ? WHERE id = ?').run(fields.paid ? 1 : 0, sheetId);
+    if ('paymentClaim' in fields) this.db.prepare('UPDATE sheets SET claim_json = ? WHERE id = ?').run(fields.paymentClaim ? stringify(fields.paymentClaim) : null, sheetId);
+    const updated = this.db.prepare('SELECT * FROM sheets WHERE id = ?').get(sheetId);
+    return { id: sheetId, playerId: updated.player_id, week: updated.week, name: updated.name, paid: Boolean(updated.paid), paymentClaim: parse(updated.claim_json, null) };
   }
 
   upsertResult(leagueId, gameId, result, actor) {

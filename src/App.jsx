@@ -518,6 +518,38 @@ function App() {
     finally { setServerBusy(''); }
   };
 
+  // ── Payment claims ──
+  const claimSheetPayment = async (sheetId) => {
+    setServerBusy('claim-sheet');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/claim-payment`, { method: 'POST' });
+      await loadLeague();
+      notify('Got it — the commissioner sees your payment claim and will confirm it. ⏳');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const claimCfbPayment = async () => {
+    if (!cfbPool) return;
+    setServerBusy('claim-cfb');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/claim-payment`, { method: 'POST' });
+      await loadLeague();
+      notify('Got it — the commissioner sees your payment claim and will confirm it. ⏳');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const confirmSheetPaid = async (sheetId, nextPaid) => {
+    if (!(await ensureAdmin())) return;
+    setServerBusy(`sheet-paid-${sheetId}`);
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/paid`, { method: 'PATCH', body: JSON.stringify({ paid: nextPaid }) });
+      await loadLeague();
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
   const chooseCfbPick = (gameId, side) => {
     if (cfbPool?.status !== 'open') return;
     setCfbMyPicks((current) => {
@@ -1326,6 +1358,13 @@ function App() {
                       </button>
                     )}
                     {!mySheet && myCredit >= ENTRY_FEE && <small className="muted">Lock in your sheet, then pay from credit in one tap.</small>}
+                    {mySheet && myCredit < ENTRY_FEE && (
+                      mySheet.paymentClaim
+                        ? <span className="claim-waiting">⏳ Payment claim sent {new Date(mySheet.paymentClaim.claimedAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} — waiting for commissioner</span>
+                        : <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'claim-sheet'} onClick={() => claimSheetPayment(mySheet.id)}>
+                            {serverBusy === 'claim-sheet' ? 'Sending…' : `✋ I sent my $${ENTRY_FEE}`}
+                          </button>
+                    )}
                   </div>
                 );
               })()}
@@ -1731,7 +1770,13 @@ function App() {
                       </button>
                     )}
                     {!cfbMyEntry && <small className="muted">Lock in your picks below, then pay in one tap.</small>}
-                    {cfbMyEntry && myCredit < (cfbPool.entryFee || 0) && <small className="muted">Not enough credit for the ${cfbPool.entryFee} entry — use the Cash App link below.</small>}
+                    {cfbMyEntry && myCredit < (cfbPool.entryFee || 0) && (
+                      cfbMyEntry.paymentClaim
+                        ? <span className="claim-waiting">⏳ Payment claim sent — waiting for commissioner</span>
+                        : <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'claim-cfb'} onClick={claimCfbPayment}>
+                            {serverBusy === 'claim-cfb' ? 'Sending…' : `✋ I sent my $${cfbPool.entryFee}`}
+                          </button>
+                    )}
                   </div>
                 )}
                 {serverLeague?.settings?.cashAppPool?.url && !cfbMyEntry?.paid && (
@@ -1805,8 +1850,8 @@ function App() {
                           <span className="cfb-board-record">{row.wins}-{row.losses}{row.pushes ? `-${row.pushes}` : ''}</span>
                           <span className="cfb-board-tb">TB {row.tiebreaker}{row.tbDiff != null ? ` (±${row.tbDiff})` : ''}</span>
                           {isComm ? (
-                            <button type="button" className={`cfb-paid-toggle ${row.paid ? 'paid' : ''}`} disabled={serverBusy === `cfb-paid-${row.playerId}`} onClick={() => toggleCfbPaid(row.playerId, !row.paid)}>
-                              {row.paid ? '✓ Paid' : 'Mark paid'}
+                            <button type="button" className={`cfb-paid-toggle ${row.paid ? 'paid' : ''} ${!row.paid && row.paymentClaim ? 'claimed' : ''}`} disabled={serverBusy === `cfb-paid-${row.playerId}`} onClick={() => toggleCfbPaid(row.playerId, !row.paid)}>
+                              {row.paid ? '✓ Paid' : row.paymentClaim ? '⏳ Says paid — confirm' : 'Mark paid'}
                             </button>
                           ) : (
                             <span className={`cfb-paid-chip ${row.paid ? 'paid' : ''}`}>{row.paid ? '✓ Paid' : 'Unpaid'}</span>
@@ -2041,6 +2086,33 @@ function App() {
                   </details>
                 )}
               </div>
+            </section>
+            <section className="cashapp-admin-section">
+              <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Payment Center — {weekLabel}</h2></div></div>
+              <p>Who's in, who says they paid, and who's missing before the deadline{deadlineCountdown ? ` (${deadlineCountdown})` : ''}. One tap confirms a claim.</p>
+              {(() => {
+                const unpaidSheets = (sheets ?? []).filter((s) => !s.paid);
+                const submittedIds = new Set(weekSheets.map((s) => s.playerId).filter(Boolean));
+                const missing = (serverLeague?.players ?? []).filter((p) => !submittedIds.has(p.id));
+                return (
+                  <div className="payment-center">
+                    {unpaidSheets.length === 0 && <p className="muted">✅ Every submitted sheet is paid.</p>}
+                    {unpaidSheets.map((s) => (
+                      <div className={`payment-row ${s.paymentClaim ? 'claimed' : ''}`} key={s.id}>
+                        <span className="payment-name">{s.name}</span>
+                        <span className="payment-week">Wk {s.week}</span>
+                        <span className="payment-status">{s.paymentClaim ? `⏳ says paid ${new Date(s.paymentClaim.claimedAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : 'no payment yet'}</span>
+                        <button className="button button-primary" type="button" disabled={serverBusy === `sheet-paid-${s.id}`} onClick={() => confirmSheetPaid(s.id, true)}>
+                          {serverBusy === `sheet-paid-${s.id}` ? '…' : '✓ Confirm paid'}
+                        </button>
+                      </div>
+                    ))}
+                    {missing.length > 0 && (
+                      <p className="payment-missing"><strong>No sheet yet for {weekLabel}:</strong> {missing.map((p) => p.name.split(' ')[0]).join(', ')}</p>
+                    )}
+                  </div>
+                );
+              })()}
             </section>
             <JackControlStudio
               settings={serverLeague?.settings}
