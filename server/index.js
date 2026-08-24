@@ -233,7 +233,7 @@ async function autoStartSeasonIfDue(league) {
 app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   const league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
   if (!league) return response.status(404).json({ error: 'League not found.' });
-  maybeRunAutoPilot(); // fire-and-forget: commissioner chores run themselves on traffic
+  await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
   return response.json(league);
 }));
 
@@ -1965,9 +1965,11 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
   }
 }
 
-function maybeRunAutoPilot() {
+async function maybeRunAutoPilot() {
   if (Date.now() - autoPilotLastRun < 10 * 60_000) return; // at most every 10 minutes
-  runAutoPilot({ source: 'traffic' }).catch((error) => console.error('Auto-pilot failed:', error.message));
+  autoPilotLastRun = Date.now(); // claim the slot immediately so bursts don't double-run
+  try { await runAutoPilot({ source: 'traffic' }); }
+  catch (error) { console.error('Auto-pilot failed:', error.message); }
 }
 
 /* Cron entrypoints (Vercel sends Authorization: Bearer CRON_SECRET when set) */
