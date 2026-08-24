@@ -556,13 +556,15 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
       return { id: g.id, matchup: `${g.away} at ${g.home}`, winner: r?.winner ?? null, awayScore: r?.awayScore ?? null, homeScore: r?.homeScore ?? null };
     }),
     rules: [
-      `Entry fee: $${league.settings?.entryFee ?? 25} per sheet.`,
+      `WEEKLY ENTRY FEE: $${league.settings?.entryFee ?? 20} per weekly sheet.`,
       `Pick one winner for every game (straight up, no spread).`,
       `One point per correct pick. Highest total wins the weekly pot.`,
       `Tiebreaker: closest total without going over. Going over busts.`,
       `DEADLINE: sheets lock at the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
-      `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, one-time. The player with the best record for the season wins the whole season pot after Week 18.`,
+      `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. It goes to the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week or best single sheet. Paid out after Week 18.`,
       `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you. Last one standing wins.`,
+      `CFB PICK-EM POOLS: separate college football pools where players pick every game AGAINST THE SPREAD. Best ATS record wins that pool's pot; tiebreaker is closest to the total points of the last game.`,
+      `PAYMENTS: players pay through the league's Cash App Pool link or with one tap from their credit balance. Winnings can be credited straight to a player's balance and rolled into future entries. The app only tracks money between friends — Cash App moves it.`,
     ],
     seasonPool: (() => {
       const pool = league.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
@@ -570,7 +572,7 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
     })(),
     submissionDeadline: getWeekDeadline(currentWeek)?.toISOString() ?? null,
     submissionLocked: isWeekLocked(currentWeek),
-    availableFeatures: ['Weekly picks', 'League standings', 'Chat', 'AI recap', 'Pick sheet review', 'Trash-talk assist', 'Side bets'],
+    availableFeatures: ['Weekly picks', 'League standings', 'Chat', 'AI recap', 'Pick sheet review', 'Trash-talk assist', 'Side bets', 'Survivor pool', 'CFB Pick-Em pools (against the spread)', 'Cash App Pool payments', 'Player credit balances'],
     currentPlayer: currentPlayerContext,
     playerMemories: playerMemories.map((m) => ({
       name: m.name,
@@ -589,7 +591,42 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
       isWinner: winnerIds.has(m.playerId),
     })),
     weeklyWinner: winnerRecognition,
+    // Season ledger memory: past weekly pots paid out
+    payoutHistory: (league.payouts ?? []).slice(0, 30).map((p) => ({ week: p.week, pool: p.pool ?? 'weekly', amount: p.amount, winners: p.winnerNames ?? [], paidAt: p.paidAt })),
+    // CFB pick-em pools (against the spread) — full season memory
+    cfbPools: await (async () => {
+      try {
+        const { gradeCfbPool } = await import('../src/cfbPool.js');
+        return (league.cfbPools ?? []).map((pool) => {
+          const board = gradeCfbPool(pool);
+          return {
+            week: pool.week,
+            status: pool.status,
+            entryFee: pool.entryFee,
+            games: (pool.games ?? []).length,
+            entries: Object.keys(pool.entries ?? {}).length,
+            pot: Object.values(pool.entries ?? {}).filter((e) => e.paid).length * (pool.entryFee || 0),
+            potCredited: Boolean(pool.potCredited),
+            standings: board.rows.slice(0, 10).map((row) => ({ name: row.name, record: `${row.wins}-${row.losses}${row.pushes ? `-${row.pushes}` : ''} ATS`, paid: row.paid })),
+            winners: board.complete ? board.winners.map((w) => w.name) : [],
+          };
+        });
+      } catch { return []; }
+    })(),
+    // Player credit balances (money the league tracks between friends)
+    playerCredits: await (async () => {
+      try {
+        const { creditBalance } = await import('../src/credits.js');
+        return (league.players ?? []).map((p) => ({ name: p.name, balance: creditBalance(league.creditLedger ?? [], p.id) })).filter((p) => p.balance > 0);
+      } catch { return []; }
+    })(),
   };
+  if (currentPlayerContext) {
+    try {
+      const { creditBalance } = await import('../src/credits.js');
+      currentPlayerContext.creditBalance = creditBalance(league.creditLedger ?? [], currentPlayerContext.id);
+    } catch { /* credit context is optional */ }
+  }
 
   // Ground Jack in the latest NFL wire (injuries, statuses, team news).
   try {

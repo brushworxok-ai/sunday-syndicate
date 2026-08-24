@@ -278,9 +278,11 @@ function App() {
         if (winners.some((w) => (w.playerId ?? w.name) === key)) { row.weeklyWins += 1; row.earnings += weekPot / winners.length; }
       }
     }
+    // Season pool goes to the best COMBINED record — most total correct picks
+    // across every weekly sheet all season — not the most weekly wins.
     const table = [...players.values()]
       .map((row) => ({ ...row, winPct: row.totalPicks ? Math.round((row.totalCorrect / row.totalPicks) * 1000) / 10 : 0 }))
-      .sort((a, b) => b.weeklyWins - a.weeklyWins || b.totalCorrect - a.totalCorrect || a.name.localeCompare(b.name));
+      .sort((a, b) => b.totalCorrect - a.totalCorrect || b.winPct - a.winPct || b.weeklyWins - a.weeklyWins || a.name.localeCompare(b.name));
     return { weeks: weekSummaries, table };
   }, [sheets, results, serverLeague]);
 
@@ -1359,9 +1361,9 @@ function App() {
                   <div className="season-pool-figures">
                     <div><small>Season pot</small><strong>${seasonPot.toLocaleString()}</strong></div>
                     <div><small>Paid in</small><strong>{paidSet.size}<i>/{proofLeague.players.length}</i></strong></div>
-                    <div><small>Current leader</small><strong>{leader ? `${leader.name}` : '—'}</strong>{leader && <em>{leader.weeklyWins} wins · {leader.totalCorrect} correct</em>}</div>
+                    <div><small>Current leader</small><strong>{leader ? `${leader.name}` : '—'}</strong>{leader && <em>{leader.totalCorrect} correct picks · {leader.winPct}%</em>}</div>
                   </div>
-                  <p>Best record across all 18 weeks takes the season pot. Ties break on total correct picks.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
+                  <p>Most total correct picks combined across all 18 weekly sheets takes the season pot — it's the whole season's work, not one hot week. Ties break on accuracy %.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
                 </div>
                 {isComm && <div className="season-pool-admin">
                   <small>SEASON ENTRIES PAID</small>
@@ -1378,7 +1380,7 @@ function App() {
               <div className="season-table">
                 <div className="season-head"><span>Player</span><span>Wins</span><span>Correct</span><span>Acc %</span><span>Earnings</span></div>
                 {seasonStats.table.map((row, index) => (
-                  <div className={`season-row ${index === 0 && row.weeklyWins > 0 ? 'leader' : ''}`} key={row.key}>
+                  <div className={`season-row ${index === 0 && row.totalCorrect > 0 ? 'leader' : ''}`} key={row.key}>
                     <strong>{row.name}{row.weeklyWins > 0 && ' ' + '👑'.repeat(Math.min(row.weeklyWins, 5))}</strong>
                     <span>{row.weeklyWins}</span>
                     <span>{row.totalCorrect}<small>/{row.totalPicks}</small></span>
@@ -1932,7 +1934,7 @@ function App() {
         {view === 'rules' && (
           <StandardPage eyebrow="THE FINE PRINT" title="House rules" subtitle="Simple enough to explain before kickoff. Firm enough to settle Monday-night arguments.">
             <div className="rules-grid">
-              <Rule number="01" title="Entry" text={`Each sheet costs $${ENTRY_FEE}. Payment must be confirmed before picks can be locked.`} />
+              <Rule number="01" title="Entry" text={`Each weekly sheet costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, and it goes to the most total correct picks combined across all 18 weeks, not the best single week.`} />
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. A locked sheet cannot be edited in this demo.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot." />
               <Rule number="04" title="Tiebreaker" text="Closest total without going over wins. Going over busts. If every tied player busts, the pot rolls over." />
