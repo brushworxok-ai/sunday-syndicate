@@ -1494,6 +1494,44 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .autopilot-log-row { display: flex; gap: 12px; align-items: baseline; font-size: 0.78rem; color: #cfcfcf; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.03); }
 .autopilot-log-row time { flex-shrink: 0; color: #39ff88; font-size: 0.7rem; white-space: nowrap; }
 
+/* ── Game Day Live ── */
+.live-standings, .live-games { display: grid; gap: 12px; margin-bottom: 24px; }
+.live-table .season-head, .live-table .season-row { grid-template-columns: 1fr 70px 70px 80px; }
+.live-leading { color: #39ff88; font-weight: 600; }
+.live-game-card { border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 14px 16px; background: rgba(255, 255, 255, 0.02); display: grid; gap: 10px; }
+.live-game-card.in-progress { border-color: rgba(255, 90, 90, 0.4); background: rgba(255, 90, 90, 0.04); }
+.live-game-card.final { opacity: 0.85; }
+.live-game-score { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; }
+.live-team { display: flex; align-items: center; gap: 10px; font-size: 0.95rem; }
+.live-team:last-child { justify-content: flex-end; }
+.live-team strong { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
+.live-team.winning { color: #39ff88; }
+.live-game-status { font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(255, 255, 255, 0.5); text-align: center; white-space: nowrap; }
+.live-game-card.in-progress .live-game-status { color: #ff5a5a; font-weight: 700; }
+.live-game-pickers { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; font-size: 0.72rem; color: #9a9a9a; border-top: 1px solid rgba(255, 255, 255, 0.05); padding-top: 8px; }
+.live-game-pickers > div:last-child { text-align: right; }
+.live-vs { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.3); }
+.picks-right { color: #39ff88; }
+.picks-wrong { color: #ff5a5a; text-decoration: line-through; text-decoration-thickness: 1px; }
+
+/* ── Player Stats ── */
+.stats-card { border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 16px; background: rgba(255, 255, 255, 0.02); display: grid; gap: 14px; margin-bottom: 12px; }
+.stats-card-head { display: flex; align-items: center; gap: 12px; }
+.stats-card-head p { font-size: 0.74rem; color: #9a9a9a; margin-top: 2px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+.stats-grid > div { display: grid; gap: 2px; padding: 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.03); }
+.stats-grid small { font-size: 0.6rem; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(255, 255, 255, 0.45); }
+.stats-grid strong { font-size: 1.05rem; color: #39ff88; }
+.stats-grid span { font-size: 0.66rem; color: #9a9a9a; }
+.h2h-section { margin-top: 20px; display: grid; gap: 12px; }
+.h2h-scroll { overflow-x: auto; }
+.h2h-table { border-collapse: collapse; font-size: 0.76rem; min-width: 100%; font-variant-numeric: tabular-nums; }
+.h2h-table th, .h2h-table td { padding: 8px 10px; text-align: center; border: 1px solid rgba(255, 255, 255, 0.06); white-space: nowrap; }
+.h2h-table thead th, .h2h-table tbody th { background: rgba(255, 255, 255, 0.04); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: rgba(255, 255, 255, 0.6); }
+.h2h-self { color: rgba(255, 255, 255, 0.2); }
+.h2h-up { color: #39ff88; font-weight: 600; }
+.h2h-down { color: #ff5a5a; }
+
 /* ── Push notifications ── */
 .push-toggle-section { margin-top: 20px; }
 .push-status-on { font-size: 0.78rem; color: #00ff87; margin-top: 8px; }

@@ -14,7 +14,7 @@ async function getTwilioModule() {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, SEASON, WEEK, TEAMS } from '../src/data.js';
+import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
 import { ModerationError } from './moderation.js';
 import { DEMO_LEAGUE, buildLeaderboard, scoreSheet } from '../src/demoLeague.js';
@@ -1916,6 +1916,48 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
         if (!result.error) actions.push(`Auto-settled Week ${week} props from ESPN (passing: ${result.facts?.passing?.player ?? '—'}, rushing: ${result.facts?.rushing?.player ?? '—'}).`);
       }
     } catch (error) { console.error('Auto-pilot prop settle failed:', error.message); }
+
+    // 2.5 Auto weekly winner payout: when every game is verified final, the pot
+    // goes to the winner's credit balance and Jack announces it in chat.
+    try {
+      const freshLeague = await store.getLeague(leagueId);
+      const weekGames = getGames(week);
+      const allVerified = weekGames.length > 0 && weekGames.every((g) => {
+        const r = (freshLeague.results ?? {})[g.id];
+        return r?.winner && r?.verifiedAt;
+      });
+      const weekSheets = (freshLeague.sheets ?? []).filter((s) => s.week === week);
+      const alreadyPaid = (freshLeague.payouts ?? []).some((p) => p.week === week && p.pool === 'weekly');
+      if (allVerified && weekSheets.length && !alreadyPaid) {
+        const recognition = computeWinnerRecognition(freshLeague, week);
+        if ((recognition?.status === 'winner' || recognition?.status === 'co_winners') && recognition.week === week && recognition.winners?.length) {
+          const pot = weekSheets.filter((s) => s.paid).length * ENTRY_FEE;
+          const winners = recognition.winners;
+          const share = Math.floor((pot / winners.length) * 100) / 100;
+          const { validateCreditEntry } = await import('../src/credits.js');
+          let credited = 0;
+          for (const winner of winners) {
+            if (!winner.playerId || share <= 0) continue;
+            const verdict = validateCreditEntry({ amount: share, reason: `Week ${week} winnings` });
+            if (!verdict.ok) continue;
+            await store.addCreditEntry(leagueId, { id: randomUUID(), playerId: winner.playerId, amount: verdict.value, reason: `Week ${week} winnings — auto payout`, by: 'auto-pilot', at: new Date().toISOString() });
+            credited += 1;
+          }
+          await store.savePayout(leagueId, {
+            id: `payout-${randomUUID()}`, week, pool: 'weekly', amount: pot,
+            winnerNames: winners.map((w) => String(w.name ?? '').slice(0, 50)),
+            method: credited ? 'credit' : 'pending', note: 'Auto-pilot weekly payout', paidAt: new Date().toISOString(), paidBy: 'auto-pilot',
+          });
+          const names = winners.map((w) => w.name.split(' ')[0]).join(' & ');
+          await store.addChatMessage(leagueId, {
+            id: `chat-payout-w${week}`, playerId: null, name: 'Jack',
+            msg: `🏆 WEEK ${week} IS OFFICIAL: ${names} take${winners.length > 1 ? '' : 's'} the $${pot} pot${winners.length > 1 ? ` ($${share} each)` : ''}. Winnings dropped straight into ${winners.length > 1 ? 'their' : 'the'} credit balance. Everybody else — Jack's got jokes waiting.`,
+            time: new Date().toISOString(),
+          });
+          actions.push(`Paid Week ${week} pot ($${pot}) to ${names} via credit balance and announced it in chat.`);
+        }
+      }
+    } catch (error) { console.error('Auto-pilot winner payout failed:', error.message); }
 
     // 3. Deadline reminders (24h and 3h windows, each sent once per week)
     try {

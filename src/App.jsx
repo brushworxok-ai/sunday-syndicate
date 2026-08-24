@@ -34,6 +34,8 @@ const MAIN_NAV = [
 ];
 
 const MORE_ITEMS = [
+  ['live',     'Game Day Live',    '🔴', 'Live scores, picks & projected standings'],
+  ['stats',    'Player Stats',     '📊', 'Tendencies, streaks & head-to-head'],
   ['season',   'Season',           '🏆', 'Full-season standings & payouts'],
   ['survivor', 'Survivor',         '🛡️', "One team a week. Lose once, you're out."],
   ['props',    'Prop Picks',       '🎯', 'Passing, rushing, first TD & more'],
@@ -168,6 +170,87 @@ function App() {
     }
     return [...rows.values()].sort((a, b) => b.wins - a.wins || b.weeksPlayed - a.weeksPlayed || a.name.localeCompare(b.name));
   }, [serverLeague?.settings?.propPicks, serverLeague?.settings?.propResults, serverLeague?.players]);
+
+  // Game-day live: provisional winner per game (final result, else current leader)
+  const liveProvisional = useMemo(() => {
+    const map = {};
+    for (const game of currentGames) {
+      const final = results[game.id];
+      if (final?.winner) { map[game.id] = { winner: final.winner, final: true, awayScore: final.awayScore, homeScore: final.homeScore, state: 'post' }; continue; }
+      const live = liveByGame[game.id];
+      if (live && live.state !== 'pre') {
+        const winner = live.awayScore === live.homeScore ? null : (live.awayScore > live.homeScore ? live.away : live.home);
+        map[game.id] = { winner, final: false, awayScore: live.awayScore, homeScore: live.homeScore, state: live.state, detail: live.detail };
+      }
+    }
+    return map;
+  }, [currentGames, results, liveByGame]);
+
+  // "If games ended now" standings for the selected week
+  const liveStandings = useMemo(() => {
+    const rows = weekSheets.map((sheet) => {
+      let locked = 0; let leading = 0;
+      for (const game of currentGames) {
+        const prov = liveProvisional[game.id];
+        if (!prov?.winner) continue;
+        if (sheet.picks[game.id] === prov.winner) { if (prov.final) locked += 1; else leading += 1; }
+      }
+      return { id: sheet.id, name: sheet.name, playerId: sheet.playerId, locked, leading, projected: locked + leading, tiebreaker: sheet.tiebreaker };
+    });
+    return rows.sort((a, b) => b.projected - a.projected || b.locked - a.locked || a.name.localeCompare(b.name));
+  }, [weekSheets, currentGames, liveProvisional]);
+
+  // Season-long player stats: tendencies, best/worst weeks, head-to-head
+  const playerStats = useMemo(() => {
+    const allResults = serverLeague?.results ?? {};
+    const byPlayer = new Map();
+    for (const sheet of sheets) {
+      const key = sheet.playerId ?? `name:${sheet.name}`;
+      if (!byPlayer.has(key)) byPlayer.set(key, { key, name: sheet.name, weeks: [], teamCounts: {}, homePicks: 0, totalPicks: 0 });
+      const row = byPlayer.get(key);
+      const games = getGames(sheet.week);
+      let score = 0;
+      for (const game of games) {
+        const pick = sheet.picks[game.id];
+        if (!pick) continue;
+        row.totalPicks += 1;
+        row.teamCounts[pick] = (row.teamCounts[pick] ?? 0) + 1;
+        if (pick === game.home) row.homePicks += 1;
+        if (allResults[game.id]?.winner && allResults[game.id].winner === pick) score += 1;
+      }
+      const scored = games.some((g) => allResults[g.id]?.winner);
+      row.weeks.push({ week: sheet.week, score, gameCount: games.length, scored });
+    }
+    const players = [...byPlayer.values()].map((row) => {
+      const scoredWeeks = row.weeks.filter((w) => w.scored);
+      const totalCorrect = scoredWeeks.reduce((sum, w) => sum + w.score, 0);
+      const best = scoredWeeks.length ? scoredWeeks.reduce((a, b) => (b.score > a.score ? b : a)) : null;
+      const worst = scoredWeeks.length ? scoredWeeks.reduce((a, b) => (b.score < a.score ? b : a)) : null;
+      const favorite = Object.entries(row.teamCounts).sort((a, b) => b[1] - a[1])[0] ?? null;
+      return {
+        ...row, totalCorrect,
+        avg: scoredWeeks.length ? (totalCorrect / scoredWeeks.length).toFixed(1) : '—',
+        best, worst, favorite,
+        homePct: row.totalPicks ? Math.round((row.homePicks / row.totalPicks) * 100) : 0,
+      };
+    }).sort((a, b) => b.totalCorrect - a.totalCorrect);
+    // Head-to-head: weeks where both played, who scored higher
+    const h2h = {};
+    for (const a of players) {
+      for (const b of players) {
+        if (a.key === b.key) continue;
+        let wins = 0; let losses = 0;
+        for (const wa of a.weeks.filter((w) => w.scored)) {
+          const wb = b.weeks.find((w) => w.week === wa.week && w.scored);
+          if (!wb) continue;
+          if (wa.score > wb.score) wins += 1;
+          else if (wa.score < wb.score) losses += 1;
+        }
+        h2h[`${a.key}|${b.key}`] = { wins, losses };
+      }
+    }
+    return { players, h2h };
+  }, [sheets, serverLeague?.results]);
 
   const savePropPicks = async () => {
     if (!playerSession.authenticated) return notify('Sign in as a player to save prop picks.');
@@ -1194,7 +1277,7 @@ function App() {
   };
 
   // Determine active tab (map sub-views to parent)
-  const activeTab = ['season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin'].includes(view) ? 'more' : view;
+  const activeTab = ['live', 'stats', 'season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin'].includes(view) ? 'more' : view;
 
   return (
     <div className="app-shell">
@@ -1763,6 +1846,97 @@ function App() {
                 })()}
               </section>
             )}
+          </StandardPage>
+        )}
+
+        {view === 'live' && (
+          <StandardPage eyebrow={`${weekLabel.toUpperCase()} · ${liveScores.anyLive ? '🔴 LIVE' : 'GAME DAY'}`} title="Game day live" subtitle={liveScores.anyLive ? 'Games in progress — picks and standings update every 30 seconds.' : 'No games in progress right now. Scores go live at kickoff.'}>
+            <section className="live-standings">
+              <div className="proof-heading"><div><span className="proof-step">PROJECTED</span><h2>If games ended now</h2></div>{liveScores.anyLive && <StatusPill state="warn">LIVE</StatusPill>}</div>
+              {liveStandings.length ? (
+                <div className="season-table live-table">
+                  <div className="season-head"><span>Player</span><span>Locked</span><span>Leading</span><span>Proj.</span></div>
+                  {liveStandings.map((row, index) => (
+                    <div className={`season-row ${index === 0 && row.projected > 0 ? 'leader' : ''}`} key={row.id}>
+                      <span>{index === 0 && row.projected > 0 ? '👑 ' : ''}{row.name}</span>
+                      <span>{row.locked}</span>
+                      <span className="live-leading">{row.leading > 0 ? `+${row.leading}` : '—'}</span>
+                      <span><strong>{row.projected}</strong>/{currentGames.length}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <EmptyState icon="📋" title="No sheets in yet" text={`Standings appear once ${weekLabel} sheets are submitted.`} action="Make picks" onAction={() => setView('picks')} />}
+              <p className="muted">Locked = correct picks in final games. Leading = picks currently ahead in live games. Projections shift with every score.</p>
+            </section>
+            <section className="live-games">
+              <div className="proof-heading"><div><span className="proof-step">SLATE</span><h2>{weekLabel} games</h2></div></div>
+              {currentGames.map((game) => {
+                const prov = liveProvisional[game.id];
+                const pickers = weekSheets.filter((s) => s.picks[game.id]);
+                const awayPickers = pickers.filter((s) => s.picks[game.id] === game.away);
+                const homePickers = pickers.filter((s) => s.picks[game.id] === game.home);
+                return (
+                  <article className={`live-game-card ${prov?.state === 'in' ? 'in-progress' : ''} ${prov?.final ? 'final' : ''}`} key={game.id}>
+                    <div className="live-game-score">
+                      <div className={`live-team ${prov?.winner === game.away ? 'winning' : ''}`}><span>{game.away}</span><strong>{prov ? prov.awayScore : '—'}</strong></div>
+                      <div className="live-game-status">{prov?.final ? 'FINAL' : prov?.state === 'in' ? (prov.detail || 'LIVE') : `${game.day ?? game.date} ${game.time}`}</div>
+                      <div className={`live-team ${prov?.winner === game.home ? 'winning' : ''}`}><strong>{prov ? prov.homeScore : '—'}</strong><span>{game.home}</span></div>
+                    </div>
+                    {pickers.length > 0 && (
+                      <div className="live-game-pickers">
+                        <div className={prov?.winner === game.away ? 'picks-right' : prov?.winner === game.home ? 'picks-wrong' : ''}>{awayPickers.length ? awayPickers.map((s) => s.name.split(' ')[0]).join(', ') : '—'}</div>
+                        <span className="live-vs">picks</span>
+                        <div className={prov?.winner === game.home ? 'picks-right' : prov?.winner === game.away ? 'picks-wrong' : ''}>{homePickers.length ? homePickers.map((s) => s.name.split(' ')[0]).join(', ') : '—'}</div>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </section>
+          </StandardPage>
+        )}
+
+        {view === 'stats' && (
+          <StandardPage eyebrow={`${SEASON} SEASON`} title="Player stats" subtitle="Tendencies, best weeks, and who owns who. Ammunition for the chat.">
+            {playerStats.players.length ? <>
+              {playerStats.players.map((p, index) => (
+                <article className="stats-card" key={p.key}>
+                  <div className="stats-card-head">
+                    <span className="rank-number">{String(index + 1).padStart(2, '0')}</span>
+                    <div><strong>{p.name}</strong><p>{p.weeks.length} week{p.weeks.length === 1 ? '' : 's'} played · {p.totalCorrect} correct · {p.avg} avg/week</p></div>
+                  </div>
+                  <div className="stats-grid">
+                    <div><small>Best week</small><strong>{p.best ? `${p.best.score}/${p.best.gameCount}` : '—'}</strong><span>{p.best ? `Week ${p.best.week}` : ''}</span></div>
+                    <div><small>Worst week</small><strong>{p.worst ? `${p.worst.score}/${p.worst.gameCount}` : '—'}</strong><span>{p.worst ? `Week ${p.worst.week}` : ''}</span></div>
+                    <div><small>Ride-or-die team</small><strong>{p.favorite ? p.favorite[0] : '—'}</strong><span>{p.favorite ? `picked ${p.favorite[1]}×` : ''}</span></div>
+                    <div><small>Home team bias</small><strong>{p.homePct}%</strong><span>picks home</span></div>
+                  </div>
+                </article>
+              ))}
+              {playerStats.players.length > 1 && (
+                <section className="h2h-section">
+                  <div className="proof-heading"><div><span className="proof-step">HEAD-TO-HEAD</span><h2>Who owns who</h2></div></div>
+                  <div className="h2h-scroll">
+                    <table className="h2h-table">
+                      <thead><tr><th></th>{playerStats.players.map((p) => <th key={p.key}>{p.name.split(' ')[0]}</th>)}</tr></thead>
+                      <tbody>
+                        {playerStats.players.map((a) => (
+                          <tr key={a.key}>
+                            <th>{a.name.split(' ')[0]}</th>
+                            {playerStats.players.map((b) => {
+                              if (a.key === b.key) return <td className="h2h-self" key={b.key}>—</td>;
+                              const rec = playerStats.h2h[`${a.key}|${b.key}`] ?? { wins: 0, losses: 0 };
+                              return <td className={rec.wins > rec.losses ? 'h2h-up' : rec.wins < rec.losses ? 'h2h-down' : ''} key={b.key}>{rec.wins}-{rec.losses}</td>;
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="muted">Row vs column: weekly score wins–losses in weeks both played.</p>
+                </section>
+              )}
+            </> : <EmptyState icon="📊" title="No stats yet" text="Stats build as sheets are submitted and weeks get scored." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}
 
