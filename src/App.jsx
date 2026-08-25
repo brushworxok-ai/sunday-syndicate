@@ -171,35 +171,6 @@ function App() {
     return [...rows.values()].sort((a, b) => b.wins - a.wins || b.weeksPlayed - a.weeksPlayed || a.name.localeCompare(b.name));
   }, [serverLeague?.settings?.propPicks, serverLeague?.settings?.propResults, serverLeague?.players]);
 
-  // Game-day live: provisional winner per game (final result, else current leader)
-  const liveProvisional = useMemo(() => {
-    const map = {};
-    for (const game of currentGames) {
-      const final = results[game.id];
-      if (final?.winner) { map[game.id] = { winner: final.winner, final: true, awayScore: final.awayScore, homeScore: final.homeScore, state: 'post' }; continue; }
-      const live = liveByGame[game.id];
-      if (live && live.state !== 'pre') {
-        const winner = live.awayScore === live.homeScore ? null : (live.awayScore > live.homeScore ? live.away : live.home);
-        map[game.id] = { winner, final: false, awayScore: live.awayScore, homeScore: live.homeScore, state: live.state, detail: live.detail };
-      }
-    }
-    return map;
-  }, [currentGames, results, liveByGame]);
-
-  // "If games ended now" standings for the selected week
-  const liveStandings = useMemo(() => {
-    const rows = weekSheets.map((sheet) => {
-      let locked = 0; let leading = 0;
-      for (const game of currentGames) {
-        const prov = liveProvisional[game.id];
-        if (!prov?.winner) continue;
-        if (sheet.picks[game.id] === prov.winner) { if (prov.final) locked += 1; else leading += 1; }
-      }
-      return { id: sheet.id, name: sheet.name, playerId: sheet.playerId, locked, leading, projected: locked + leading, tiebreaker: sheet.tiebreaker };
-    });
-    return rows.sort((a, b) => b.projected - a.projected || b.locked - a.locked || a.name.localeCompare(b.name));
-  }, [weekSheets, currentGames, liveProvisional]);
-
   // Season-long player stats: tendencies, best/worst weeks, head-to-head
   const playerStats = useMemo(() => {
     const allResults = serverLeague?.results ?? {};
@@ -407,6 +378,35 @@ function App() {
   const liveByGame = useMemo(() => Object.fromEntries((liveScores.scores ?? []).map((s) => [s.gameId, s])), [liveScores]);
 
   const weekSheets = useMemo(() => sheets.filter((sheet) => sheet.week === selectedWeek), [sheets, selectedWeek]);
+
+  // Game-day live: provisional winner per game (final result, else current leader)
+  const liveProvisional = useMemo(() => {
+    const map = {};
+    for (const game of currentGames) {
+      const final = results[game.id];
+      if (final?.winner) { map[game.id] = { winner: final.winner, final: true, awayScore: final.awayScore, homeScore: final.homeScore, state: 'post' }; continue; }
+      const live = liveByGame[game.id];
+      if (live && live.state !== 'pre') {
+        const winner = live.awayScore === live.homeScore ? null : (live.awayScore > live.homeScore ? live.away : live.home);
+        map[game.id] = { winner, final: false, awayScore: live.awayScore, homeScore: live.homeScore, state: live.state, detail: live.detail };
+      }
+    }
+    return map;
+  }, [currentGames, results, liveByGame]);
+
+  // "If games ended now" standings for the selected week
+  const liveStandings = useMemo(() => {
+    const rows = weekSheets.map((sheet) => {
+      let locked = 0; let leading = 0;
+      for (const game of currentGames) {
+        const prov = liveProvisional[game.id];
+        if (!prov?.winner) continue;
+        if (sheet.picks[game.id] === prov.winner) { if (prov.final) locked += 1; else leading += 1; }
+      }
+      return { id: sheet.id, name: sheet.name, playerId: sheet.playerId, locked, leading, projected: locked + leading, tiebreaker: sheet.tiebreaker };
+    });
+    return rows.sort((a, b) => b.projected - a.projected || b.locked - a.locked || a.name.localeCompare(b.name));
+  }, [weekSheets, currentGames, liveProvisional]);
   const completedGames = Object.values(results).filter((result) => result.winner).length;
   const pot = weekSheets.filter((sheet) => sheet.paid).length * ENTRY_FEE;
   const totalPot = pot + Number(rolloverPot || 0);
