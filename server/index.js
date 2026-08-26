@@ -461,6 +461,27 @@ app.post('/api/webhooks/twilio/inbound', asyncRoute(async (request, response) =>
   const optOutType = request.body.OptOutType;
   if (player && (optOutType === 'STOP' || optOutType === 'START')) await store.updatePlayerPreferences(player.id, { smsConsent: optOutType === 'STOP' ? 'opted_out' : 'opted_in' }, 'twilio_webhook');
   response.type('text/xml');
+
+  // TEXT JACK: registered, opted-in players can text a question and Jack texts back.
+  // Grounded in the same league data as the in-app assistant; SMS answers stay short and PG-13.
+  const inboundText = String(request.body?.Body ?? '').trim();
+  const isKeyword = /^(stop|start|unstop|help|yes|no|cancel|quit|unsubscribe)$/i.test(inboundText);
+  if (player && inboundText && !isKeyword && !optOutType && player.messaging?.smsConsent === 'opted_in') {
+    try {
+      const answer = await askJackAssistant({
+        leagueId,
+        question: `${inboundText}\n\n(Answering over SMS: keep it under 300 characters, plain text, no markdown, PG-13.)`,
+        playerId: player.id,
+      });
+      if (answer?.text) {
+        const smsText = answer.text.replace(/[*_#`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 320);
+        const escapeXml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return response.send(`<Response><Message>${escapeXml(smsText)}</Message></Response>`);
+      }
+    } catch (error) {
+      console.error('Text-Jack reply failed:', error.message);
+    }
+  }
   return response.send('<Response></Response>');
 }));
 
@@ -529,12 +550,12 @@ function computeWinnerRecognition(league, currentWeek) {
   return { status: 'pending', winners: [], protectedPlayerIds: [], week: currentWeek, reigning: false, message: 'Winner pending. Jack will wait for verified final results.' };
 }
 
-app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response) => {
-  const question = String(request.body?.question ?? '').trim().slice(0, 500);
-  if (!question) return response.status(422).json({ error: 'A question is required.' });
+async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestion, playerId = null, history: rawHistory = [] }) {
+  const question = String(rawQuestion ?? '').trim().slice(0, 500);
+  if (!question) return { error: 'A question is required.', status: 422 };
 
-  const league = await store.getLeague(request.params.leagueId);
-  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const league = await store.getLeague(targetLeagueId);
+  if (!league) return { error: 'League not found.', status: 404 };
 
   const geminiConfigured = Boolean((await getGeminiKey()).value);
   const currentWeek = getCurrentWeek();
@@ -563,7 +584,7 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
   });
 
   // Find current player if authenticated
-  const currentPlayerId = request.body?.playerId ?? null;
+  const currentPlayerId = playerId ?? null;
   const currentPlayer = currentPlayerId ? (league.players ?? []).find((p) => p.id === currentPlayerId) : null;
   let currentPlayerContext = null;
   if (currentPlayer) {
@@ -668,14 +689,14 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
     context.nflNews = (news.items ?? []).slice(0, 6).map((item) => ({ headline: item.headline, description: item.description, published: item.published }));
   } catch { context.nflNews = []; }
 
-  const history = Array.isArray(request.body?.history) ? request.body.history.slice(-6).map((m) => ({
+  const history = Array.isArray(rawHistory) ? rawHistory.slice(-6).map((m) => ({
     role: m.role === 'assistant' ? 'assistant' : 'user',
     text: String(m.text ?? '').slice(0, 500),
   })).filter((m) => m.text) : [];
 
   if (!geminiConfigured) {
     const fallback = buildLocalAssistantFallback(question, context);
-    return response.json({ text: fallback, source: 'local_fallback' });
+    return { text: fallback, source: 'local_fallback' };
   }
 
   try {
@@ -689,12 +710,18 @@ app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response
     });
     const text = result?.text?.trim();
     if (!text) throw new Error('Empty response from model.');
-    return response.json({ text, source: 'gemini' });
+    return { text, source: 'gemini' };
   } catch (error) {
     console.error('Assistant error:', error.message);
     const fallback = buildLocalAssistantFallback(question, context);
-    return response.json({ text: fallback, source: 'local_fallback' });
+    return { text: fallback, source: 'local_fallback' };
   }
+}
+
+app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response) => {
+  const result = await askJackAssistant({ leagueId: request.params.leagueId, question: request.body?.question, playerId: request.body?.playerId ?? null, history: request.body?.history });
+  if (result.error) return response.status(result.status ?? 422).json({ error: result.error });
+  return response.json(result);
 }));
 
 function buildLocalAssistantFallback(question, context) {
