@@ -76,13 +76,16 @@ app.get('/api/health', asyncRoute(async (_request, response) => {
     geminiConfigured: Boolean(geminiKey.value),
     geminiKeySource: geminiKey.source,
     model,
-    smsProvider: ['twilio', 'textbelt'].includes(process.env.SMS_PROVIDER) ? process.env.SMS_PROVIDER : 'demo',
+    smsProvider: ['telnyx', 'twilio', 'textbelt'].includes(process.env.SMS_PROVIDER) ? process.env.SMS_PROVIDER : 'demo',
+    telnyxConfigured: Boolean(process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER),
     twilioConfigured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_MESSAGING_SERVICE_SID),
-    smsConfigured: process.env.SMS_PROVIDER === 'textbelt'
-      ? Boolean(process.env.TEXTBELT_API_KEY)
-      : process.env.SMS_PROVIDER === 'twilio'
-        ? Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_MESSAGING_SERVICE_SID)
-        : true,
+    smsConfigured: process.env.SMS_PROVIDER === 'telnyx'
+      ? Boolean(process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER)
+      : process.env.SMS_PROVIDER === 'textbelt'
+        ? Boolean(process.env.TEXTBELT_API_KEY)
+        : process.env.SMS_PROVIDER === 'twilio'
+          ? Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_MESSAGING_SERVICE_SID)
+          : true,
     adminConfigured: Boolean(process.env.ADMIN_PASSWORD || !isProduction),
     ttsProvider: String(process.env.JACK_TTS_PROVIDER ?? 'browser').toLowerCase(),
     ttsConfigured: String(process.env.JACK_TTS_PROVIDER ?? '').toLowerCase() === 'elevenlabs'
@@ -483,6 +486,64 @@ app.post('/api/webhooks/twilio/inbound', asyncRoute(async (request, response) =>
     }
   }
   return response.send('<Response></Response>');
+}));
+
+/* ── Telnyx Inbound SMS Webhook ── */
+app.post('/api/sms/inbound', asyncRoute(async (request, response) => {
+  // Telnyx sends JSON with data.event_type and data.payload
+  const evt = request.body?.data;
+  if (!evt || evt.event_type !== 'message.received') return response.status(200).json({ ok: true });
+
+  const from = evt.payload?.from?.phone_number;
+  const inboundText = String(evt.payload?.text ?? '').trim();
+  if (!from || !inboundText) return response.status(200).json({ ok: true });
+
+  const player = await store.findPlayerByPhoneE164(from);
+  const isKeyword = /^(stop|start|unstop|help|yes|no|cancel|quit|unsubscribe)$/i.test(inboundText);
+
+  // Handle opt-out/opt-in keywords
+  if (player && /^(stop|cancel|quit|unsubscribe)$/i.test(inboundText)) {
+    await store.updatePlayerPreferences(player.id, { smsConsent: 'opted_out' }, 'telnyx_webhook');
+    return response.status(200).json({ ok: true });
+  }
+  if (player && /^(start|unstop|yes)$/i.test(inboundText)) {
+    await store.updatePlayerPreferences(player.id, { smsConsent: 'opted_in' }, 'telnyx_webhook');
+    return response.status(200).json({ ok: true });
+  }
+
+  // TEXT JACK: registered, opted-in players can text a question and Jack texts back via Telnyx API
+  if (player && inboundText && !isKeyword && player.messaging?.smsConsent === 'opted_in') {
+    try {
+      const answer = await askJackAssistant({
+        leagueId,
+        question: `${inboundText}\n\n(Answering over SMS: keep it under 300 characters, plain text, no markdown, PG-13.)`,
+        playerId: player.id,
+      });
+      if (answer?.text && process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER) {
+        const smsText = answer.text.replace(/[*_#`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 320);
+        await fetch('https://api.telnyx.com/v2/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
+          body: JSON.stringify({ from: process.env.TELNYX_FROM_NUMBER, to: from, text: smsText }),
+        });
+      }
+    } catch (error) {
+      console.error('Text-Jack reply failed:', error.message);
+    }
+  }
+  return response.status(200).json({ ok: true });
+}));
+
+/* ── Telnyx Delivery Status Webhook ── */
+app.post('/api/webhooks/telnyx/status', asyncRoute(async (request, response) => {
+  const evt = request.body?.data;
+  if (!evt) return response.status(200).json({ ok: true });
+  const statusMap = { 'message.sent': 'sent', 'message.delivered': 'delivered', 'message.failed': 'failed' };
+  const status = statusMap[evt.event_type];
+  if (status) {
+    await applyDeliveryStatus({ store, providerMessageId: evt.payload?.id, status, errorCode: evt.payload?.errors?.[0]?.code || null });
+  }
+  return response.status(200).json({ ok: true });
 }));
 
 /* ── Jack Assistant ── */

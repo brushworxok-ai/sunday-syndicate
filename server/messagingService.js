@@ -47,6 +47,29 @@ export class TwilioSmsProvider {
   }
 }
 
+export class TelnyxSmsProvider {
+  constructor({ apiKey, fromNumber }) {
+    this.name = 'Telnyx Messaging';
+    this.apiKey = apiKey;
+    this.fromNumber = fromNumber;
+  }
+  async send({ player, text }) {
+    if (!player.phoneE164) {
+      const error = new Error('No production E.164 phone number is stored for this player.');
+      error.code = 'missing_destination';
+      throw error;
+    }
+    const response = await fetch('https://api.telnyx.com/v2/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
+      body: JSON.stringify({ from: this.fromNumber, to: player.phoneE164, text }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.errors?.[0]?.detail ?? 'Telnyx send failed');
+    return { status: result.data?.to?.[0]?.status ?? 'queued', id: result.data?.id ?? randomUUID() };
+  }
+}
+
 export class TextBeltSmsProvider {
   constructor({ apiKey }) {
     this.name = 'TextBelt';
@@ -89,6 +112,11 @@ export function createSmsProvider(env = process.env) {
   if (env.SMS_PROVIDER === 'textbelt') {
     if (!env.TEXTBELT_API_KEY) throw new Error('TextBelt provider is missing TEXTBELT_API_KEY');
     return new TextBeltSmsProvider({ apiKey: env.TEXTBELT_API_KEY });
+  }
+  if (env.SMS_PROVIDER === 'telnyx') {
+    if (!env.TELNYX_API_KEY) throw new Error('Telnyx provider is missing TELNYX_API_KEY');
+    if (!env.TELNYX_FROM_NUMBER) throw new Error('Telnyx provider is missing TELNYX_FROM_NUMBER');
+    return new TelnyxSmsProvider({ apiKey: env.TELNYX_API_KEY, fromNumber: env.TELNYX_FROM_NUMBER });
   }
   if (env.SMS_PROVIDER === 'twilio') {
     const required = ['TWILIO_ACCOUNT_SID', 'TWILIO_API_KEY', 'TWILIO_API_SECRET', 'TWILIO_MESSAGING_SERVICE_SID'];
