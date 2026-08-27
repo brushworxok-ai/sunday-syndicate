@@ -525,7 +525,7 @@ export class PostgresLeagueStore {
   }
 
   async getNotifications(leagueId, { playerId = null, limit = 50, kinds = null } = {}) {
-    const state = await this.getLeague(leagueId);
+    const state = await this.readState(leagueId);
     if (!state) return [];
     let notes = clone(state.notifications ?? []);
     if (playerId) notes = notes.filter((n) => !n.playerId || n.playerId === playerId || n.playerId === 'all');

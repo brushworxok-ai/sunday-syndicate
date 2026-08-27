@@ -109,6 +109,8 @@ function App() {
   const [pushSupported] = useState(() => 'serviceWorker' in navigator && 'PushManager' in window);
   const [paymentHistory, setPaymentHistory] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const [groupTextMsg, setGroupTextMsg] = useState('');
+  const [groupTextMode, setGroupTextMode] = useState('individual');
 
   // Prop picks state
   const [propPicks, setPropPicks] = useState({});
@@ -1073,6 +1075,20 @@ function App() {
     try {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/reminders/picks`, { method: 'POST', body: JSON.stringify({ week: selectedWeek }) });
       notify(data.missing?.length ? `Jack nudged ${data.missing.join(', ')}.` : data.message);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const sendGroupText = async () => {
+    if (!(await ensureAdmin())) return;
+    const msg = groupTextMsg.trim();
+    if (!msg) return notify('Type a message first.');
+    setServerBusy('group-text');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/group-text`, { method: 'POST', body: JSON.stringify({ text: msg, mode: groupTextMode }) });
+      const sent = data.sent ?? data.results?.filter((r) => r.ok).length ?? 0;
+      notify(groupTextMode === 'group_mms' ? `Group MMS sent to ${sent} players in a shared thread.` : `Broadcast sent individually to ${sent} player${sent === 1 ? '' : 's'}.`);
+      setGroupTextMsg('');
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -2745,6 +2761,23 @@ function App() {
               <button className="button button-ghost-dark" type="button" onClick={syncFinals} disabled={serverBusy === 'sync-finals'}>{serverBusy === 'sync-finals' ? 'Syncing…' : '⚡ Sync finals from live feed'}</button>
               <button className="button button-ghost-dark" type="button" onClick={sendPickReminders} disabled={serverBusy === 'reminders' || weekLocked}>{serverBusy === 'reminders' ? 'Sending…' : '⏰ Text pick reminders'}</button>
             </div>
+            <section className="group-text-section">
+              <div className="panel-heading"><div><span className="eyebrow dark">MESSAGING</span><h2>📢 Group Text</h2></div></div>
+              <p className="muted">Send an SMS to all players with verified phone numbers. Group MMS creates a shared thread (2–10 players); Individual sends separate texts to each.</p>
+              <div className="group-text-controls">
+                <div className="group-text-mode-toggle">
+                  <button type="button" className={`mode-btn ${groupTextMode === 'individual' ? 'active' : ''}`} onClick={() => setGroupTextMode('individual')}>📱 Individual</button>
+                  <button type="button" className={`mode-btn ${groupTextMode === 'group_mms' ? 'active' : ''}`} onClick={() => setGroupTextMode('group_mms')}>👥 Group MMS</button>
+                </div>
+                <textarea className="group-text-input" rows="3" maxLength={500} placeholder="Type your message to the league…" value={groupTextMsg} onChange={(e) => setGroupTextMsg(e.target.value)} />
+                <div className="group-text-footer">
+                  <span className="char-count">{groupTextMsg.length}/500</span>
+                  <button className="button button-primary" type="button" disabled={serverBusy === 'group-text' || !groupTextMsg.trim()} onClick={sendGroupText}>
+                    {serverBusy === 'group-text' ? 'Sending…' : groupTextMode === 'group_mms' ? '📤 Send Group MMS' : '📤 Send to All'}
+                  </button>
+                </div>
+              </div>
+            </section>
             <div className="admin-games">{currentGames.map((game) => {
               const gameResult = results[game.id] ?? {};
               const setWinner = async () => {

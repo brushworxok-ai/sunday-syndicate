@@ -1338,6 +1338,82 @@ app.post('/api/leagues/:leagueId/jack/broadcast', auth.requireAdmin, asyncRoute(
   return response.status(201).json({ ...broadcast, chatPosts: chatPosts.length });
 }));
 
+/* ── Group Text (MMS group thread) — commissioner sends one message to everyone ── */
+app.post('/api/leagues/:leagueId/group-text', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const text = String(request.body?.text ?? '').trim();
+  if (!text || text.length > 600) return response.status(422).json({ error: 'Message is required (max 600 chars).' });
+  const mode = request.body?.mode ?? 'individual'; // 'group_mms' or 'individual'
+
+  if (!process.env.TELNYX_API_KEY || !process.env.TELNYX_FROM_NUMBER) {
+    return response.status(503).json({ error: 'SMS is not configured. Add TELNYX_API_KEY and TELNYX_FROM_NUMBER.' });
+  }
+
+  // Get all opted-in players with verified phones
+  const eligible = [];
+  for (const summary of league.players ?? []) {
+    const player = await store.getPlayer(summary.id);
+    if (player?.phoneVerifiedAt && player?.messaging?.smsConsent === 'opted_in' && player.phoneE164) {
+      eligible.push({ id: player.id, name: player.name, phone: player.phoneE164 });
+    }
+  }
+  if (!eligible.length) return response.status(422).json({ error: 'No players with verified phones and SMS consent.' });
+
+  const results = [];
+
+  if (mode === 'group_mms' && eligible.length >= 2 && eligible.length <= 10) {
+    // Telnyx MMS group: send one message to all recipients in a shared thread
+    try {
+      const resp = await fetch('https://api.telnyx.com/v2/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
+        body: JSON.stringify({
+          from: process.env.TELNYX_FROM_NUMBER,
+          to: eligible.map((p) => ({ phone_number: p.phone })),
+          text,
+          type: 'MMS',
+          subject: '405 BadGuys',
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data?.errors?.[0]?.detail ?? 'Telnyx group MMS failed');
+      results.push({ mode: 'group_mms', status: 'sent', recipients: eligible.length, messageId: data?.data?.id });
+    } catch (error) {
+      results.push({ mode: 'group_mms', status: 'failed', error: error.message });
+    }
+  } else {
+    // Individual SMS broadcast (works for any group size)
+    for (const player of eligible) {
+      try {
+        const resp = await fetch('https://api.telnyx.com/v2/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
+          body: JSON.stringify({ from: process.env.TELNYX_FROM_NUMBER, to: player.phone, text }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data?.errors?.[0]?.detail ?? 'Send failed');
+        results.push({ playerId: player.id, name: player.name, status: 'sent', messageId: data?.data?.id });
+      } catch (error) {
+        results.push({ playerId: player.id, name: player.name, status: 'failed', error: error.message });
+      }
+    }
+  }
+
+  const sent = results.filter((r) => r.status === 'sent').length;
+  const failed = results.filter((r) => r.status === 'failed').length;
+  await store.writeAudit(request.params.leagueId, 'group_text.sent', `Commissioner sent ${mode} to ${eligible.length} players: ${sent} sent, ${failed} failed`, request.actor, { mode, text: text.slice(0, 100) });
+  await saveNotification(request.params.leagueId, { kind: 'group_text', title: `Commissioner group text`, body: text.slice(0, 200), metadata: { mode, recipientCount: eligible.length } });
+
+  // Also post to in-app chat
+  await store.addChatMessage(request.params.leagueId, {
+    id: `chat-${randomUUID()}`, playerId: null, name: 'Commissioner 📢',
+    msg: text.slice(0, 400), time: new Date().toISOString(),
+  });
+
+  return response.json({ mode, eligible: eligible.length, sent, failed, results });
+}));
+
 /* ── Survivor pool ── */
 app.post('/api/leagues/:leagueId/survivor/pick', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
   const league = await store.getLeague(request.params.leagueId);

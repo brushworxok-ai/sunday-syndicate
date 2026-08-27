@@ -1574,6 +1574,19 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .notification-detail p { color: rgba(255,255,255,0.6); font-size: 0.82rem; margin: 0 0 4px; line-height: 1.4; }
 .notification-detail time { color: rgba(255,255,255,0.35); font-size: 0.72rem; }
 
+/* ── Group Text Section ── */
+.group-text-section { margin: 28px 0 24px; }
+.group-text-controls { display: flex; flex-direction: column; gap: 12px; }
+.group-text-mode-toggle { display: flex; gap: 0; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); }
+.group-text-mode-toggle .mode-btn { flex: 1; padding: 10px 14px; background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.5); border: none; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.group-text-mode-toggle .mode-btn.active { background: rgba(0,255,135,0.12); color: #00ff87; }
+.group-text-mode-toggle .mode-btn:not(.active):hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.7); }
+.group-text-input { width: 100%; padding: 12px 14px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; color: #e4e4ec; font-size: 0.9rem; font-family: inherit; resize: vertical; min-height: 70px; }
+.group-text-input:focus { outline: none; border-color: rgba(0,255,135,0.3); }
+.group-text-input::placeholder { color: rgba(255,255,255,0.25); }
+.group-text-footer { display: flex; justify-content: space-between; align-items: center; }
+.group-text-footer .char-count { font-size: 0.75rem; color: rgba(255,255,255,0.3); }
+
 /* Reduced motion: strip all animations */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
