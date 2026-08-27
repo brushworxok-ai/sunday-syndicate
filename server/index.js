@@ -61,6 +61,13 @@ const playerAuth = createPlayerAuth({ store, secret: `${process.env.SESSION_SECR
 const asyncRoute = (handler) => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
 const leagueId = 'league-sunday-syndicate-demo';
 
+/** Save a notification for the in-app notification history. */
+async function saveNotification(lid, { playerId = 'all', kind, title, body = '', metadata = {} }) {
+  try {
+    await store.saveNotification(lid, { id: `notif-${randomUUID()}`, playerId, kind, title, body, metadata, at: new Date().toISOString() });
+  } catch (error) { console.error('saveNotification failed (non-fatal):', error.message); }
+}
+
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -511,25 +518,37 @@ app.post('/api/sms/inbound', asyncRoute(async (request, response) => {
     return response.status(200).json({ ok: true });
   }
 
-  // TEXT JACK: registered, opted-in players can text a question and Jack texts back via Telnyx API
+  // TEXT JACK: registered, opted-in players must text "Hey Jack" (or similar) to trigger a Jack AI reply
   if (player && inboundText && !isKeyword && player.messaging?.smsConsent === 'opted_in') {
-    try {
-      const answer = await askJackAssistant({
-        leagueId,
-        question: `${inboundText}\n\n(Answering over SMS: keep it under 300 characters, plain text, no markdown, PG-13.)`,
-        playerId: player.id,
-      });
-      if (answer?.text && process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER) {
-        const smsText = answer.text.replace(/[*_#`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 320);
-        await fetch('https://api.telnyx.com/v2/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
-          body: JSON.stringify({ from: process.env.TELNYX_FROM_NUMBER, to: from, text: smsText }),
-        });
+    const jackTriggerMatch = inboundText.match(/^(hey\s+jack|yo\s+jack|ask\s+jack)\b[,!?\s]*/i);
+
+    if (jackTriggerMatch) {
+      // Strip the trigger phrase and pass the actual question to Jack
+      const question = inboundText.slice(jackTriggerMatch[0].length).trim();
+      if (!question) {
+        // "Hey Jack" with no question — stay silent to avoid SMS costs
+      } else {
+        try {
+          const answer = await askJackAssistant({
+            leagueId,
+            question: `${question}\n\n(Answering over SMS: keep it under 300 characters, plain text, no markdown, PG-13.)`,
+            playerId: player.id,
+          });
+          if (answer?.text && process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER) {
+            const smsText = answer.text.replace(/[*_#`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 320);
+            await fetch('https://api.telnyx.com/v2/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
+              body: JSON.stringify({ from: process.env.TELNYX_FROM_NUMBER, to: from, text: smsText }),
+            });
+            await saveNotification(leagueId, { playerId: player.id, kind: 'jack_sms', title: 'Jack replied via SMS', body: smsText, metadata: { question } });
+          }
+        } catch (error) {
+          console.error('Text-Jack reply failed:', error.message);
+        }
       }
-    } catch (error) {
-      console.error('Text-Jack reply failed:', error.message);
     }
+    // No trigger match → silent ignore (no hint reply to avoid per-SMS costs)
   }
   return response.status(200).json({ ok: true });
 }));
@@ -1244,6 +1263,9 @@ app.post('/api/leagues/:leagueId/reminders/picks', auth.requireAdmin, asyncRoute
   }));
   const provider = createSmsProvider(process.env);
   const broadcast = await sendJackBroadcast({ store, leagueId: request.params.leagueId, provider, messages, actor: request.actor, kind: 'pick_reminder' });
+  for (const p of missing) {
+    await saveNotification(request.params.leagueId, { playerId: p.id, kind: 'pick_reminder', title: `Week ${week} pick reminder`, body: `Your Week ${week} picks are due${hoursLeft ? ` in ~${hoursLeft}h` : ' soon'}. Don't miss the deadline!`, metadata: { week } });
+  }
   return response.status(201).json({ week, missing: missing.map((p) => p.name), broadcast });
 }));
 
@@ -1802,6 +1824,7 @@ app.post('/api/leagues/:leagueId/sheets/:sheetId/claim-payment', playerAuth.requ
   const paymentClaim = { claimedAt: new Date().toISOString(), method: 'cashapp', amount: Number(league.settings?.entryFee) || 20 };
   const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paymentClaim });
   await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${paymentClaim.amount} for Week ${sheet.week}`, request.player.id, { sheetId: sheet.id });
+  await saveNotification(request.params.leagueId, { playerId: request.player.id, kind: 'payment_claimed', title: `Payment claimed — Week ${sheet.week}`, body: `You claimed $${paymentClaim.amount} sent for Week ${sheet.week}. Waiting for commissioner to confirm.`, metadata: { week: sheet.week, amount: paymentClaim.amount } });
   return response.json(updated);
 }));
 
@@ -1821,6 +1844,9 @@ app.patch('/api/leagues/:leagueId/sheets/:sheetId/paid', auth.requireAdmin, asyn
   const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paid: Boolean(request.body?.paid) });
   if (!updated) return response.status(404).json({ error: 'Sheet not found.' });
   await store.writeAudit(request.params.leagueId, 'sheet.paid_updated', `${updated.name}'s Week ${updated.week} sheet marked ${updated.paid ? 'PAID' : 'unpaid'}`, 'admin', { sheetId: updated.id });
+  if (updated.paid) {
+    await saveNotification(request.params.leagueId, { playerId: updated.playerId, kind: 'payment_confirmed', title: `Payment confirmed — Week ${updated.week}`, body: `Commissioner confirmed your Week ${updated.week} entry fee is paid.`, metadata: { week: updated.week } });
+  }
   return response.json(updated);
 }));
 
@@ -1847,7 +1873,140 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
     paidBy: request.actor,
   };
   await store.savePayout(request.params.leagueId, payout);
+  await saveNotification(request.params.leagueId, { kind: 'payout', title: `Week ${payout.week} payout — $${payout.amount}`, body: `${payout.winnerNames?.join(' & ') || 'Winner'} received $${payout.amount} for Week ${payout.week}.`, metadata: { week: payout.week, amount: payout.amount, payoutId: payout.id } });
   return response.status(201).json(payout);
+}));
+
+/* ── Payment history — detailed per-player payment tracking ── */
+app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const playerId = request.player.id;
+  const entryFee = Number(league.settings?.entryFee) || 20;
+
+  // Gather all payment events for this player
+  const mySheets = (league.sheets ?? []).filter((s) => s.playerId === playerId);
+  const myPayouts = (league.payouts ?? []).filter((p) => (p.winnerNames ?? []).some((n) => {
+    const player = (league.players ?? []).find((pl) => pl.id === playerId);
+    return player && n.toLowerCase().includes(player.name.split(' ')[0].toLowerCase());
+  }));
+  const myCredits = (league.creditLedger ?? []).filter((c) => c.playerId === playerId);
+
+  const history = [];
+
+  // Sheet submissions (entry fees)
+  for (const sheet of mySheets) {
+    history.push({
+      id: `entry-${sheet.id}`,
+      type: 'entry_fee',
+      week: sheet.week,
+      amount: -entryFee,
+      status: sheet.paid ? 'confirmed' : sheet.paymentClaim ? 'claimed' : 'unpaid',
+      claimedAt: sheet.paymentClaim?.claimedAt ?? null,
+      submittedAt: sheet.submittedAt,
+      at: sheet.submittedAt,
+    });
+  }
+
+  // Payouts received
+  for (const payout of myPayouts) {
+    history.push({
+      id: `payout-${payout.id}`,
+      type: 'payout',
+      week: payout.week,
+      pool: payout.pool,
+      amount: payout.amount,
+      status: 'paid',
+      method: payout.method,
+      at: payout.paidAt,
+    });
+  }
+
+  // Credit transactions
+  for (const credit of myCredits) {
+    history.push({
+      id: `credit-${credit.id}`,
+      type: 'credit',
+      amount: credit.amount,
+      reason: credit.reason,
+      status: 'completed',
+      at: credit.at,
+    });
+  }
+
+  // Sort newest first
+  history.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''));
+
+  const totalPaid = mySheets.filter((s) => s.paid).length * entryFee;
+  const totalWon = myPayouts.reduce((sum, p) => sum + (p.amount ?? 0), 0);
+  const creditBalance = myCredits.reduce((sum, c) => sum + c.amount, 0);
+
+  return response.json({
+    playerId,
+    entryFee,
+    summary: {
+      totalWeeksPaid: mySheets.filter((s) => s.paid).length,
+      totalWeeksUnpaid: mySheets.filter((s) => !s.paid).length,
+      totalPaid: Math.round(totalPaid * 100) / 100,
+      totalWon: Math.round(totalWon * 100) / 100,
+      creditBalance: Math.round(creditBalance * 100) / 100,
+      netPosition: Math.round((totalWon - totalPaid + creditBalance) * 100) / 100,
+    },
+    history,
+  });
+}));
+
+/* ── Commissioner payment overview — all players, all weeks ── */
+app.get('/api/leagues/:leagueId/payment-overview', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const entryFee = Number(league.settings?.entryFee) || 20;
+  const players = league.players ?? [];
+  const sheets = league.sheets ?? [];
+  const payouts = league.payouts ?? [];
+
+  const playerSummaries = players.map((p) => {
+    const playerSheets = sheets.filter((s) => s.playerId === p.id);
+    const paidWeeks = playerSheets.filter((s) => s.paid);
+    const unpaidSheets = playerSheets.filter((s) => !s.paid);
+    const claimedSheets = unpaidSheets.filter((s) => s.paymentClaim);
+    return {
+      playerId: p.id,
+      name: p.name,
+      totalSheets: playerSheets.length,
+      paidCount: paidWeeks.length,
+      unpaidCount: unpaidSheets.length,
+      claimedCount: claimedSheets.length,
+      totalOwed: Math.round(unpaidSheets.length * entryFee * 100) / 100,
+      status: unpaidSheets.length === 0 ? 'current' : claimedSheets.length > 0 ? 'has_claims' : 'behind',
+      unpaidWeeks: unpaidSheets.map((s) => ({ week: s.week, sheetId: s.id, claimed: Boolean(s.paymentClaim), claimedAt: s.paymentClaim?.claimedAt })),
+    };
+  });
+
+  const totalCollected = sheets.filter((s) => s.paid).length * entryFee;
+  const totalOutstanding = sheets.filter((s) => !s.paid).length * entryFee;
+  const totalPaidOut = payouts.reduce((sum, p) => sum + (p.amount ?? 0), 0);
+
+  return response.json({
+    entryFee,
+    summary: { totalCollected, totalOutstanding, totalPaidOut, potBalance: Math.round((totalCollected - totalPaidOut) * 100) / 100 },
+    players: playerSummaries.sort((a, b) => b.unpaidCount - a.unpaidCount),
+    recentPayouts: payouts.slice(-20).reverse(),
+  });
+}));
+
+/* ── Notification history ── */
+app.get('/api/leagues/:leagueId/notifications', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const limit = Math.min(Number(request.query.limit) || 50, 100);
+  const kinds = request.query.kinds ? String(request.query.kinds).split(',') : null;
+  const notifications = await store.getNotifications(request.params.leagueId, { playerId: request.player.id, limit, kinds });
+  return response.json({ notifications });
+}));
+
+app.get('/api/leagues/:leagueId/notifications/all', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const limit = Math.min(Number(request.query.limit) || 100, 200);
+  const notifications = await store.getNotifications(request.params.leagueId, { limit });
+  return response.json({ notifications });
 }));
 
 /* ── Jack voice (server-side TTS; API key never reaches the browser) ── */
@@ -2042,6 +2201,10 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
             msg: `🏆 WEEK ${week} IS OFFICIAL: ${names} take${winners.length > 1 ? '' : 's'} the $${pot} pot${winners.length > 1 ? ` ($${share} each)` : ''}. Winnings dropped straight into ${winners.length > 1 ? 'their' : 'the'} credit balance. Everybody else — Jack's got jokes waiting.`,
             time: new Date().toISOString(),
           });
+          for (const winner of winners) {
+            if (winner.playerId) await saveNotification(leagueId, { playerId: winner.playerId, kind: 'payout', title: `You won Week ${week}!`, body: `$${share} credited to your balance. Nice work!`, metadata: { week, amount: share } });
+          }
+          await saveNotification(leagueId, { kind: 'payout', title: `Week ${week} payout — $${pot}`, body: `${names} won the Week ${week} pot.`, metadata: { week, amount: pot } });
           actions.push(`Paid Week ${week} pot ($${pot}) to ${names} via credit balance and announced it in chat.`);
         }
       }

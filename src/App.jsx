@@ -40,6 +40,8 @@ const MORE_ITEMS = [
   ['survivor', 'Survivor',         '🛡️', "One team a week. Lose once, you're out."],
   ['props',    'Prop Picks',       '🎯', 'Passing, rushing, first TD & more'],
   ['cfb',      'College FB',       '🏟️', 'CFB rankings, games & pick-em pools'],
+  ['payments', 'My Payments',      '💰', 'Payment history & balance'],
+  ['notifs',   'Notifications',    '🔔', 'Reminders, payouts & messages'],
   ['entries',  'Locked Entries',   '📋', 'View submitted pick sheets'],
   ['players',  'Player Settings',  '👤', 'Preferences & consent'],
   ['bets',     'Side Bets',        '🎲', 'Challenge your crew'],
@@ -105,6 +107,8 @@ function App() {
   const [shareCopied, setShareCopied] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushSupported] = useState(() => 'serviceWorker' in navigator && 'PushManager' in window);
+  const [paymentHistory, setPaymentHistory] = useState(null);
+  const [notifications, setNotifications] = useState([]);
 
   // Prop picks state
   const [propPicks, setPropPicks] = useState({});
@@ -299,6 +303,28 @@ function App() {
       return null;
     }
   }, []);
+
+  const loadPaymentHistory = useCallback(async () => {
+    if (!playerSession.authenticated) return;
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/payment-history`);
+      setPaymentHistory(data);
+    } catch { /* non-fatal */ }
+  }, [playerSession.authenticated]);
+
+  const loadNotifications = useCallback(async () => {
+    if (!playerSession.authenticated) return;
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/notifications`);
+      setNotifications(data.notifications ?? []);
+    } catch { /* non-fatal */ }
+  }, [playerSession.authenticated]);
+
+  // Load payment & notification data when switching to those views
+  useEffect(() => {
+    if (view === 'payments') loadPaymentHistory();
+    if (view === 'notifs') loadNotifications();
+  }, [view, loadPaymentHistory, loadNotifications]);
 
   // Deep-link: open the view specified in ?view= (e.g. invite links)
   useEffect(() => {
@@ -1277,7 +1303,7 @@ function App() {
   };
 
   // Determine active tab (map sub-views to parent)
-  const activeTab = ['live', 'stats', 'season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin'].includes(view) ? 'more' : view;
+  const activeTab = ['live', 'stats', 'season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin', 'payments', 'notifs'].includes(view) ? 'more' : view;
 
   return (
     <div className="app-shell">
@@ -1937,6 +1963,94 @@ function App() {
                 </section>
               )}
             </> : <EmptyState icon="📊" title="No stats yet" text="Stats build as sheets are submitted and weeks get scored." action="Make picks" onAction={() => setView('picks')} />}
+          </StandardPage>
+        )}
+
+        {view === 'payments' && (
+          <StandardPage eyebrow="FINANCES" title="My Payments" subtitle="Your entry fees, payouts, and credit balance — all in one place.">
+            {!playerSession.authenticated ? (
+              <EmptyState icon="🔐" title="Sign in to view" text="Your payment history is available after signing in." action="Sign in" onAction={() => setShowWelcome(true)} />
+            ) : !paymentHistory ? (
+              <p className="muted" style={{ textAlign: 'center', padding: '2rem 0' }}>Loading payment history…</p>
+            ) : (
+              <div className="payment-history-view">
+                <div className="payment-summary-cards">
+                  <div className="payment-summary-card">
+                    <span className="payment-summary-label">Total Paid In</span>
+                    <span className="payment-summary-value negative">${paymentHistory.summary.totalPaid}</span>
+                  </div>
+                  <div className="payment-summary-card">
+                    <span className="payment-summary-label">Total Won</span>
+                    <span className="payment-summary-value positive">${paymentHistory.summary.totalWon}</span>
+                  </div>
+                  <div className="payment-summary-card">
+                    <span className="payment-summary-label">Credit Balance</span>
+                    <span className="payment-summary-value">${paymentHistory.summary.creditBalance}</span>
+                  </div>
+                  <div className="payment-summary-card accent">
+                    <span className="payment-summary-label">Net Position</span>
+                    <span className={`payment-summary-value ${paymentHistory.summary.netPosition >= 0 ? 'positive' : 'negative'}`}>
+                      {paymentHistory.summary.netPosition >= 0 ? '+' : ''}${paymentHistory.summary.netPosition}
+                    </span>
+                  </div>
+                </div>
+                <div className="payment-weeks-bar">
+                  <span>✅ {paymentHistory.summary.totalWeeksPaid} weeks paid</span>
+                  {paymentHistory.summary.totalWeeksUnpaid > 0 && <span className="payment-warning">⚠️ {paymentHistory.summary.totalWeeksUnpaid} unpaid</span>}
+                </div>
+                <h3 className="payment-history-heading">Transaction History</h3>
+                {paymentHistory.history.length === 0 ? (
+                  <p className="muted" style={{ textAlign: 'center' }}>No transactions yet. Submit your first pick sheet to get started.</p>
+                ) : (
+                  <div className="payment-history-list">
+                    {paymentHistory.history.map((item) => (
+                      <div className={`payment-history-row ${item.type}`} key={item.id}>
+                        <span className="payment-history-icon">
+                          {item.type === 'entry_fee' ? '🏈' : item.type === 'payout' ? '🏆' : '💳'}
+                        </span>
+                        <div className="payment-history-detail">
+                          <strong>
+                            {item.type === 'entry_fee' ? `Week ${item.week} Entry Fee` : item.type === 'payout' ? `Week ${item.week} Payout (${item.pool})` : item.reason}
+                          </strong>
+                          <small>
+                            {item.status === 'confirmed' ? '✅ Confirmed' : item.status === 'claimed' ? '⏳ Claimed — awaiting confirmation' : item.status === 'unpaid' ? '⚠️ Unpaid' : item.status === 'paid' ? '✅ Paid' : '✅ Completed'}
+                            {item.at ? ` · ${new Date(item.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
+                          </small>
+                        </div>
+                        <span className={`payment-history-amount ${item.amount >= 0 ? 'positive' : 'negative'}`}>
+                          {item.amount >= 0 ? '+' : ''}${Math.abs(item.amount)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </StandardPage>
+        )}
+
+        {view === 'notifs' && (
+          <StandardPage eyebrow="ACTIVITY" title="Notifications" subtitle="Deadline reminders, payouts, Jack messages, and other league events.">
+            {!playerSession.authenticated ? (
+              <EmptyState icon="🔐" title="Sign in to view" text="Your notification history is available after signing in." action="Sign in" onAction={() => setShowWelcome(true)} />
+            ) : notifications.length === 0 ? (
+              <EmptyState icon="🔔" title="All quiet" text="No notifications yet. As the season gets going, you'll see reminders, payouts, and messages from Jack here." />
+            ) : (
+              <div className="notification-history-list">
+                {notifications.map((n) => (
+                  <div className={`notification-history-row kind-${n.kind}`} key={n.id}>
+                    <span className="notification-icon">
+                      {n.kind === 'pick_reminder' ? '⏰' : n.kind === 'payout' ? '🏆' : n.kind === 'payment_claimed' ? '💸' : n.kind === 'payment_confirmed' ? '✅' : n.kind === 'jack_sms' ? '🎙️' : '🔔'}
+                    </span>
+                    <div className="notification-detail">
+                      <strong>{n.title}</strong>
+                      {n.body && <p>{n.body}</p>}
+                      <time>{new Date(n.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</time>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </StandardPage>
         )}
 

@@ -152,10 +152,21 @@ export class LeagueStore {
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS notifications (
+        id TEXT PRIMARY KEY,
+        league_id TEXT NOT NULL REFERENCES leagues(id) ON DELETE CASCADE,
+        player_id TEXT NOT NULL DEFAULT 'all',
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS idx_credit_league_player ON credit_ledger(league_id, player_id);
       CREATE INDEX IF NOT EXISTS idx_audit_league_time ON audit_logs(league_id, event_at);
       CREATE INDEX IF NOT EXISTS idx_recaps_league_week ON recaps(league_id, week);
       CREATE INDEX IF NOT EXISTS idx_bets_league ON side_bets(league_id);
+      CREATE INDEX IF NOT EXISTS idx_notifications_league_player ON notifications(league_id, player_id, created_at);
     `);
     // Add sheets.claim_json for payment claims (guarded — older DBs lack it).
     const sheetCols = this.db.prepare('PRAGMA table_info(sheets)').all();
@@ -556,6 +567,25 @@ export class LeagueStore {
       this.db.exec('COMMIT');
       return { removed, week, playerCount: this.db.prepare('SELECT COUNT(*) AS count FROM players WHERE league_id = ?').get(leagueId).count };
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  saveNotification(leagueId, notification) {
+    this.db.prepare('INSERT INTO notifications (id, league_id, player_id, kind, title, body, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      notification.id, leagueId, notification.playerId ?? 'all', notification.kind, notification.title, notification.body ?? '', stringify(notification.metadata ?? {}), notification.at
+    );
+    return notification;
+  }
+
+  getNotifications(leagueId, { playerId = null, limit = 50, kinds = null } = {}) {
+    let sql = 'SELECT * FROM notifications WHERE league_id = ?';
+    const params = [leagueId];
+    if (playerId) { sql += ' AND (player_id = ? OR player_id = ?)'; params.push(playerId, 'all'); }
+    if (kinds?.length) { sql += ` AND kind IN (${kinds.map(() => '?').join(',')})`; params.push(...kinds); }
+    sql += ' ORDER BY created_at DESC LIMIT ?';
+    params.push(limit);
+    return this.db.prepare(sql).all(...params).map((row) => ({
+      id: row.id, playerId: row.player_id, kind: row.kind, title: row.title, body: row.body, metadata: parse(row.metadata_json, {}), at: row.created_at,
+    }));
   }
 
   writeAudit(leagueId, event, detail, actor = 'system', metadata = {}, at = new Date().toISOString(), { inTransaction = false } = {}) {

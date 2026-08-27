@@ -514,5 +514,24 @@ export class PostgresLeagueStore {
     });
   }
 
+  async saveNotification(leagueId, notification) {
+    return this.mutateLeague(leagueId, (draft) => {
+      draft.notifications ??= [];
+      draft.notifications.push(clone(notification));
+      // Keep last 500 notifications
+      if (draft.notifications.length > 500) draft.notifications = draft.notifications.slice(-500);
+      return notification;
+    });
+  }
+
+  async getNotifications(leagueId, { playerId = null, limit = 50, kinds = null } = {}) {
+    const state = await this.getLeague(leagueId);
+    if (!state) return [];
+    let notes = clone(state.notifications ?? []);
+    if (playerId) notes = notes.filter((n) => !n.playerId || n.playerId === playerId || n.playerId === 'all');
+    if (kinds?.length) notes = notes.filter((n) => kinds.includes(n.kind));
+    return notes.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? '')).slice(0, limit);
+  }
+
   async close() {}
 }
