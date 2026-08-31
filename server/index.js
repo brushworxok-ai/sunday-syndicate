@@ -325,6 +325,23 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
     avatar: typeof request.body?.avatar === 'string' ? request.body.avatar.slice(0, 200_000) : null,
   };
   await store.createPlayer(request.params.leagueId, player, hashPin(pin));
+
+  // Jack welcomes the new player with a chat message and notification
+  const entryFee = league.settings?.entryFee ?? 20;
+  const welcomeMsg = `Welcome to the league, ${name}! 👑 Here's how it works: pick a winner for every NFL game each week (straight up, no spread). $${entryFee} per week — pay through Cash App or your credit balance. Highest score wins the pot. Tiebreaker = total points in the last game of the week, closest without going over. Sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF}h before the first kickoff. Hit me up anytime — I'm Jack, your AI commissioner. You can tap the 🔊 button on any of my messages to hear me explain it out loud. Let's get it! 🏈`;
+  try {
+    await store.addChatMessage(request.params.leagueId, {
+      id: `chat-welcome-${player.id}`, playerId: null, name: 'Jack 🤖',
+      msg: welcomeMsg, time: new Date().toISOString(),
+    });
+    await saveNotification(request.params.leagueId, {
+      playerId: player.id, kind: 'welcome',
+      title: `Welcome to ${league.name}!`,
+      body: `You're in! Pick winners for every game, $${entryFee}/week. Ask Jack if you have questions.`,
+      metadata: { playerName: name },
+    });
+  } catch (err) { console.error('Welcome message failed (non-fatal):', err.message); }
+
   return response.status(201).json({ playerId: player.id, name: player.name });
 }));
 
