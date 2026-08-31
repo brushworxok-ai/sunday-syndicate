@@ -135,6 +135,7 @@ const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_COOLDOWN_MS = 60 * 1000; // 1 minute between sends
 const OTP_LAST_SENT = new Map(); // rate-limit per phone
+const VERIFIED_PHONES = new Map(); // key: phoneE164, value: timestamp — server-side OTP verification record
 
 // Clean expired OTPs every 2 minutes
 setInterval(() => {
@@ -144,6 +145,10 @@ setInterval(() => {
   }
   for (const [key, ts] of OTP_LAST_SENT) {
     if (now - ts > OTP_COOLDOWN_MS * 2) OTP_LAST_SENT.delete(key);
+  }
+  // Verified phones expire after 10 minutes (registration should happen right after OTP)
+  for (const [key, ts] of VERIFIED_PHONES) {
+    if (now - ts > 10 * 60 * 1000) VERIFIED_PHONES.delete(key);
   }
 }, 120_000);
 
@@ -203,8 +208,9 @@ app.post('/api/otp/verify', (request, response) => {
   if (entry.code !== code) {
     return response.status(401).json({ error: `Wrong code. ${OTP_MAX_ATTEMPTS - entry.attempts} attempts left.` });
   }
-  // Success — mark phone as verified
+  // Success — mark phone as verified server-side (used during registration)
   OTP_STORE.delete(phoneE164);
+  VERIFIED_PHONES.set(phoneE164, Date.now());
   return response.json({ verified: true, phoneE164 });
 });
 
@@ -307,8 +313,8 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
     return response.status(409).json({ error: 'That name is taken in this league. Add a last initial or nickname.' });
   }
 
-  // OTP must have been verified for this phone before registration completes
-  const otpVerified = request.body?.otpVerified === true;
+  // OTP must have been verified for this phone before registration completes (server-side check)
+  const otpVerified = VERIFIED_PHONES.has(phoneE164);
   const at = new Date().toISOString();
   const player = {
     id: `player-${randomUUID()}`,
@@ -325,6 +331,7 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
     avatar: typeof request.body?.avatar === 'string' ? request.body.avatar.slice(0, 200_000) : null,
   };
   await store.createPlayer(request.params.leagueId, player, hashPin(pin));
+  VERIFIED_PHONES.delete(phoneE164); // consumed — can't be reused for another registration
 
   // Jack welcomes the new player with a chat message and notification
   const entryFee = league.settings?.entryFee ?? 20;
@@ -461,11 +468,11 @@ app.post('/api/side-bets/:betId/settle', auth.requireAdmin, asyncRoute(async (re
   return response.json(bet);
 }));
 
-app.post('/api/leagues/:leagueId/chat', asyncRoute(async (request, response) => {
-  const name = String(request.body?.name ?? '').trim().slice(0, 40);
+app.post('/api/leagues/:leagueId/chat', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const name = String(request.player.name ?? '').trim().slice(0, 40);
   const msg = String(request.body?.msg ?? '').trim().slice(0, 400);
-  if (!name || !msg) return response.status(422).json({ error: 'Name and message are required.' });
-  const message = { id: `chat-${randomUUID()}`, playerId: request.body?.playerId ?? null, name, msg, time: new Date().toISOString() };
+  if (!name || !msg) return response.status(422).json({ error: 'Message is required.' });
+  const message = { id: `chat-${randomUUID()}`, playerId: request.player.id, name, msg, time: new Date().toISOString() };
   await store.addChatMessage(request.params.leagueId, message);
   return response.status(201).json(message);
 }));
@@ -815,8 +822,8 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
   }
 }
 
-app.post('/api/leagues/:leagueId/assistant', asyncRoute(async (request, response) => {
-  const result = await askJackAssistant({ leagueId: request.params.leagueId, question: request.body?.question, playerId: request.body?.playerId ?? null, history: request.body?.history });
+app.post('/api/leagues/:leagueId/assistant', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const result = await askJackAssistant({ leagueId: request.params.leagueId, question: request.body?.question, playerId: request.player.id, history: request.body?.history });
   if (result.error) return response.status(result.status ?? 422).json({ error: result.error });
   return response.json(result);
 }));

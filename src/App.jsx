@@ -2073,7 +2073,7 @@ function App() {
         {view === 'entries' && (
           <StandardPage eyebrow={weekLabel.toUpperCase()} title="Locked entries" subtitle="Picks remain hidden here; the commissioner can score them after results arrive.">
             {weekSheets.length ? <div className="entry-list">{weekSheets.map((sheet, index) => (
-              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{Object.keys(sheet.picks).length} picks · TB {sheet.tiebreaker}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className="paid-pill">PAID</b></article>
+              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{Object.keys(sheet.picks).length} picks · TB {sheet.tiebreaker}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time>{sheet.paid && <b className="paid-pill">PAID</b>}</article>
             ))}</div> : <EmptyState icon="◎" title="The board is quiet" text="Be the first entry on the sheet this week." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}
