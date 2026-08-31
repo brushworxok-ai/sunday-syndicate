@@ -831,6 +831,7 @@ function App() {
     try {
       const response = await fetch('/api/gemini', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, payload }),
       });
@@ -926,6 +927,7 @@ function App() {
     try {
       const response = await fetch('/api/tts', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text.slice(0, 1200) }),
       });

@@ -2156,7 +2156,7 @@ app.post('/api/tts', playerAuth.requirePlayer, asyncRoute(async (request, respon
   }
 }));
 
-app.post('/api/gemini', asyncRoute(async (request, response) => {
+app.post('/api/gemini', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
   const geminiKey = await getGeminiKey();
   if (!geminiKey.value) return response.status(503).json({ error: 'Gemini is not configured. Add GEMINI_API_KEY to .env and restart the server.' });
   const { generateGeminiText } = await import('./geminiService.js');
