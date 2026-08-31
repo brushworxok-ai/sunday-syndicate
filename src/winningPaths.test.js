@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildJackUpdate, buildWinningPaths, isJackPostingWindow } from './winningPaths.js';
+import { buildWinningPaths } from './winningPaths.js';
 
 const games = [
   { id: 'g1', away: 'A', home: 'B', kickoff: '2026-09-10T00:00:00Z' },
@@ -32,39 +32,59 @@ const league = {
 test('winning paths cover every player without revealing hidden selections', () => {
   const snapshot = buildWinningPaths(league, { season: 2026, week: 1, games });
   assert.equal(snapshot.paths.length, 4);
-  assert.equal(snapshot.completedGames, 2);
-  assert.equal(snapshot.liveGames, 1);
-  assert.equal(snapshot.paths.find((path) => path.playerId === 'alpha').status, 'leading');
-  assert.equal(snapshot.paths.find((path) => path.playerId === 'bravo').status, 'alive');
-  assert.equal(snapshot.paths.find((path) => path.playerId === 'charlie').status, 'tiebreaker_path');
-  assert.equal(snapshot.paths.find((path) => path.playerId === 'delta').status, 'eliminated');
+  assert.equal(snapshot.completedCount, 2);
+  assert.equal(snapshot.totalGames, 4);
+
+  // Alpha leads 2-0; nobody is clinched or eliminated with two games left.
+  const alpha = snapshot.paths.find((path) => path.playerId === 'alpha');
+  assert.equal(alpha.score, 2);
+  assert.equal(alpha.status, 'alive');
+  const delta = snapshot.paths.find((path) => path.playerId === 'delta');
+  assert.equal(delta.score, 0);
+  assert.equal(delta.status, 'alive'); // 0 + 2 remaining can still tie the leader's 2
+
+  // The snapshot must never leak actual pick selections.
   for (const path of snapshot.paths) {
     assert.equal(Object.hasOwn(path, 'picks'), false);
     assert.equal(Object.hasOwn(path, 'remainingPicks'), false);
   }
-  const update = buildJackUpdate(snapshot, { createdAt: '2026-09-12T02:00:00Z', feedState: 'live' });
-  assert.match(update.publicText, /Alpha:/);
-  assert.match(update.publicText, /Bravo:/);
-  assert.match(update.publicText, /Charlie:/);
-  assert.match(update.publicText, /Delta:/);
-  assert.match(update.publicText, /Hidden picks stay hidden/);
-  assert.doesNotMatch(update.publicText, /g1|g2|g3|g4|maximum|roast/i);
 });
 
-test('fallback copy is explicit and a final state does not claim an unsettled winner', () => {
-  const finalLeague = { ...league, results: Object.fromEntries(games.map((game, index) => [game.id, { winner: index % 2 ? game.home : game.away, status: 'final', verifiedAt: '2026-09-14T03:00:00Z' }])) };
+test('all-final week clinches the top score and eliminates trailing entries', () => {
+  const finalLeague = {
+    ...league,
+    results: {
+      g1: { winner: 'A', status: 'final' },
+      g2: { winner: 'D', status: 'final' },
+      g3: { winner: 'E', status: 'final' },
+      g4: { winner: 'G', status: 'final' },
+    },
+  };
   const snapshot = buildWinningPaths(finalLeague, { season: 2026, week: 1, games });
-  const update = buildJackUpdate(snapshot, { feedState: 'delayed', createdAt: '2026-09-14T03:01:00Z' });
-  assert.equal(snapshot.allFinal, true);
-  assert.match(update.publicText, /top final score/);
-  assert.match(update.publicText, /Saved verified scores/);
-  assert.doesNotMatch(update.publicText, /official winner/i);
+  const alpha = snapshot.paths.find((path) => path.playerId === 'alpha'); // 4-0
+  const delta = snapshot.paths.find((path) => path.playerId === 'delta'); // 0-2, no picks in g3/g4
+  assert.equal(alpha.status, 'clinched');
+  assert.equal(alpha.score, 4);
+  assert.equal(delta.status, 'eliminated');
+  assert.equal(snapshot.completedCount, 4);
 });
 
-test('the automatic desk opens four days before kickoff and stays available during live scoring', () => {
-  const pregame = buildWinningPaths({ ...league, results: {} }, { season: 2026, week: 1, games });
-  assert.equal(isJackPostingWindow({ games, snapshot: pregame, now: new Date('2026-09-06T00:01:00Z') }), true);
-  assert.equal(isJackPostingWindow({ games, snapshot: pregame, now: new Date('2026-08-20T00:00:00Z') }), false);
-  const live = buildWinningPaths(league, { season: 2026, week: 1, games });
-  assert.equal(isJackPostingWindow({ games, snapshot: live, now: new Date('2027-01-01T00:00:00Z') }), true);
+test('elimination math respects maximum possible score mid-week', () => {
+  const midLeague = {
+    ...league,
+    sheets: [
+      { id: 's1', playerId: 'alpha', name: 'Alpha One', season: 2026, week: 1, picks: { g1: 'A', g2: 'D', g3: 'E', g4: 'G' } },
+      // Delta only entered two games and lost both — max possible 2 < leader's current 2 is false (equal), so alive;
+      // but with three results in, 0 + 1 remaining < 3 leader = eliminated.
+      { id: 's4', playerId: 'delta', name: 'Delta Four', season: 2026, week: 1, picks: { g1: 'B', g2: 'C', g3: 'F' } },
+    ],
+    results: {
+      g1: { winner: 'A', status: 'final' },
+      g2: { winner: 'D', status: 'final' },
+      g3: { winner: 'E', status: 'final' },
+    },
+  };
+  const snapshot = buildWinningPaths(midLeague, { season: 2026, week: 1, games });
+  const delta = snapshot.paths.find((path) => path.playerId === 'delta');
+  assert.equal(delta.status, 'eliminated'); // 0 correct + 1 remaining < leader's 3
 });

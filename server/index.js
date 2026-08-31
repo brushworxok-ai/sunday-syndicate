@@ -50,13 +50,22 @@ const getGeminiKey = makeGeminiKeyResolver(store);
 await store.seedDemo();
 
 const isProduction = process.env.NODE_ENV === 'production';
+const isDeployed = isProduction || process.env.VERCEL === '1' || Boolean(process.env.REPL_ID || process.env.REPLIT_DEPLOYMENT);
+// Fail fast in any deployed environment: never run with development secrets in production.
+if (isDeployed && !process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET must be set in production — refusing to start with the development fallback secret.');
+}
+if (isDeployed && !process.env.ADMIN_PASSWORD) {
+  throw new Error('ADMIN_PASSWORD must be set in production — refusing to start without a commissioner password.');
+}
+const sessionSecret = process.env.SESSION_SECRET || 'development-only-session-secret-change-me';
 const secureCookies = process.env.VERCEL === '1' || (isProduction && String(process.env.APP_BASE_URL).startsWith('https://'));
 const auth = createAdminAuth({
   password: process.env.ADMIN_PASSWORD || (isProduction ? '' : 'admin123'),
-  secret: process.env.SESSION_SECRET || 'development-only-session-secret-change-me',
+  secret: sessionSecret,
   secure: secureCookies,
 });
-const playerAuth = createPlayerAuth({ store, secret: `${process.env.SESSION_SECRET || 'development-only-session-secret-change-me'}:player`, secure: secureCookies });
+const playerAuth = createPlayerAuth({ store, secret: `${sessionSecret}:player`, secure: secureCookies });
 
 const asyncRoute = (handler) => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
 const leagueId = 'league-sunday-syndicate-demo';
@@ -70,7 +79,24 @@ async function saveNotification(lid, { playerId = 'all', kind, title, body = '',
 
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
-app.use(helmet({ contentSecurityPolicy: false }));
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"], // React inline style attributes
+      fontSrc: ["'self'", 'data:'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://a.espncdn.com'], // team logos + uploaded avatars
+      connectSrc: ["'self'"],
+      mediaSrc: ["'self'", 'blob:'], // Jack TTS audio playback
+      workerSrc: ["'self'"], // PWA service workers
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'self'"],
+    },
+  },
+}));
 app.use(express.json({ limit: '64kb' }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));

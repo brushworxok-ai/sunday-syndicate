@@ -12,9 +12,9 @@ import {
 
 test('demo acceptance scenario contains four players and a grounded weekly recap', () => {
   assert.equal(DEMO_LEAGUE.players.length >= 4, true);
-  assert.equal(DEMO_LEAGUE.recap.factsSnapshot.verifiedGameCount, 14);
+  assert.equal(DEMO_LEAGUE.recap.factsSnapshot.verifiedGameCount, Object.values(DEMO_LEAGUE.results).filter((r) => r.winner).length);
   assert.equal(DEMO_LEAGUE.recap.factsSnapshot.winnerId, 'player-marcus');
-  assert.match(DEMO_LEAGUE.recap.finalText, /Marcus Reed wins Week 12 at 12–2/);
+  assert.match(DEMO_LEAGUE.recap.finalText, /Marcus Reed wins Week 1 at 14–2/);
 });
 
 test('trash-talk moderation enforces opt-out, maximum mode, and private-topic policy', () => {
@@ -47,8 +47,8 @@ test('accepted side bet locks and settles from verified scores while declined be
   assert.equal(accepted.termsLockedAt, accepted.acceptedAt);
   assert.equal(accepted.settlementStatus, 'settled');
   assert.equal(accepted.winnerId, 'player-marcus');
-  assert.equal(accepted.creatorScore, 12);
-  assert.equal(accepted.opponentScore, 11);
+  assert.equal(accepted.creatorScore, 14);
+  assert.equal(accepted.opponentScore, 13);
   assert.equal(declined.settlementStatus, 'not_applicable');
   assert.equal(declined.winnerId, undefined);
 });

@@ -599,15 +599,33 @@ export function formatCountdown(deadline, now = new Date()) {
   return `${Math.max(minutes, 1)}m`;
 }
 
-/** Check if a game has kicked off (for pick-locking) */
+/** Check if a game has kicked off (for pick-locking). Kickoff strings are
+ * stored as naive ET wall-clock times — anchor them to the correct Eastern
+ * offset so the comparison is timezone-safe on any server or device. */
 export function hasGameStarted(game, now = new Date()) {
-  if (!game.kickoff || game.kickoff.includes('TBA')) return false;
-  return now >= new Date(game.kickoff);
+  // TBA games carry a midnight placeholder kickoff — never treat them as started;
+  // the weekly deadline (isWeekLocked) still governs pick locking for those.
+  if (!game.kickoff || game.kickoff.includes('TBA') || game.time?.includes('TBA')) return false;
+  const hasZone = /(?:[+-]\d{2}:\d{2}|Z)$/.test(game.kickoff);
+  const stamp = hasZone ? game.kickoff : `${game.kickoff}${etOffset(game.date ?? game.kickoff.slice(0, 10))}`;
+  return now >= new Date(stamp);
 }
 
 /** Get all teams on bye for a given week */
 export function getByeTeams(weekNum) {
   return getWeek(weekNum)?.byeTeams ?? [];
+}
+
+/** Season-aware game lookup — games exist only for the schedule's own season. */
+export function getGamesForWeek(season, weekNum) {
+  if (Number(season) !== SEASON) return [];
+  return getGames(weekNum);
+}
+
+/** Two-color identity for a team: [accent, dark base]; safe fallback for unknown teams. */
+export function getTeamColors(abbr) {
+  const primary = TEAM_COLORS[abbr];
+  return primary ? [primary, '#101820'] : ['#0c2c1c', '#c8f75a'];
 }
 
 // Backward compatibility — export current week's games as GAMES

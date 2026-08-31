@@ -75,5 +75,3 @@ export function buildWinningPaths(league, weekContext) {
   return { week, paths, completedCount, totalGames };
 }
 
-export function buildJackUpdate() { return null; }
-export function isJackPostingWindow() { return false; }
