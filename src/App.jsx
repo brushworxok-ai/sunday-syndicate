@@ -133,6 +133,7 @@ function App() {
   }]);
   const assistantEndRef = useRef(null);
   const [jackAvatarState, setJackAvatarState] = useState('idle');
+  const [jackVoiceConsent, setJackVoiceConsent] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState(WEEK);
   const [liveScores, setLiveScores] = useState({ week: null, anyLive: false, scores: [] });
   const [nflNews, setNflNews] = useState({ items: [] });
@@ -804,6 +805,15 @@ function App() {
     finally { setServerBusy(''); }
   };
 
+  const chatEndRef = useRef(null);
+
+  // Auto-scroll chat to bottom when messages change
+  useEffect(() => {
+    if (view === 'chat' && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMsgs, view]);
+
   const sendChat = async () => {
     if (!chatName.trim()) return notify('Add your chat name first.');
     if (!chatInput.trim()) return;
@@ -885,8 +895,8 @@ function App() {
       setAssistantMessages((prev) => [...prev, reply]);
       setJackAvatarState('talking');
       setTimeout(() => { assistantEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 100);
-      // Auto-speak Jack's response
-      readAssistantMessage(data.text);
+      // Auto-speak only after user has opted in by tapping the speaker button
+      if (jackVoiceConsent) readAssistantMessage(data.text);
     } catch (error) {
       setAssistantMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', text: `Sorry, I couldn't answer that right now. ${error.message}` }]);
       setJackAvatarState('error');
@@ -2173,7 +2183,7 @@ function App() {
                 <div className="form-pair"><label>From<input value={playerSession.name ?? 'Sign in first'} disabled /></label><label>Opponent<select value={betForm.opponentId} onChange={(event) => setBetForm((current) => ({ ...current, opponentId: event.target.value }))}>{proofLeague.players.filter((player) => player.id !== playerSession.playerId).map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label></div>
                 <label>Event<input value={betForm.event} maxLength="180" onChange={(event) => setBetForm((current) => ({ ...current, event: event.target.value }))} /></label>
                 <label>Terms<textarea value={betForm.terms} maxLength="300" onChange={(event) => setBetForm((current) => ({ ...current, terms: event.target.value }))} /></label>
-                <div className="form-pair"><label>Stake type<select value={betForm.stakeType} onChange={(event) => setBetForm((current) => ({ ...current, stakeType: event.target.value }))}><option value="virtual_tokens">Virtual tokens</option><option value="points">League points</option><option value="bragging_rights">Bragging rights</option></select></label><label>Amount<input type="number" min="1" max="10000" value={betForm.stakeAmount} onChange={(event) => setBetForm((current) => ({ ...current, stakeAmount: event.target.value }))} /></label></div>
+                <div className="form-pair"><label>Stake type<select value={betForm.stakeType} onChange={(event) => setBetForm((current) => ({ ...current, stakeType: event.target.value }))}><option value="virtual_tokens">Virtual tokens</option><option value="points">League points</option><option value="bragging_rights">Bragging rights</option></select></label><label>Amount<input type="number" min="1" max="10000" value={betForm.stakeAmount} onChange={(event) => setBetForm((current) => ({ ...current, stakeAmount: Number(event.target.value) || 0 }))} /></label></div>
                 <label>Stake label<input value={betForm.stakeLabel} maxLength="100" onChange={(event) => setBetForm((current) => ({ ...current, stakeLabel: event.target.value }))} /></label>
                 <label>Optional message<input value={betForm.optionalMessage} maxLength="240" placeholder="Keep it friendly…" onChange={(event) => setBetForm((current) => ({ ...current, optionalMessage: event.target.value }))} /></label>
                 <button className="button button-primary full" disabled={!playerSession.authenticated || serverBusy === 'create-bet'}>{serverBusy === 'create-bet' ? 'Sending…' : playerSession.authenticated ? 'Send private proposal →' : 'Player sign-in required'}</button>
@@ -2295,6 +2305,7 @@ function App() {
               <section className="chat-panel">
                 <div className="messages">
                   {chatMsgs.length ? chatMsgs.map((message) => <article className={message.name === chatName ? 'mine' : ''} key={message.id}><div><strong>{message.name}</strong><time>{new Date(message.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></div><p>{message.msg}</p></article>) : <div className="empty-chat"><span>"</span><p>No messages yet. The group chat is showing remarkable restraint.</p></div>}
+                  <div ref={chatEndRef} />
                 </div>
                 <div className="composer">
                   <input className="name-input" value={chatName} onChange={(event) => setChatName(event.target.value)} placeholder="Your name" maxLength="40" readOnly={playerSession.authenticated && Boolean(playerSession.name)} style={playerSession.authenticated ? { opacity: 0.6, cursor: 'default' } : {}} />
@@ -2417,7 +2428,7 @@ function App() {
                       </div>
                       <div className="cfb-tb-row">
                         <label>Tiebreaker — total points in {cfbTbGame ? `${cfbTbGame.away.abbr} @ ${cfbTbGame.home.abbr}` : 'the last game'}
-                          <input type="number" min="0" max="200" inputMode="numeric" value={cfbTiebreaker} onChange={(e) => setCfbTiebreaker(e.target.value)} placeholder="e.g. 52" />
+                          <input type="number" min="0" max="250" inputMode="numeric" value={cfbTiebreaker} onChange={(e) => setCfbTiebreaker(e.target.value)} placeholder="e.g. 52" />
                         </label>
                       </div>
                       <button className="button button-primary full" type="button" disabled={serverBusy === 'cfb-picks'} onClick={submitCfbPicks}>
@@ -2724,7 +2735,7 @@ function App() {
               <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Payment Center — {weekLabel}</h2></div></div>
               <p>Who's in, who says they paid, and who's missing before the deadline{deadlineCountdown ? ` (${deadlineCountdown})` : ''}. One tap confirms a claim.</p>
               {(() => {
-                const unpaidSheets = (sheets ?? []).filter((s) => !s.paid);
+                const unpaidSheets = (sheets ?? []).filter((s) => !s.paid && s.week === selectedWeek);
                 const submittedIds = new Set(weekSheets.map((s) => s.playerId).filter(Boolean));
                 const missing = (serverLeague?.players ?? []).filter((p) => !submittedIds.has(p.id));
                 return (
@@ -2827,7 +2838,7 @@ function App() {
                   <div className="msg-bubble">
                     <p>{msg.text}</p>
                     {msg.role === 'assistant' && msg.id !== 'assistant-welcome' && (
-                      <button className="msg-speak" type="button" onClick={() => assistantSpeaking ? stopSpeaking() : readAssistantMessage(msg.text)} title={assistantSpeaking ? 'Stop' : 'Listen'}>
+                      <button className="msg-speak" type="button" onClick={() => { if (!jackVoiceConsent) setJackVoiceConsent(true); assistantSpeaking ? stopSpeaking() : readAssistantMessage(msg.text); }} title={assistantSpeaking ? 'Stop' : 'Listen'}>
                         {assistantSpeaking ? '■' : '🔊'}
                       </button>
                     )}

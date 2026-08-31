@@ -137,6 +137,21 @@ const OTP_COOLDOWN_MS = 60 * 1000; // 1 minute between sends
 const OTP_LAST_SENT = new Map(); // rate-limit per phone
 const VERIFIED_PHONES = new Map(); // key: phoneE164, value: timestamp — server-side OTP verification record
 
+/* ── Per-player rate limiters for AI/TTS endpoints ── */
+const ASSISTANT_RATE = new Map(); // key: playerId, value: { count, windowStart }
+const TTS_RATE = new Map(); // key: playerId, value: { count, windowStart }
+function checkPlayerRate(map, playerId, maxRequests, windowMs) {
+  const now = Date.now();
+  const entry = map.get(playerId);
+  if (!entry || now - entry.windowStart > windowMs) {
+    map.set(playerId, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= maxRequests) return false;
+  entry.count += 1;
+  return true;
+}
+
 // Clean expired OTPs every 2 minutes
 setInterval(() => {
   const now = Date.now();
@@ -149,6 +164,13 @@ setInterval(() => {
   // Verified phones expire after 10 minutes (registration should happen right after OTP)
   for (const [key, ts] of VERIFIED_PHONES) {
     if (now - ts > 10 * 60 * 1000) VERIFIED_PHONES.delete(key);
+  }
+  // Clean expired rate-limit windows
+  for (const [key, entry] of ASSISTANT_RATE) {
+    if (now - entry.windowStart > 3600_000) ASSISTANT_RATE.delete(key);
+  }
+  for (const [key, entry] of TTS_RATE) {
+    if (now - entry.windowStart > 60_000) TTS_RATE.delete(key);
   }
 }, 120_000);
 
@@ -360,7 +382,7 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   // Signed-in players may submit unpaid and settle from credit or Cash App after;
   // anonymous sheets still need the payment confirmation checkbox.
   if (!input.paid && !input.playerId) return response.status(422).json({ error: 'Payment confirmation is required.' });
-  if (!Number.isInteger(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0 || Number(input.tiebreaker) > 200) return response.status(422).json({ error: 'Tiebreaker must be a whole number between 0 and 200 (total points in the tiebreaker game).' });
+  if (!Number.isInteger(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0 || Number(input.tiebreaker) > 250) return response.status(422).json({ error: 'Tiebreaker must be a whole number between 0 and 250 (total points in the tiebreaker game).' });
   const submittedWeek = Number(input.week) || getCurrentWeek();
   const weekGames = getGames(submittedWeek);
   if (!weekGames.length) return response.status(422).json({ error: `No games found for Week ${submittedWeek}.` });
@@ -823,6 +845,9 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
 }
 
 app.post('/api/leagues/:leagueId/assistant', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  if (!checkPlayerRate(ASSISTANT_RATE, request.player.id, 20, 3600_000)) {
+    return response.status(429).json({ error: 'Easy, champ — 20 questions per hour. Try again in a bit.' });
+  }
   const result = await askJackAssistant({ leagueId: request.params.leagueId, question: request.body?.question, playerId: request.player.id, history: request.body?.history });
   if (result.error) return response.status(result.status ?? 422).json({ error: result.error });
   return response.json(result);
@@ -1967,6 +1992,7 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
     pool: ['weekly', 'survivor', 'season'].includes(request.body?.pool) ? request.body.pool : 'weekly',
     amount,
     winnerNames: Array.isArray(request.body?.winnerNames) ? request.body.winnerNames.map((n) => String(n).slice(0, 50)).slice(0, 10) : [],
+    winnerPlayerIds: Array.isArray(request.body?.winnerPlayerIds) ? request.body.winnerPlayerIds.map((id) => String(id).slice(0, 80)).slice(0, 10) : [],
     method: String(request.body?.method ?? 'cash').slice(0, 30),
     note: String(request.body?.note ?? '').slice(0, 200),
     paidAt: new Date().toISOString(),
@@ -1986,10 +2012,12 @@ app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyn
 
   // Gather all payment events for this player
   const mySheets = (league.sheets ?? []).filter((s) => s.playerId === playerId);
-  const myPayouts = (league.payouts ?? []).filter((p) => (p.winnerNames ?? []).some((n) => {
+  const myPayouts = (league.payouts ?? []).filter((p) => {
+    // Match by playerId first (reliable), fall back to exact name match
+    if ((p.winnerPlayerIds ?? []).includes(playerId)) return true;
     const player = (league.players ?? []).find((pl) => pl.id === playerId);
-    return player && n.toLowerCase().includes(player.name.split(' ')[0].toLowerCase());
-  }));
+    return player && (p.winnerNames ?? []).some((n) => n.toLowerCase() === player.name.toLowerCase());
+  });
   const myCredits = (league.creditLedger ?? []).filter((c) => c.playerId === playerId);
 
   const history = [];
@@ -2110,7 +2138,10 @@ app.get('/api/leagues/:leagueId/notifications/all', auth.requireAdmin, asyncRout
 }));
 
 /* ── Jack voice (server-side TTS; API key never reaches the browser) ── */
-app.post('/api/tts', asyncRoute(async (request, response) => {
+app.post('/api/tts', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  if (!checkPlayerRate(TTS_RATE, request.player.id, 10, 60_000)) {
+    return response.status(429).json({ error: 'Voice limit reached — 10 per minute. The browser voice will fill in.', fallback: 'browser' });
+  }
   const { createJackTtsProvider } = await import('./ttsService.js');
   const provider = createJackTtsProvider(process.env);
   if (!provider.configured) return response.status(503).json({ error: 'Server voice is not configured. The browser voice fallback will be used.', fallback: 'browser' });
@@ -2153,6 +2184,18 @@ app.get('/api/push/vapid-public', (_request, response) => {
 });
 
 // Save push subscription for a player
+app.post('/api/leagues/:leagueId/push/subscribe', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
+  const sub = request.body?.subscription;
+  if (!sub?.endpoint) return response.status(400).json({ error: 'Invalid subscription.' });
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const pushSubs = league?.settings?.pushSubscriptions ?? {};
+  pushSubs[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
+  await store.updateLeagueSettings(request.params.leagueId, { ...(league?.settings ?? {}), pushSubscriptions: pushSubs });
+  response.json({ ok: true });
+}));
+// Legacy route for existing clients
 app.post('/api/push/subscribe', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
   if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
   const sub = request.body?.subscription;
@@ -2372,7 +2415,13 @@ const cronAuthorized = (request) => {
   return Boolean(request.get('x-vercel-cron')) || !isProduction;
 };
 
-app.all(['/api/cron/auto-pilot', '/api/cron/jack-live-desk'], asyncRoute(async (request, response) => {
+app.post(['/api/cron/auto-pilot', '/api/cron/jack-live-desk'], asyncRoute(async (request, response) => {
+  if (!cronAuthorized(request)) return response.status(401).json({ error: 'Unauthorized.' });
+  const result = await runAutoPilot({ source: 'cron' });
+  return response.json(result);
+}));
+// Vercel cron sends GET — support both
+app.get(['/api/cron/auto-pilot', '/api/cron/jack-live-desk'], asyncRoute(async (request, response) => {
   if (!cronAuthorized(request)) return response.status(401).json({ error: 'Unauthorized.' });
   const result = await runAutoPilot({ source: 'cron' });
   return response.json(result);
