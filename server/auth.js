@@ -67,7 +67,7 @@ export function createPlayerAuth({ store, secret, secure = false, allowDemoCrede
       playerId: player.id,
       leagueId: player.leagueId,
       credentialUpdatedAt: credential.updatedAt,
-      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+      expiresAt: Date.now() + 270 * 24 * 60 * 60 * 1000,
     })).toString('base64url');
     return `${payload}.${sign(payload)}`;
   };
@@ -103,7 +103,7 @@ export function createPlayerAuth({ store, secret, secure = false, allowDemoCrede
         });
       }
       if (!credential || !player || !verifyPin(request.body?.pin ?? '', credential.pinHash)) return response.status(401).json({ error: 'Invalid player or PIN.' });
-      response.setHeader('Set-Cookie', cookie(createToken(player, credential), 30 * 24 * 60 * 60));
+      response.setHeader('Set-Cookie', cookie(createToken(player, credential), 270 * 24 * 60 * 60));
       return response.json({ authenticated: true, role: 'player', playerId: player.id, name: player.name, account: player.account });
     },
     logout(_request, response) {
