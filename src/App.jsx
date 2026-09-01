@@ -23,6 +23,7 @@ import { deriveSurvivorPool, findTeamGame } from './survivor.js';
 import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
 import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebreaker.js';
 import { creditBalance } from './credits.js';
+import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
@@ -111,6 +112,7 @@ function App() {
   const [notifications, setNotifications] = useState([]);
   const [groupTextMsg, setGroupTextMsg] = useState('');
   const [groupTextMode, setGroupTextMode] = useState('individual');
+  const [soundEnabled, setSoundEnabled] = useState(() => { try { return localStorage.getItem('sfx') !== 'off'; } catch { return true; } });
 
   // Prop picks state
   const [propPicks, setPropPicks] = useState({});
@@ -1079,6 +1081,27 @@ function App() {
     setJackAvatarState('idle');
     stopJackLevelLoop();
   };
+
+  // Keep the sfx module + saved preference in sync with the toggle
+  useEffect(() => {
+    setSfxEnabled(soundEnabled);
+    try { localStorage.setItem('sfx', soundEnabled ? 'on' : 'off'); } catch { /* private mode */ }
+  }, [soundEnabled]);
+
+  // One global listener plays a short click on any button press (no per-button wiring)
+  useEffect(() => {
+    const handler = (event) => {
+      const el = event.target.closest?.('button, a.button, .cfb-pick-team, .avatar-pick');
+      if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return;
+      unlockSfx(); // resume audio inside the gesture even if muted, so unmuting later works
+      if (!isSfxEnabled()) return;
+      if (el.closest('.team-buttons') || el.classList.contains('cfb-pick-team') || el.classList.contains('avatar-pick')) pickSound();
+      else if (el.classList.contains('button-primary')) primarySound();
+      else tapSound();
+    };
+    document.addEventListener('pointerdown', handler, true);
+    return () => document.removeEventListener('pointerdown', handler, true);
+  }, []);
 
   const JACK_QUICK_PROMPTS = [
     "What are the standings?",
@@ -2351,6 +2374,14 @@ function App() {
                 </div>
               </section>
             )}
+
+            <section className="device-prefs">
+              <button type="button" className={`sound-toggle ${soundEnabled ? 'on' : ''}`} onClick={() => { setSoundEnabled((v) => !v); unlockSfx(); if (!soundEnabled) tapSound(); }} aria-pressed={soundEnabled}>
+                <span className="sound-toggle-icon">{soundEnabled ? '🔊' : '🔇'}</span>
+                <span className="sound-toggle-label"><strong>Button sounds</strong><small>{soundEnabled ? 'On — you\'ll hear a tap on every button' : 'Off — buttons are silent'}</small></span>
+                <span className="sound-toggle-switch" aria-hidden="true" />
+              </button>
+            </section>
 
             <section className="crew-roster">
               <div className="proof-heading"><div><span className="proof-step">THE CREW</span><h2>Everyone in the league</h2></div><StatusPill state="pass">{(proofLeague.players ?? []).length} players</StatusPill></div>
