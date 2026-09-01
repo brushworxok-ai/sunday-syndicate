@@ -43,7 +43,7 @@ const MORE_ITEMS = [
   ['payments', 'My Payments',      '💰', 'Payment history & balance'],
   ['notifs',   'Notifications',    '🔔', 'Reminders, payouts & messages'],
   ['entries',  'Locked Entries',   '📋', 'View submitted pick sheets'],
-  ['players',  'Player Settings',  '👤', 'Preferences & consent'],
+  ['players',  'My Profile',       '👤', 'Your pic, the crew & settings'],
   ['bets',     'Side Bets',        '🎲', 'Challenge your crew'],
   ['ai',       'AI Tools',         '✦',  'Gemini-powered insights'],
   ['rules',    'House Rules',      '📖', 'The fine print'],
@@ -696,6 +696,11 @@ function App() {
     [serverLeague, playerSession],
   );
 
+  const currentPlayer = useMemo(
+    () => (playerSession.playerId ? (proofLeague.players ?? []).find((p) => p.id === playerSession.playerId) : null),
+    [proofLeague, playerSession],
+  );
+
   const payCfbWithCredit = async () => {
     if (!cfbPool) return;
     setServerBusy('cfb-credit-pay');
@@ -928,6 +933,37 @@ function App() {
   const jackAudioRef = useRef(null);
   const jackAudioCtxRef = useRef(null);
   const jackLevelRafRef = useRef(0);
+  const audioUnlockedRef = useRef(false);
+
+  /* iOS blocks audio unless it starts inside a user gesture and the AudioContext
+     is resumed by that gesture. Prime both the WebAudio context (silent buffer)
+     and the speech engine the first time the user taps anything audio-related. */
+  const isIOS = useMemo(() => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1), []);
+  const unlockAudio = () => {
+    try {
+      const ctx = jackAudioCtxRef.current ?? new (window.AudioContext || window.webkitAudioContext)();
+      jackAudioCtxRef.current = ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      if (!audioUnlockedRef.current) {
+        const buffer = ctx.createBuffer(1, 1, 22050);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.start(0);
+      }
+    } catch { /* WebAudio unavailable — browser voice still works */ }
+    if (!audioUnlockedRef.current) {
+      try {
+        if ('speechSynthesis' in window) {
+          const warm = new SpeechSynthesisUtterance(' ');
+          warm.volume = 0;
+          window.speechSynthesis.speak(warm);
+          window.speechSynthesis.cancel();
+        }
+      } catch { /* ignore */ }
+    }
+    audioUnlockedRef.current = true;
+  };
 
   /* Classify Jack's reply into an avatar mood so the frame reacts to WHAT he's
      saying — red heat for roasts, gold for winner moments, alert for breaking
@@ -1003,6 +1039,7 @@ function App() {
 
   const readAssistantMessage = async (text) => {
     if (!text || assistantSpeaking) return;
+    unlockAudio(); // must run inside the tap gesture, before any await, for iOS
     setAssistantSpeaking(text.slice(0, 40));
     // Try Jack's real voice first (server-side ElevenLabs); fall back to the browser voice.
     try {
@@ -1020,7 +1057,14 @@ function App() {
         audio.onended = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); URL.revokeObjectURL(url); jackAudioRef.current = null; };
         audio.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); URL.revokeObjectURL(url); jackAudioRef.current = null; };
         setJackAvatarState(classifyJackMood(text));
-        if (!startVoiceSync(audio)) startSyntheticSync();
+        // On iOS, routing an <audio> element through WebAudio can silence it, so
+        // there we play the element directly (guaranteed sound) with a synthetic
+        // glow. Elsewhere the analyser drives a real amplitude-reactive glow.
+        if (!isIOS && jackAudioCtxRef.current?.state === 'running' && startVoiceSync(audio)) {
+          /* real analyser glow is running */
+        } else {
+          startSyntheticSync();
+        }
         await audio.play();
         return;
       }
@@ -1432,6 +1476,16 @@ function App() {
             {SCHEDULE.map((w) => <option key={w.week} value={w.week}>{w.label}</option>)}
           </select>
           <strong>{SEASON}</strong>
+        </div>
+        <div className="header-account">
+          {playerSession.authenticated ? (
+            <button className="header-avatar-btn" type="button" onClick={() => navigate('players')} title="My profile" aria-label="My profile">
+              <PlayerAvatar player={currentPlayer} size={30} />
+            </button>
+          ) : (
+            <button className="header-signin" type="button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button>
+          )}
+          <button className={`header-admin ${isComm ? 'active' : ''}`} type="button" onClick={() => navigate('admin')} title={isComm ? 'Commissioner tools' : 'Commissioner login'} aria-label={isComm ? 'Commissioner tools' : 'Commissioner login'}>🔒</button>
         </div>
       </header>
 
@@ -2261,7 +2315,62 @@ function App() {
         )}
 
         {view === 'players' && (
-          <StandardPage eyebrow="PLAYER CONTROL CENTER" title="Preferences, by player" subtitle="Every communication choice is explicit, timestamped, and reversible. Phone verification never implies SMS permission.">
+          <StandardPage eyebrow="MY PROFILE & THE CREW" title="Your profile" subtitle="Your identity, your payment status, and everyone else in the league — all in one place.">
+            {currentPlayer ? (
+              <section className="my-profile-card">
+                <div className="my-profile-top">
+                  <PlayerAvatar player={currentPlayer} size={84} />
+                  <div className="my-profile-id">
+                    <h2>{currentPlayer.name}</h2>
+                    {currentPlayer.trashTalk?.jackPolicy?.favoriteTeam
+                      ? <span className="my-profile-team"><img src={getTeamLogoUrl(currentPlayer.trashTalk.jackPolicy.favoriteTeam)} alt="" />{TEAMS[currentPlayer.trashTalk.jackPolicy.favoriteTeam]}</span>
+                      : <span className="my-profile-team muted">No favorite team set</span>}
+                    <span className={`my-profile-verified ${currentPlayer.phoneVerifiedAt ? 'ok' : ''}`}>{currentPlayer.phoneVerifiedAt ? '✓ Phone verified' : 'Phone not verified'}</span>
+                  </div>
+                  <button type="button" className="button button-ghost-dark my-profile-signout" onClick={logoutPlayer}>Sign out</button>
+                </div>
+                <div className="my-profile-stats">
+                  <div><span>Credit balance</span><strong>${myCredit}</strong></div>
+                  <div><span>Roast setting</span><strong>{currentPlayer.trashTalk?.level === 'none' ? 'Opted out' : (currentPlayer.trashTalk?.level || 'competitive')}</strong></div>
+                  <div><span>Results</span><strong>{(currentPlayer.messaging?.resultsChannel || 'sms_and_in_app').replaceAll('_', ' ')}</strong></div>
+                </div>
+                <p className="my-profile-hint">Change your photo, team, or roast level below. Everything saves instantly and only you can edit your own settings.</p>
+              </section>
+            ) : (
+              <section className="my-profile-card signed-out">
+                <div className="my-profile-top">
+                  <span className="player-avatar" style={{ width: 84, height: 84 }}><span className="player-avatar-initials" style={{ fontSize: 30 }}>?</span></span>
+                  <div className="my-profile-id">
+                    <h2>You're not signed in</h2>
+                    <span className="muted">Sign in with your PIN to see your profile, credit, and picks — or join the league if you're new.</span>
+                  </div>
+                </div>
+                <div className="my-profile-cta-row">
+                  <button type="button" className="button button-primary" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button>
+                  <button type="button" className="button button-ghost-dark" onClick={() => { setWelcomeMode('join'); setShowWelcome(true); }}>Join the league</button>
+                </div>
+              </section>
+            )}
+
+            <section className="crew-roster">
+              <div className="proof-heading"><div><span className="proof-step">THE CREW</span><h2>Everyone in the league</h2></div><StatusPill state="pass">{(proofLeague.players ?? []).length} players</StatusPill></div>
+              {(proofLeague.players ?? []).length > 0 ? (
+                <div className="crew-roster-grid">
+                  {proofLeague.players.map((player) => (
+                    <article className={`crew-card ${player.id === playerSession.playerId ? 'me' : ''}`} key={player.id}>
+                      <PlayerAvatar player={player} size={52} />
+                      <div className="crew-card-info">
+                        <strong>{player.name}{player.id === playerSession.playerId ? ' (you)' : ''}</strong>
+                        <small>{player.trashTalk?.jackPolicy?.favoriteTeam ? TEAMS[player.trashTalk.jackPolicy.favoriteTeam] : 'No team set'}</small>
+                      </div>
+                      {player.trashTalk?.jackPolicy?.favoriteTeam && <img className="crew-card-team" src={getTeamLogoUrl(player.trashTalk.jackPolicy.favoriteTeam)} alt="" />}
+                    </article>
+                  ))}
+                </div>
+              ) : <EmptyState icon="👥" title="No players yet" text="As friends join the league, they'll show up here with their profile pics." />}
+            </section>
+
+            <h3 className="section-divider-label">Your settings</h3>
             <PlayerSessionPanel players={proofLeague.players} session={playerSession} login={playerLogin} setLogin={setPlayerLogin} onLogin={loginPlayer} onLogout={logoutPlayer} busy={serverBusy === 'player-login'} />
             <div className="player-settings-grid">
               {proofLeague.players.map((player) => <article className={`player-settings-card ${playerSession.playerId === player.id ? 'current' : ''}`} key={player.id}>
@@ -2468,6 +2577,19 @@ function App() {
                   {cfbBuilderOpen ? '✕ Cancel Builder' : `＋ Build Week ${cfbWeek} Pool`}
                 </button>
               )}
+            </div>
+
+            {/* Always-visible explainer so players understand the college flow */}
+            <div className="cfb-how">
+              <span className="cfb-how-icon">🎓</span>
+              <div>
+                <strong>How College Pick-Em works</strong>
+                <p>{cfbPool
+                  ? 'A pool is live below. Pick a team to cover the spread in every game, set your tiebreaker, and lock your card. Best record takes the pot — closest tiebreaker settles ties.'
+                  : isComm
+                    ? 'No pool yet for this week. Tap "Build Pool" above, choose 3–20 games from the list below, and it goes live for players to pick.'
+                    : 'When the commissioner opens a weekly pool, it appears here. You\'ll pick a team to cover the spread in each game, set a tiebreaker, and pay the entry. Best record wins the pot. Until then, browse the AP Top 25 and this week\'s games below.'}</p>
+              </div>
             </div>
 
             {/* ── Commissioner slate builder ── */}
@@ -2970,7 +3092,24 @@ function App() {
                 <JackAvatar state={jackAvatarState} settings={serverLeague?.settings} compact caption={assistantBusy ? 'Thinking…' : assistantSpeaking ? 'Speaking…' : 'Ready'} />
                 <div><strong>Jack</strong><small>League commissioner AI</small></div>
               </div>
-              <button className="assistant-close" type="button" onClick={() => { setAssistantOpen(false); stopSpeaking(); setJackAvatarState('idle'); }}>×</button>
+              <div className="assistant-header-actions">
+                {assistantMessages.some((m) => m.role === 'assistant' && m.id !== 'assistant-welcome' && m.action !== 'auth') && (
+                  <button
+                    className={`assistant-voice-btn ${assistantSpeaking ? 'on' : ''}`}
+                    type="button"
+                    title={assistantSpeaking ? 'Stop Jack' : 'Hear Jack'}
+                    onClick={() => {
+                      if (assistantSpeaking) { stopSpeaking(); return; }
+                      if (!jackVoiceConsent) setJackVoiceConsent(true);
+                      const last = [...assistantMessages].reverse().find((m) => m.role === 'assistant' && m.id !== 'assistant-welcome' && m.action !== 'auth');
+                      if (last) readAssistantMessage(last.text);
+                    }}
+                  >
+                    {assistantSpeaking ? '■ Stop' : '🔊 Hear Jack'}
+                  </button>
+                )}
+                <button className="assistant-close" type="button" onClick={() => { setAssistantOpen(false); stopSpeaking(); setJackAvatarState('idle'); }}>×</button>
+              </div>
             </div>
 
             <div className="assistant-quick-prompts">
@@ -3061,6 +3200,23 @@ function ProofMetric({ value, label, state }) {
 
 function StatusPill({ state = 'neutral', children }) {
   return <span className={`proof-status ${state}`}>{children}</span>;
+}
+
+/* Renders a player's chosen identity: uploaded photo, preset emoji, or initials. */
+function PlayerAvatar({ player, size = 44 }) {
+  const avatar = player?.avatar;
+  const isImage = typeof avatar === 'string' && (avatar.startsWith('data:') || avatar.startsWith('http') || avatar.startsWith('/'));
+  const isEmoji = typeof avatar === 'string' && avatar.trim() && !isImage;
+  const initials = (player?.name || '?').split(' ').filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+  return (
+    <span className="player-avatar" style={{ width: size, height: size }}>
+      {isImage
+        ? <img src={avatar} alt="" />
+        : isEmoji
+          ? <span className="player-avatar-emoji" style={{ fontSize: Math.round(size * 0.52) }}>{avatar}</span>
+          : <span className="player-avatar-initials" style={{ fontSize: Math.round(size * 0.36) }}>{initials}</span>}
+    </span>
+  );
 }
 
 function PlayerSessionPanel({ players, session, login, setLogin, onLogin, onLogout, busy }) {

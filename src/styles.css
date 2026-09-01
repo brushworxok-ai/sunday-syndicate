@@ -668,9 +668,10 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
    JACK AVATAR
    ══════════════════════════════════════════════════════════ */
 .jack-avatar { display: flex; flex-direction: column; align-items: center; gap: 6px; position: relative; }
-.jack-avatar.compact { transform: scale(.65); transform-origin: top right; margin: -12px -8px -12px 0; }
+.jack-avatar.compact { transform: none; margin: 0; }
 .jack-avatar-frame { position: relative; width: 72px; height: 72px; border-radius: 50%; overflow: hidden; border: 2px solid var(--line); }
-.jack-avatar.compact .jack-avatar-frame { width: 52px; height: 52px; }
+.jack-avatar.compact .jack-avatar-frame { width: 64px; height: 64px; }
+.jack-avatar.compact figcaption { font-size: 9px; }
 .jack-avatar-frame img, .jack-avatar-frame video { width: 100%; height: 100%; object-fit: cover; filter: saturate(.9); transition: filter .3s; display: block; }
 .jack-avatar-aura { position: absolute; inset: -4px; border-radius: 50%; background: radial-gradient(circle, transparent 55%, rgba(57,255,20,.15) 100%); pointer-events: none; opacity: 0; transition: opacity .4s; }
 .jack-avatar-scan { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: var(--neon); opacity: 0; transform: scaleX(0); transition: transform .3s, opacity .3s; }
@@ -1666,9 +1667,80 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 
 /* Keep the header (brand + week selector + season badge) within phone width */
 @media (max-width: 640px) {
-  .site-header { gap: 10px; }
+  .site-header { gap: 8px; }
   .brand strong { font-size: 15px; }
-  .header-week { gap: 8px; flex-shrink: 0; }
-  .header-week select { max-width: 116px; padding: 6px 8px; font-size: 14px !important; }
-  .header-week strong { padding: 6px 9px; }
+  .header-week { gap: 6px; flex-shrink: 1; min-width: 0; }
+  .header-week select { max-width: 88px; padding: 6px 6px; font-size: 14px !important; }
+  .header-week strong { display: none; } /* season badge is redundant on phones — the week picker implies it */
+}
+
+/* ============================================================
+   Profile, crew roster, header account, Jack voice, CFB helper
+   (added: profile visibility + iPhone Jack pass)
+   ============================================================ */
+
+/* Reusable player avatar */
+.player-avatar { display: inline-grid; place-items: center; border-radius: 50%; overflow: hidden; background: linear-gradient(135deg, rgba(57,255,20,.22), rgba(0,212,255,.22)); border: 1px solid var(--glass-border); flex-shrink: 0; }
+.player-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.player-avatar-emoji { line-height: 1; }
+.player-avatar-initials { font-weight: 800; color: #fff; letter-spacing: .02em; }
+
+/* My profile card */
+.my-profile-card { background: linear-gradient(150deg, rgba(57,255,20,.06), rgba(0,212,255,.04)); border: 1px solid var(--glass-border); border-radius: 18px; padding: 18px; margin-bottom: 18px; }
+.my-profile-card.signed-out { background: rgba(255,255,255,.03); }
+.my-profile-top { display: flex; align-items: center; gap: 14px; }
+.my-profile-top .player-avatar { box-shadow: 0 0 0 3px rgba(57,255,20,.18); }
+.my-profile-id { flex: 1; min-width: 0; }
+.my-profile-id h2 { font-size: 20px; margin: 0 0 6px; }
+.my-profile-team { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #fff; }
+.my-profile-team img { width: 20px; height: 20px; object-fit: contain; }
+.my-profile-team.muted, .my-profile-id .muted { color: var(--muted); font-weight: 500; }
+.my-profile-verified { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.my-profile-verified.ok { color: var(--neon); }
+.my-profile-signout { flex-shrink: 0; padding: 8px 12px; font-size: 12px; }
+.my-profile-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+.my-profile-stats > div { background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 12px; padding: 10px; text-align: center; }
+.my-profile-stats span { display: block; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+.my-profile-stats strong { font-size: 15px; color: #fff; text-transform: capitalize; }
+.my-profile-hint { margin-top: 14px; font-size: 12px; color: var(--muted); }
+.my-profile-cta-row { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.my-profile-cta-row .button { flex: 1; min-width: 120px; }
+
+/* Crew roster */
+.crew-roster { margin-bottom: 22px; }
+.crew-roster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+.crew-card { display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; position: relative; }
+.crew-card.me { border-color: rgba(57,255,20,.45); box-shadow: 0 0 0 1px rgba(57,255,20,.2); }
+.crew-card-info { min-width: 0; flex: 1; }
+.crew-card-info strong { display: block; font-size: 13px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.crew-card-info small { font-size: 11px; color: var(--muted); }
+.crew-card-team { width: 22px; height: 22px; object-fit: contain; opacity: .85; flex-shrink: 0; }
+.section-divider-label { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 8px 0 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+
+/* Header account + admin */
+.header-account { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.header-avatar-btn { background: none; border: none; padding: 0; cursor: pointer; border-radius: 50%; line-height: 0; }
+.header-avatar-btn .player-avatar { box-shadow: 0 0 0 2px rgba(57,255,20,.35); }
+.header-signin { background: var(--neon); color: #0a0a12; border: none; border-radius: 20px; padding: 7px 14px; font-size: 12px; font-weight: 800; cursor: pointer; letter-spacing: .02em; }
+.header-admin { background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 10px; width: 34px; height: 34px; display: grid; place-items: center; cursor: pointer; font-size: 14px; flex-shrink: 0; }
+.header-admin.active { background: rgba(255,215,0,.15); border-color: rgba(255,215,0,.5); box-shadow: 0 0 10px rgba(255,215,0,.2); }
+
+/* Jack voice button in drawer header */
+.assistant-header-actions { display: flex; align-items: center; gap: 8px; }
+.assistant-voice-btn { background: var(--neon); color: #0a0a12; border: none; border-radius: 20px; padding: 8px 14px; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.assistant-voice-btn.on { background: #ff4444; color: #fff; }
+
+/* CFB how-it-works helper */
+.cfb-how { display: flex; gap: 12px; align-items: flex-start; background: linear-gradient(150deg, rgba(0,212,255,.07), rgba(57,255,20,.04)); border: 1px solid var(--glass-border); border-radius: 14px; padding: 14px 16px; margin: 12px 0 6px; }
+.cfb-how-icon { font-size: 22px; line-height: 1; flex-shrink: 0; }
+.cfb-how strong { display: block; font-size: 14px; color: #fff; margin-bottom: 4px; }
+.cfb-how p { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin: 0; }
+
+@media (max-width: 640px) {
+  .my-profile-stats { grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .my-profile-stats strong { font-size: 13px; }
+  .my-profile-id h2 { font-size: 18px; }
+  .header-signin { padding: 6px 11px; font-size: 11px; }
+  .header-admin { width: 32px; height: 32px; }
+  .header-account { gap: 6px; }
 }
