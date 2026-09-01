@@ -2405,7 +2405,7 @@ function App() {
                 </div>
                 <div className="my-profile-stats">
                   <div><span>Credit balance</span><strong>${myCredit}</strong></div>
-                  <div><span>Roast setting</span><strong>{currentPlayer.trashTalk?.level === 'none' ? 'Opted out' : (currentPlayer.trashTalk?.level || 'competitive')}</strong></div>
+                  <div><span>Roast setting</span><strong>{({ none: 'Opted out', light: 'Light / PG-13', competitive: 'Explicit', maximum: 'Maximum' })[currentPlayer.trashTalk?.level] || 'Explicit'}</strong></div>
                   <div><span>Results</span><strong>{(currentPlayer.messaging?.resultsChannel || 'sms_and_in_app').replaceAll('_', ' ')}</strong></div>
                 </div>
                 <p className="my-profile-hint">Change your photo, team, or roast level below. Everything saves instantly and only you can edit your own settings.</p>
