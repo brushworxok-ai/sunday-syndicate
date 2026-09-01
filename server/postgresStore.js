@@ -497,7 +497,11 @@ export class PostgresLeagueStore {
       draft.recaps = (draft.recaps ?? []).filter((recap) => recap.id !== DEMO_LEAGUE.recap.id);
       draft.sideBets = (draft.sideBets ?? []).filter((bet) => !containsDemoPlayer(bet));
       draft.broadcasts = (draft.broadcasts ?? []).filter((broadcast) => broadcast.id !== DEMO_LEAGUE.broadcast.id && !containsDemoPlayer(broadcast.deliveries));
-      draft.chat = (draft.chat ?? []).filter((message) => !demoPlayerIds.has(message.playerId));
+      // Drop demo player messages AND legacy Jack Path Desk posts (the retired
+      // auto-post service left W12 desk messages with no playerId behind).
+      draft.chat = (draft.chat ?? []).filter((message) => !demoPlayerIds.has(message.playerId)
+        && !String(message.id ?? '').startsWith('chat-jack-path')
+        && message.name !== 'Jack · Path Desk');
       draft.survivorPicks = (draft.survivorPicks ?? []).filter((pick) => !demoPlayerIds.has(pick.playerId));
       draft.payouts = (draft.payouts ?? []).filter((payout) => !containsDemoPlayer(payout));
       draft.week = week;

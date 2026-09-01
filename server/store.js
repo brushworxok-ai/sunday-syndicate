@@ -560,6 +560,8 @@ export class LeagueStore {
       if (demoBetIds.length) this.db.prepare(`DELETE FROM side_bets WHERE league_id = ? AND id IN (${demoBetIds.map(() => '?').join(',')})`).run(leagueId, ...demoBetIds);
       this.db.prepare('DELETE FROM broadcasts WHERE league_id = ? AND id = ?').run(leagueId, DEMO_LEAGUE.broadcast.id);
       this.db.prepare(`DELETE FROM chat_messages WHERE league_id = ? AND player_id IN (${placeholders})`).run(leagueId, ...demoIds);
+      // Legacy Jack Path Desk posts (retired auto-post service) carry no player_id — sweep them too.
+      this.db.prepare("DELETE FROM chat_messages WHERE league_id = ? AND id LIKE 'chat-jack-path%'").run(leagueId);
       this.db.prepare(`DELETE FROM survivor_picks WHERE league_id = ? AND player_id IN (${placeholders})`).run(leagueId, ...demoIds);
       this.db.prepare(`DELETE FROM players WHERE league_id = ? AND id IN (${placeholders})`).run(leagueId, ...demoIds);
       this.db.prepare('UPDATE leagues SET week = ? WHERE id = ?').run(week, leagueId);
