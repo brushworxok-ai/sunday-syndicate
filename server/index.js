@@ -405,9 +405,22 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   const name = String(input.name ?? '').trim().slice(0, 50);
   const picks = input.picks ?? {};
   if (!name) return response.status(422).json({ error: 'Name is required.' });
+  // SECURITY: a sheet's playerId comes ONLY from the session cookie — never
+  // from the request body, or anyone could submit (or replace) sheets as
+  // another player. Signed-in resubmission before lock replaces the player's
+  // own sheet (store keeps paid status); anonymous sheets carry no playerId.
+  const sessionPlayer = await playerAuth.playerFromRequest(request);
+  const playerId = sessionPlayer?.id ?? null;
+  if (!playerId) {
+    // Anonymous sheets can't borrow a registered player's name.
+    const league = await store.getLeague(request.params.leagueId);
+    if ((league?.players ?? []).some((p) => p.name.trim().toLowerCase() === name.toLowerCase())) {
+      return response.status(422).json({ error: `"${name}" is a registered player — sign in to submit under that name.` });
+    }
+  }
   // Signed-in players may submit unpaid and settle from credit or Cash App after;
   // anonymous sheets still need the payment confirmation checkbox.
-  if (!input.paid && !input.playerId) return response.status(422).json({ error: 'Payment confirmation is required.' });
+  if (!input.paid && !playerId) return response.status(422).json({ error: 'Payment confirmation is required.' });
   if (!Number.isInteger(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0 || Number(input.tiebreaker) > 250) return response.status(422).json({ error: 'Tiebreaker must be a whole number between 0 and 250 (total points in the tiebreaker game).' });
   const submittedWeek = Number(input.week) || getCurrentWeek();
   const weekGames = getGames(submittedWeek);
@@ -418,7 +431,7 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   }
   const everyPickValid = weekGames.every((game) => picks[game.id] === game.away || picks[game.id] === game.home);
   if (!everyPickValid || Object.keys(picks).length !== weekGames.length) return response.status(422).json({ error: `Exactly ${weekGames.length} valid picks are required for Week ${submittedWeek}.` });
-  const sheet = { id: `sheet-${randomUUID()}`, playerId: input.playerId ?? null, name, handle: String(input.handle ?? '').trim().slice(0, 50), picks, tiebreaker: Number(input.tiebreaker), paid: Boolean(input.paid), week: submittedWeek, submittedAt: new Date().toISOString() };
+  const sheet = { id: `sheet-${randomUUID()}`, playerId, name: sessionPlayer?.name ?? name, handle: String(input.handle ?? '').trim().slice(0, 50), picks, tiebreaker: Number(input.tiebreaker), paid: Boolean(input.paid), week: submittedWeek, submittedAt: new Date().toISOString() };
   await store.createSheet(request.params.leagueId, sheet);
   return response.status(201).json(sheet);
 }));

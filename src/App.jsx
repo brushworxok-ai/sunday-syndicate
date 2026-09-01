@@ -956,7 +956,12 @@ function App() {
       analyser.connect(ctx.destination);
       const data = new Uint8Array(analyser.frequencyBinCount);
       const tick = () => {
-        if (audio.paused || audio.ended) { stopJackLevelLoop(); return; }
+        if (audio.paused || audio.ended) {
+          stopJackLevelLoop();
+          // Free the graph nodes so repeated speaks don't accumulate in the context.
+          try { source.disconnect(); analyser.disconnect(); } catch { /* already gone */ }
+          return;
+        }
         analyser.getByteFrequencyData(data);
         let sum = 0;
         for (let i = 0; i < data.length; i += 1) sum += data[i];

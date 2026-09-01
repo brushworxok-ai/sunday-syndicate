@@ -122,5 +122,9 @@ export function createPlayerAuth({ store, secret, secure = false, allowDemoCrede
       request.actor = player.id;
       return next();
     },
+    /** Optional auth: the signed-in player, or null — never throws. */
+    playerFromRequest(request) {
+      return resolveSessionPlayer(request);
+    },
   };
 }
