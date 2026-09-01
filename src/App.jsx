@@ -2640,6 +2640,21 @@ function App() {
                 <div><strong>🎬 Jack's Weekly Recap Show</strong><p>Full-screen animated slideshow with standings, winner spotlight, movers, roasts, and Jack's AI commentary. Auto-advances with manual controls.</p></div>
                 <button className="button button-primary" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading show…' : '▶ Launch Recap Show'}</button>
               </div>
+              {proofLeague.players.some((p) => ['player-marcus', 'player-taylor', 'player-jordan', 'player-chris'].includes(p.id)) && (
+                <div className="jack-text-row">
+                  <div><strong>🧹 Start the real season</strong><p>Clears the demo crew (Marcus, Taylor, Jordan, Chris), their fake results, chat, and side bets so new players see a clean Week 1. Real registered players are untouched. This happens automatically 2 days before kickoff — this button just does it now.</p></div>
+                  <button className="button button-send" type="button" disabled={serverBusy === 'season-start'} onClick={async () => {
+                    if (!window.confirm('Remove all demo players and their data? Real players are kept. This cannot be undone.')) return;
+                    setServerBusy('season-start');
+                    try {
+                      const result = await apiRequest(`/api/leagues/${LEAGUE_ID}/season/start`, { method: 'POST', body: JSON.stringify({ week: getCurrentWeek() }) });
+                      await loadLeague();
+                      notify(`Season started at Week ${result.week}. Removed: ${result.removed?.join(', ') || 'nothing — already clean'}.`);
+                    } catch (err) { notify(err.message); }
+                    finally { setServerBusy(''); }
+                  }}>{serverBusy === 'season-start' ? 'Cleaning…' : 'Clear demo crew & start season'}</button>
+                </div>
+              )}
               <div className="jack-text-row">
                 <div><strong>🔔 Push deadline reminder</strong><p>Send a push notification to all players who haven't submitted their picks yet. Only reaches players who enabled push notifications.</p></div>
                 <button className="button button-send" type="button" disabled={weekLocked || serverBusy === 'push-reminder'} onClick={async () => {
