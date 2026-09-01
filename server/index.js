@@ -383,7 +383,7 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
 
   // Jack welcomes the new player with a chat message and notification
   const entryFee = league.settings?.entryFee ?? 20;
-  const welcomeMsg = `Welcome to the league, ${name}! 👑 Here's how it works: pick a winner for every NFL game each week (straight up, no spread). $${entryFee} per week — pay through Cash App or your credit balance. Highest score wins the pot. Tiebreaker = total points in the last game of the week, closest without going over. Sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF}h before the first kickoff. Hit me up anytime — I'm Jack, your AI commissioner. You can tap the 🔊 button on any of my messages to hear me explain it out loud. Let's get it! 🏈`;
+  const welcomeMsg = `Welcome to the league, ${name}! 👑 Here's how it works: pick a winner for every NFL game each week (straight up, no spread). $${entryFee} per week — pay through Cash App or your credit balance. Highest score wins the pot. Tiebreaker = total points in the last game of the week, closest without going over. Sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF}h before the first kickoff. Heads up: roast mode is ON by default around here 🔥 — if you can't take the smoke, you can dial it down or turn it off anytime in Player Settings. Hit me up anytime — I'm Jack, your AI commissioner. Tap the 🔊 button on any of my messages to hear me out loud. Let's get it! 🏈`;
   try {
     await store.addChatMessage(request.params.leagueId, {
       id: `chat-welcome-${player.id}`, playerId: null, name: 'Jack 🤖',
