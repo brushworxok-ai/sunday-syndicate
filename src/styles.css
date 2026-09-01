@@ -64,6 +64,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(57,255,20,.4
 /* ── More Menu Overlay ── */
 .more-menu-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.7); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); display: flex; align-items: flex-end; }
 .more-menu { width: 100%; max-height: 70vh; max-height: 70dvh; background: var(--card); border-radius: 20px 20px 0 0; padding: 16px 20px calc(30px + env(safe-area-inset-bottom, 0px)); animation: slide-up .25s ease both; }
+/* Desktop: the bottom sheet becomes a centered card instead of a full-width strip */
+@media (min-width: 720px) {
+  .more-menu-overlay { align-items: center; justify-content: center; }
+  .more-menu { width: min(460px, 92vw); border-radius: 20px; max-height: 85vh; max-height: 85dvh; overflow-y: auto; border: 1px solid var(--glass-border); box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+}
 .more-menu-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .more-menu-header h3 { margin: 0; font-size: 18px; color: #fff; }
 .more-menu-close { border: 0; background: var(--glass); width: 32px; height: 32px; border-radius: 50%; color: var(--muted); cursor: pointer; font-size: 18px; }

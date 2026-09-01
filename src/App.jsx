@@ -436,7 +436,9 @@ function App() {
     });
     return rows.sort((a, b) => b.projected - a.projected || b.locked - a.locked || a.name.localeCompare(b.name));
   }, [weekSheets, currentGames, liveProvisional]);
-  const completedGames = Object.values(results).filter((result) => result.winner).length;
+  // Count only finals for the games actually on this week's slate — results from
+  // other weeks (e.g. leftover demo data) must not inflate the "X of Y final" label.
+  const completedGames = currentGames.filter((game) => results[game.id]?.winner).length;
   const pot = weekSheets.filter((sheet) => sheet.paid).length * ENTRY_FEE;
   const totalPot = pot + Number(rolloverPot || 0);
 
@@ -891,6 +893,15 @@ function App() {
         body: JSON.stringify({ question: q, history, playerId: playerSession.playerId }),
       });
       const data = await response.json();
+      if (response.status === 401) {
+        // Not signed in — keep it in Jack's voice and hand them the door.
+        setAssistantMessages((prev) => [...prev, {
+          id: `assistant-auth-${Date.now()}`, role: 'assistant', action: 'auth',
+          text: "Ayy, I'd love to talk — but I only spill league intel to players on the roster. Join the league or sign in and I'll tell you everything: standings, rules, who's hot, who's washed.",
+        }]);
+        setJackAvatarState('idle');
+        return;
+      }
       if (!response.ok) throw new Error(data.error || 'Assistant request failed.');
       const reply = { id: `assistant-${Date.now()}`, role: 'assistant', text: data.text };
       setAssistantMessages((prev) => [...prev, reply]);
@@ -987,7 +998,9 @@ function App() {
       if (session.name) setChatName(session.name);
       setBetForm((current) => ({ ...current, creatorId: session.playerId, opponentId: current.opponentId === session.playerId ? proofLeague.players.find((player) => player.id !== session.playerId)?.id ?? '' : current.opponentId }));
       setPlayerLogin((current) => ({ ...current, pin: '' }));
-      notify(`Signed in as ${session.name}.`);
+      setShowWelcome(false); // close the welcome sheet — the sign-in worked
+      await loadLeague();
+      notify(`Signed in as ${session.name}. Welcome back.`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -2839,7 +2852,17 @@ function App() {
                   {msg.role === 'assistant' && <span className="msg-avatar">✦</span>}
                   <div className="msg-bubble">
                     <p>{msg.text}</p>
-                    {msg.role === 'assistant' && msg.id !== 'assistant-welcome' && (
+                    {msg.action === 'auth' && (
+                      <button
+                        className="button button-primary"
+                        type="button"
+                        style={{ marginTop: 10, width: '100%' }}
+                        onClick={() => { setAssistantOpen(false); setWelcomeMode('join'); setShowWelcome(true); }}
+                      >
+                        Join the league →
+                      </button>
+                    )}
+                    {msg.role === 'assistant' && msg.id !== 'assistant-welcome' && msg.action !== 'auth' && (
                       <button className="msg-speak" type="button" onClick={() => { if (!jackVoiceConsent) setJackVoiceConsent(true); assistantSpeaking ? stopSpeaking() : readAssistantMessage(msg.text); }} title={assistantSpeaking ? 'Stop' : 'Listen'}>
                         {assistantSpeaking ? '■' : '🔊'}
                       </button>
