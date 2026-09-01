@@ -645,6 +645,34 @@ function App() {
     finally { setServerBusy(''); }
   };
 
+  const autoBuildCfbPool = async () => {
+    if (!(await ensureAdmin())) return;
+    setServerBusy('cfb-pool-auto');
+    try {
+      const pool = await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/auto`, {
+        method: 'POST',
+        body: JSON.stringify({ week: cfbWeek, entryFee: Number(cfbEntryFee) || 10 }),
+      });
+      await loadLeague();
+      setCfbSelected(new Set());
+      setCfbBuilderOpen(false);
+      notify(`Auto-built Week ${cfbWeek} from the Top 25 — ${pool.games?.length ?? 0} games live for picks.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const toggleCfbAuto = async () => {
+    if (!(await ensureAdmin())) return;
+    const enabled = serverLeague?.settings?.cfbAuto !== false;
+    setServerBusy('cfb-auto');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-auto`, { method: 'PATCH', body: JSON.stringify({ enabled: !enabled }) });
+      await loadLeague();
+      notify(!enabled ? 'College autopilot ON — pools open, lock & pay out each week automatically.' : 'College autopilot OFF — you\'ll build pools manually.');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
   const patchCfbPool = async (status) => {
     if (!cfbPool || !(await ensureAdmin())) return;
     setServerBusy('cfb-pool-status');
@@ -2604,11 +2632,30 @@ function App() {
                 <button className="button button-ghost-dark" type="button" onClick={() => loadCfbGames(cfbWeek)} disabled={cfbLoading === 'games'}>{cfbLoading === 'games' ? 'Loading…' : '↻ Refresh'}</button>
               </div>
               {isComm && !cfbPool && (
-                <button className="button button-primary" type="button" onClick={() => setCfbBuilderOpen((v) => !v)}>
-                  {cfbBuilderOpen ? '✕ Cancel Builder' : `＋ Build Week ${cfbWeek} Pool`}
-                </button>
+                <>
+                  <button className="button button-primary" type="button" disabled={serverBusy === 'cfb-pool-auto'} onClick={autoBuildCfbPool}>
+                    {serverBusy === 'cfb-pool-auto' ? 'Building…' : '⚡ Auto-build from Top 25'}
+                  </button>
+                  <button className="button button-ghost-dark" type="button" onClick={() => setCfbBuilderOpen((v) => !v)}>
+                    {cfbBuilderOpen ? '✕ Cancel' : '＋ Pick games myself'}
+                  </button>
+                </>
               )}
             </div>
+
+            {isComm && (
+              <div className={`cfb-autopilot ${serverLeague?.settings?.cfbAuto !== false ? 'on' : ''}`}>
+                <div className="cfb-autopilot-copy">
+                  <strong>🤖 College autopilot {serverLeague?.settings?.cfbAuto !== false ? 'ON' : 'OFF'}</strong>
+                  <small>{serverLeague?.settings?.cfbAuto !== false
+                    ? `Each week opens automatically from the Top 25 ($${serverLeague?.settings?.cfbAutoFee ?? 10} entry), locks at kickoff, and pays the pot when games go final. No weekly setup.`
+                    : 'Turn on to open, lock, and pay out the college pool every week with no manual work.'}</small>
+                </div>
+                <button type="button" className={`cfb-autopilot-switch ${serverLeague?.settings?.cfbAuto !== false ? 'on' : ''}`} disabled={serverBusy === 'cfb-auto'} onClick={toggleCfbAuto} aria-pressed={serverLeague?.settings?.cfbAuto !== false}>
+                  <span aria-hidden="true" />
+                </button>
+              </div>
+            )}
 
             {/* Always-visible explainer so players understand the college flow */}
             <div className="cfb-how">

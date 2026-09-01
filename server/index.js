@@ -1710,6 +1710,27 @@ app.patch('/api/leagues/:leagueId/cashapp-pool', auth.requireAdmin, asyncRoute(a
   return response.json({ cashAppPool });
 }));
 
+/* Toggle weekly College Pick-Em autopilot (open/lock/finalize hands-free) */
+app.patch('/api/leagues/:leagueId/cfb-auto', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const settings = league.settings ?? {};
+  const next = { ...settings };
+  if (typeof request.body?.enabled === 'boolean') next.cfbAuto = request.body.enabled;
+  if (request.body?.entryFee != null) {
+    const fee = Number(request.body.entryFee);
+    if (!Number.isFinite(fee) || fee < 0 || fee > 1000) return response.status(422).json({ error: 'Entry fee must be between $0 and $1000.' });
+    next.cfbAutoFee = fee;
+  }
+  if (request.body?.max != null) {
+    const max = Number(request.body.max);
+    if (!Number.isInteger(max) || max < 3 || max > 20) return response.status(422).json({ error: 'Slate size must be between 3 and 20.' });
+    next.cfbAutoMax = max;
+  }
+  await store.updateLeagueSettings(request.params.leagueId, next);
+  return response.json({ cfbAuto: next.cfbAuto !== false, cfbAutoFee: next.cfbAutoFee ?? 10, cfbAutoMax: next.cfbAutoMax ?? 12 });
+}));
+
 /* ── CFB Data — proxies ESPN free API for college football rankings, games & spreads ── */
 const cfbCache = { rankings: null, rankingsAt: 0, scoreboard: {}, scoreboardAt: {} };
 const CFB_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -1808,6 +1829,106 @@ app.get('/api/cfb/scoreboard', asyncRoute(async (request, response) => {
   }
 }));
 
+/* ── CFB automation helpers (shared by manual endpoints, the one-tap
+   auto-builder, and the weekly auto-pilot cron) ── */
+
+async function fetchCurrentCfbWeek() {
+  try {
+    const res = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?groups=80&limit=1');
+    const data = await res.json();
+    const wk = Number(data?.week?.number);
+    return Number.isInteger(wk) && wk >= 1 && wk <= 16 ? wk : 1;
+  } catch { return 1; }
+}
+
+function cfbBestRank(game) {
+  const ranks = [game.away?.rank, game.home?.rank].filter((r) => r != null);
+  return ranks.length ? Math.min(...ranks) : 99;
+}
+
+/* Auto-pick a slate: every upcoming Top-25 matchup first (best rank first),
+   topped up with the next scheduled games that have a posted line. */
+function selectAutoCfbGameIds(scoreboard, max = 12) {
+  const upcoming = (scoreboard.games ?? []).filter((g) =>
+    g.away?.abbr && g.home?.abbr && !g.final &&
+    String(g.status || '').toUpperCase().includes('SCHEDULED'));
+  const ranked = upcoming.filter((g) => g.isRanked).sort((a, b) => cfbBestRank(a) - cfbBestRank(b));
+  const chosen = ranked.slice(0, max);
+  if (chosen.length < max) {
+    const chosenIds = new Set(chosen.map((g) => g.id));
+    const fillers = upcoming
+      .filter((g) => !chosenIds.has(g.id) && g.homeSpread != null)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    for (const g of fillers) { if (chosen.length >= max) break; chosen.push(g); }
+  }
+  return chosen.map((g) => g.id);
+}
+
+function assembleCfbPool({ existing, week, season, entryFee, gameIds, byId }) {
+  const games = gameIds.map((id) => {
+    const g = byId.get(id);
+    return {
+      id: g.id, name: g.name, date: g.date,
+      away: { abbr: g.away.abbr, name: g.away.name, logo: g.away.logo, rank: g.away.rank },
+      home: { abbr: g.home.abbr, name: g.home.name, logo: g.home.logo, rank: g.home.rank },
+      homeSpread: g.homeSpread,
+      spreadLabel: g.spread ?? (g.homeSpread != null ? `${g.home.abbr} ${g.homeSpread > 0 ? '+' : ''}${g.homeSpread}` : 'Pick-em'),
+      overUnder: g.overUnder,
+    };
+  }).sort((a, b) => new Date(a.date) - new Date(b.date));
+  return {
+    id: `cfb-w${week}`, week, season, entryFee,
+    status: 'open', games,
+    entries: existing?.entries ?? {}, scores: existing?.scores ?? {},
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/* Pull latest scores from ESPN into a pool; flip to final when all games done. */
+async function syncCfbPoolScores(leagueId, pool) {
+  const scoreboard = await fetchCfbWeek(pool.week, { force: true });
+  const byId = new Map(scoreboard.games.map((g) => [g.id, g]));
+  pool.scores = pool.scores ?? {};
+  let updated = 0;
+  for (const game of pool.games ?? []) {
+    const live = byId.get(game.id);
+    if (!live || live.home.score == null || live.away.score == null) continue;
+    pool.scores[game.id] = { homeScore: live.home.score, awayScore: live.away.score, final: live.final, statusDetail: live.statusDetail };
+    updated += 1;
+  }
+  const allFinal = (pool.games ?? []).length > 0 && pool.games.every((g) => pool.scores[g.id]?.final);
+  if (allFinal) pool.status = 'final';
+  else if (pool.status === 'final') pool.status = 'locked';
+  pool.updatedAt = new Date().toISOString();
+  await store.saveCfbPool(leagueId, pool);
+  return { updated, allFinal };
+}
+
+/* Credit a finalized pool's pot to the winner(s). Idempotent. */
+async function creditCfbPoolWinners(leagueId, pool, actor = 'admin') {
+  if (pool.status !== 'final') return { ok: false, error: 'Sync scores until every game is final before paying out.' };
+  if (pool.potCredited) return { ok: false, error: 'This pot was already credited to the winners.' };
+  const { gradeCfbPool } = await import('../src/cfbPool.js');
+  const board = gradeCfbPool(pool);
+  if (!board.complete || !board.winners.length) return { ok: false, error: 'No winners to credit yet.' };
+  const pot = Object.values(pool.entries ?? {}).filter((e) => e.paid).length * (Number(pool.entryFee) || 0);
+  if (pot <= 0) return { ok: false, error: 'The pot is $0 — mark entries paid first.' };
+  const share = Math.round((pot / board.winners.length) * 100) / 100;
+  const at = new Date().toISOString();
+  const reason = `CFB Week ${pool.week} pot — winner${board.winners.length > 1 ? ' (split)' : ''}`;
+  const league = await store.getLeague(leagueId);
+  const alreadyCredited = new Set((league?.creditLedger ?? []).filter((e) => e.reason === reason && e.amount === share).map((e) => e.playerId));
+  for (const winner of board.winners) {
+    if (alreadyCredited.has(winner.playerId)) continue;
+    await store.addCreditEntry(leagueId, { id: randomUUID(), playerId: winner.playerId, amount: share, reason, by: actor, at });
+  }
+  pool.potCredited = true;
+  pool.updatedAt = at;
+  await store.saveCfbPool(leagueId, pool);
+  return { ok: true, pot, share, winners: board.winners.map((w) => w.name) };
+}
+
 /* ── CFB Pick-Em Pool — commissioner builds a weekly ATS slate, players pick every game ── */
 app.post('/api/leagues/:leagueId/cfb-pool', auth.requireAdmin, asyncRoute(async (request, response) => {
   const league = await store.getLeague(request.params.leagueId);
@@ -1831,25 +1952,35 @@ app.post('/api/leagues/:leagueId/cfb-pool', auth.requireAdmin, asyncRoute(async 
   if (existing && Object.keys(existing.entries ?? {}).length > 0) {
     return response.status(409).json({ error: 'That week already has a pool with picks submitted. Lock or finalize it instead of rebuilding.' });
   }
-  const games = gameIds.map((id) => {
-    const g = byId.get(id);
-    return {
-      id: g.id, name: g.name, date: g.date,
-      away: { abbr: g.away.abbr, name: g.away.name, logo: g.away.logo, rank: g.away.rank },
-      home: { abbr: g.home.abbr, name: g.home.name, logo: g.home.logo, rank: g.home.rank },
-      homeSpread: g.homeSpread,
-      spreadLabel: g.spread ?? (g.homeSpread != null ? `${g.home.abbr} ${g.homeSpread > 0 ? '+' : ''}${g.homeSpread}` : 'Pick-em'),
-      overUnder: g.overUnder,
-    };
-  }).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const pool = assembleCfbPool({ existing, week, season: scoreboard.season, entryFee, gameIds, byId });
+  await store.saveCfbPool(request.params.leagueId, pool);
+  return response.status(201).json(pool);
+}));
 
-  const pool = {
-    id: poolId, week, season: scoreboard.season, entryFee,
-    status: 'open',
-    games, entries: existing?.entries ?? {}, scores: existing?.scores ?? {},
-    createdAt: existing?.createdAt ?? new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
+/* One-tap auto-builder: fill the slate straight from the AP Top 25 (+ next
+   games with a line), no hand-picking. Same guardrails as the manual builder. */
+app.post('/api/leagues/:leagueId/cfb-pool/auto', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const week = Number.isInteger(Number(request.body?.week)) ? Number(request.body.week) : await fetchCurrentCfbWeek();
+  if (!Number.isInteger(week) || week < 1 || week > 16) return response.status(422).json({ error: 'A valid CFB week (1–16) is required.' });
+  const entryFee = Number(request.body?.entryFee ?? 10);
+  if (!Number.isFinite(entryFee) || entryFee < 0 || entryFee > 1000) return response.status(422).json({ error: 'Entry fee must be between $0 and $1000.' });
+  const max = Math.min(20, Math.max(3, Number(request.body?.max) || 12));
+
+  let scoreboard;
+  try { scoreboard = await fetchCfbWeek(week, { force: true }); }
+  catch { return response.status(502).json({ error: 'Could not fetch this week’s games from ESPN. Try again in a minute.' }); }
+
+  const existing = (league.cfbPools ?? []).find((p) => p.id === `cfb-w${week}`);
+  if (existing && Object.keys(existing.entries ?? {}).length > 0) {
+    return response.status(409).json({ error: 'That week already has a pool with picks submitted. Lock or finalize it instead of rebuilding.' });
+  }
+  const gameIds = selectAutoCfbGameIds(scoreboard, max);
+  if (gameIds.length < 3) return response.status(422).json({ error: `Not enough upcoming Week ${week} games with posted lines yet. Try again once ESPN has more spreads up.` });
+
+  const byId = new Map(scoreboard.games.map((g) => [g.id, g]));
+  const pool = assembleCfbPool({ existing, week, season: scoreboard.season, entryFee, gameIds, byId });
   await store.saveCfbPool(request.params.leagueId, pool);
   return response.status(201).json(pool);
 }));
@@ -1906,24 +2037,10 @@ app.patch('/api/leagues/:leagueId/cfb-pool/:poolId/paid', auth.requireAdmin, asy
 app.post('/api/leagues/:leagueId/cfb-pool/:poolId/sync-scores', auth.requireAdmin, asyncRoute(async (request, response) => {
   const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
   if (!pool) return response.status(404).json({ error: 'Pool not found.' });
-  let scoreboard;
-  try { scoreboard = await fetchCfbWeek(pool.week, { force: true }); }
+  let result;
+  try { result = await syncCfbPoolScores(request.params.leagueId, pool); }
   catch { return response.status(502).json({ error: 'Could not fetch scores from ESPN. Try again in a minute.' }); }
-  const byId = new Map(scoreboard.games.map((g) => [g.id, g]));
-  pool.scores = pool.scores ?? {};
-  let updated = 0;
-  for (const game of pool.games ?? []) {
-    const live = byId.get(game.id);
-    if (!live || live.home.score == null || live.away.score == null) continue;
-    pool.scores[game.id] = { homeScore: live.home.score, awayScore: live.away.score, final: live.final, statusDetail: live.statusDetail };
-    updated += 1;
-  }
-  const allFinal = (pool.games ?? []).length > 0 && pool.games.every((g) => pool.scores[g.id]?.final);
-  if (allFinal) pool.status = 'final';
-  else if (pool.status === 'final') pool.status = 'locked';
-  pool.updatedAt = new Date().toISOString();
-  await store.saveCfbPool(request.params.leagueId, pool);
-  return response.json({ pool, updated, allFinal });
+  return response.json({ pool, updated: result.updated, allFinal: result.allFinal });
 }));
 
 /* ── Player credits — the app tracks money between friends; it never moves real money ── */
@@ -1962,30 +2079,9 @@ app.post('/api/leagues/:leagueId/sheets/:sheetId/pay-with-credit', playerAuth.re
 app.post('/api/leagues/:leagueId/cfb-pool/:poolId/credit-winners', auth.requireAdmin, asyncRoute(async (request, response) => {
   const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
   if (!pool) return response.status(404).json({ error: 'Pool not found.' });
-  if (pool.status !== 'final') return response.status(422).json({ error: 'Sync scores until every game is final before paying out.' });
-  if (pool.potCredited) return response.status(409).json({ error: 'This pot was already credited to the winners.' });
-  const { gradeCfbPool } = await import('../src/cfbPool.js');
-  const board = gradeCfbPool(pool);
-  if (!board.complete || !board.winners.length) return response.status(422).json({ error: 'No winners to credit yet.' });
-  const pot = Object.values(pool.entries ?? {}).filter((e) => e.paid).length * (Number(pool.entryFee) || 0);
-  if (pot <= 0) return response.status(422).json({ error: 'The pot is $0 — mark entries paid first.' });
-  const share = Math.round((pot / board.winners.length) * 100) / 100;
-  const at = new Date().toISOString();
-  const reason = `CFB Week ${pool.week} pot — winner${board.winners.length > 1 ? ' (split)' : ''}`;
-  // Idempotent: skip any winner who already has this exact pot credit (protects
-  // against a retry after a partial failure double-crediting someone).
-  const league = await store.getLeague(request.params.leagueId);
-  const alreadyCredited = new Set((league?.creditLedger ?? []).filter((e) => e.reason === reason && e.amount === share).map((e) => e.playerId));
-  for (const winner of board.winners) {
-    if (alreadyCredited.has(winner.playerId)) continue;
-    await store.addCreditEntry(request.params.leagueId, {
-      id: randomUUID(), playerId: winner.playerId, amount: share, reason, by: 'admin', at,
-    });
-  }
-  pool.potCredited = true;
-  pool.updatedAt = at;
-  await store.saveCfbPool(request.params.leagueId, pool);
-  return response.json({ pot, share, winners: board.winners.map((w) => w.name) });
+  const result = await creditCfbPoolWinners(request.params.leagueId, pool, 'admin');
+  if (!result.ok) return response.status(pool.potCredited ? 409 : 422).json({ error: result.error });
+  return response.json({ pot: result.pot, share: result.share, winners: result.winners });
 }));
 
 /* ── Payment claims — player says "I sent it", commissioner confirms in one tap ── */
@@ -2325,6 +2421,63 @@ async function appendAutoPilotLog(league, entries) {
   await store.updateLeagueSettings(leagueId, { ...settings, autoPilotLog: log });
 }
 
+/* Weekly College Pick-Em on autopilot: open each week's pool from the Top 25,
+   lock at kickoff, then finalize and pay the pot — all hands-free. Gated by
+   settings.cfbAuto (on unless the commissioner turns it off). */
+async function autoManageCfb({ leagueId: lid, actions }) {
+  const league = await store.getLeague(lid);
+  const settings = league?.settings ?? {};
+  if (settings.cfbAuto === false) return;
+  const week = await fetchCurrentCfbWeek();
+  let scoreboard;
+  try { scoreboard = await fetchCfbWeek(week, { force: false }); } catch { return; }
+  const poolId = `cfb-w${week}`;
+  let pool = (league.cfbPools ?? []).find((p) => p.id === poolId);
+
+  // 1. Auto-open the current week's pool from the Top 25 if none exists yet
+  if (!pool) {
+    const gameIds = selectAutoCfbGameIds(scoreboard, settings.cfbAutoMax || 12);
+    if (gameIds.length >= 3) {
+      const byId = new Map(scoreboard.games.map((g) => [g.id, g]));
+      pool = assembleCfbPool({ existing: null, week, season: scoreboard.season, entryFee: settings.cfbAutoFee ?? 10, gameIds, byId });
+      await store.saveCfbPool(lid, pool);
+      try {
+        await store.addChatMessage(lid, { id: `chat-cfb-open-w${week}`, playerId: null, name: 'Jack 🤖', msg: `🏟️ College Pick-Em is LIVE for Week ${week} — ${gameIds.length} games on the board, $${pool.entryFee} to get in. Pick every game against the spread before kickoff. 🎓`, time: new Date().toISOString() });
+      } catch { /* chat is non-critical */ }
+      actions.push(`Auto-opened CFB Week ${week} pool from the Top 25 (${gameIds.length} games).`);
+    }
+    return; // just opened — let players pick before doing anything else
+  }
+
+  // 2. Auto-lock once the first game kicks off
+  if (pool.status === 'open') {
+    const firstKick = pool.games.reduce((min, g) => Math.min(min, new Date(g.date).getTime()), Infinity);
+    if (Number.isFinite(firstKick) && Date.now() >= firstKick) {
+      pool.status = 'locked';
+      pool.updatedAt = new Date().toISOString();
+      await store.saveCfbPool(lid, pool);
+      actions.push(`Locked CFB Week ${week} pool at kickoff.`);
+    }
+  }
+
+  // 3. Auto-finalize + pay the pot when every game is final
+  if (pool.status === 'locked' || pool.status === 'final') {
+    try {
+      const { allFinal } = await syncCfbPoolScores(lid, pool);
+      if (allFinal && !pool.potCredited) {
+        const credit = await creditCfbPoolWinners(lid, pool, 'auto-pilot');
+        if (credit.ok) {
+          const names = credit.winners.join(' & ');
+          try {
+            await store.addChatMessage(lid, { id: `chat-cfb-final-w${week}`, playerId: null, name: 'Jack 🤖', msg: `🎓🏁 CFB Week ${week} is official: ${names} take${credit.winners.length > 1 ? '' : 's'} the $${credit.pot} college pot${credit.winners.length > 1 ? ` ($${credit.share} each)` : ''}. Dropped straight into the balance. 💰`, time: new Date().toISOString() });
+          } catch { /* chat is non-critical */ }
+          actions.push(`Finalized CFB Week ${week} and credited $${credit.pot} to ${names}.`);
+        }
+      }
+    } catch (error) { console.error('Auto-pilot CFB finalize failed:', error.message); }
+  }
+}
+
 async function runAutoPilot({ source = 'traffic' } = {}) {
   if (autoPilotRunning) return { skipped: 'already running' };
   autoPilotRunning = true;
@@ -2448,6 +2601,10 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
         }
       }
     } catch (error) { console.error('Auto-pilot reminders failed:', error.message); }
+
+    // 4. College Pick-Em: open / lock / finalize the weekly pool hands-free
+    try { await autoManageCfb({ leagueId, actions }); }
+    catch (error) { console.error('Auto-pilot CFB manage failed:', error.message); }
 
     if (actions.length) await appendAutoPilotLog(league, actions.map((a) => `[${source}] ${a}`));
     return { week, actions };

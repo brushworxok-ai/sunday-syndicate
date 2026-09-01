@@ -1757,3 +1757,15 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .sound-toggle-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .2s; }
 .sound-toggle.on .sound-toggle-switch { background: var(--neon); }
 .sound-toggle.on .sound-toggle-switch::after { transform: translateX(18px); }
+
+/* CFB autopilot commissioner control */
+.cfb-autopilot { display: flex; align-items: center; gap: 14px; background: rgba(255,255,255,.03); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin: 10px 0; }
+.cfb-autopilot.on { background: linear-gradient(150deg, rgba(57,255,20,.08), rgba(0,212,255,.04)); border-color: rgba(57,255,20,.35); }
+.cfb-autopilot-copy { flex: 1; min-width: 0; }
+.cfb-autopilot-copy strong { display: block; font-size: 14px; color: #fff; margin-bottom: 3px; }
+.cfb-autopilot-copy small { font-size: 12px; color: var(--muted); line-height: 1.45; }
+.cfb-autopilot-switch { position: relative; width: 46px; height: 28px; border-radius: 99px; background: rgba(255,255,255,.14); border: none; flex-shrink: 0; cursor: pointer; transition: background .2s; }
+.cfb-autopilot-switch span { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: transform .2s; }
+.cfb-autopilot-switch.on { background: var(--neon); }
+.cfb-autopilot-switch.on span { transform: translateX(18px); }
+.cfb-autopilot-switch:disabled { opacity: .6; }
