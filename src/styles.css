@@ -1650,3 +1650,25 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   input[type="password"], input[type="search"], input[type="email"],
   select, textarea { font-size: 16px !important; }
 }
+
+/* ── Horizontal-overflow guard (mobile "everything runs off the right edge") ──
+   No screen may ever exceed the phone viewport. The page never scrolls
+   sideways; the game / injury / wire rails scroll inside themselves instead
+   of stretching the whole layout wide. This is the fix for content bleeding
+   past the right edge and getting cut off on iPhone. */
+html, body { overflow-x: hidden; max-width: 100vw; }
+.app-shell { overflow-x: clip; max-width: 100vw; }
+main { max-width: 100%; }
+main section, .page-grid, .standard-page, .hero, .hero-actions,
+.stat-grid, .game-ticker, .injury-ticker, .games-list,
+.ticker-scroll, .injury-scroll, .live-strip-row { min-width: 0; max-width: 100%; }
+.hero-actions .button { max-width: 100%; box-sizing: border-box; }
+
+/* Keep the header (brand + week selector + season badge) within phone width */
+@media (max-width: 640px) {
+  .site-header { gap: 10px; }
+  .brand strong { font-size: 15px; }
+  .header-week { gap: 8px; flex-shrink: 0; }
+  .header-week select { max-width: 116px; padding: 6px 8px; font-size: 14px !important; }
+  .header-week strong { padding: 6px 9px; }
+}

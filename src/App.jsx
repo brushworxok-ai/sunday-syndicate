@@ -298,6 +298,11 @@ function App() {
       if (league.latestRecap?.finalText) {
         setAiResult((current) => ({ ...current, recap: league.latestRecap.finalText }));
         setRecapEdit(league.latestRecap.finalText);
+      } else {
+        // Real league with no recap yet — clear the demo placeholder so the
+        // Home "League pulse" never shows fake Marcus/Jordan results.
+        setAiResult((current) => ({ ...current, recap: '' }));
+        setRecapEdit('');
       }
       setServerError('');
       return league;
