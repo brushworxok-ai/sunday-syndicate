@@ -2405,7 +2405,7 @@ function App() {
                 </div>
                 <div className="my-profile-stats">
                   <div><span>Credit balance</span><strong>${myCredit}</strong></div>
-                  <div><span>Roast setting</span><strong>{({ none: 'Opted out', light: 'Light / PG-13', competitive: 'Explicit', maximum: 'Maximum' })[currentPlayer.trashTalk?.level] || 'Explicit'}</strong></div>
+                  <div><span>Roast setting</span><strong>{({ none: 'Opted out', light: 'Light / PG-13', competitive: 'Maximum', maximum: 'Maximum' })[currentPlayer.trashTalk?.level] || 'Maximum'}</strong></div>
                   <div><span>Results</span><strong>{(currentPlayer.messaging?.resultsChannel || 'sms_and_in_app').replaceAll('_', ' ')}</strong></div>
                 </div>
                 <p className="my-profile-hint">Change your photo, team, or roast level below. Everything saves instantly and only you can edit your own settings.</p>
@@ -2467,9 +2467,9 @@ function App() {
                     <option value="opted_in">Opted in</option><option value="opted_out">STOP / opted out</option>
                   </select>
                 </label>
-                <label>Trash-talk level <small>Explicit is ON by default — switch to "No trash talk" anytime to opt out</small>
+                <label>Trash-talk level <small>Maximum / unfiltered is ON by default — switch to "No trash talk" anytime to opt out</small>
                   <select value={player.trashTalk.level} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { trashTalkLevel: event.target.value })}>
-                    <option value="none">No trash talk (opted out)</option><option value="light">Light / PG-13</option><option value="competitive">Explicit (default)</option><option value="maximum">Maximum / unfiltered</option>
+                    <option value="none">No trash talk (opted out)</option><option value="light">Light / PG-13</option><option value="competitive">Maximum / unfiltered (default)</option>
                   </select>
                 </label>
                 <label>Favorite team <small>Jack tracks rivalry bragging rights</small>

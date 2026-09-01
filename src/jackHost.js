@@ -32,11 +32,11 @@ export const DEFAULT_JACK_SETTINGS = Object.freeze({
   animation: { enabled: true, reducedMotion: false },
 });
 
-/* Roast level a player resolves to from their trash-talk dropdown. The league
-   runs Explicit by default (private adult friend group), so the default
-   "competitive" maps to explicit; players can still dial down to light/PG-13
-   or opt out entirely ("none"). */
-const legacyLevel = { none: 'clean', light: 'pg13', competitive: 'explicit', maximum: 'target' };
+/* Roast level a player resolves to from their trash-talk dropdown. This is a
+   no-holds-barred private adult friend group, so the default ("competitive")
+   maps to the top tier; players can still dial down to Light/PG-13 or opt out
+   entirely ("none"). */
+const legacyLevel = { none: 'clean', light: 'pg13', competitive: 'target', maximum: 'target' };
 const mildProfanity = /\b(damn|hell|crap)\b/i;
 const strongProfanity = /\b(shit|bullshit|fuck|fucking|ass|asshole|nigga|niggas)\b/i;
 const prohibitedPersonalTopics = /\b(slur|racial|religion|sexual|sex life|kill|die|threat|wife|husband|mother|father|family|diagnos|health|disab|appearance|weight|salary|job|house|car|bank|debt|money problem|private life)\b/i;
