@@ -668,7 +668,7 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .jack-avatar.compact { transform: scale(.65); transform-origin: top right; margin: -12px -8px -12px 0; }
 .jack-avatar-frame { position: relative; width: 72px; height: 72px; border-radius: 50%; overflow: hidden; border: 2px solid var(--line); }
 .jack-avatar.compact .jack-avatar-frame { width: 52px; height: 52px; }
-.jack-avatar-frame img { width: 100%; height: 100%; object-fit: cover; filter: saturate(.9); transition: filter .3s; }
+.jack-avatar-frame img, .jack-avatar-frame video { width: 100%; height: 100%; object-fit: cover; filter: saturate(.9); transition: filter .3s; display: block; }
 .jack-avatar-aura { position: absolute; inset: -4px; border-radius: 50%; background: radial-gradient(circle, transparent 55%, rgba(57,255,20,.15) 100%); pointer-events: none; opacity: 0; transition: opacity .4s; }
 .jack-avatar-scan { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; background: var(--neon); opacity: 0; transform: scaleX(0); transition: transform .3s, opacity .3s; }
 .jack-avatar-expression { position: absolute; top: 4px; right: 4px; font-size: 10px; color: var(--neon); opacity: .6; }
@@ -697,8 +697,8 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .jack-avatar-roast .jack-avatar-wave i { background: #ff4444; }
 .jack-avatar-winner .jack-avatar-wave i { background: var(--gold); }
 .jack-avatar-shock .jack-avatar-wave i { background: var(--blue); }
-.jack-avatar-roast .jack-avatar-frame img { filter: saturate(1.15) contrast(1.05); }
-.jack-avatar-winner .jack-avatar-frame img { filter: saturate(1.1) brightness(1.08); }
+.jack-avatar-roast .jack-avatar-frame img, .jack-avatar-roast .jack-avatar-frame video { filter: saturate(1.15) contrast(1.05); }
+.jack-avatar-winner .jack-avatar-frame img, .jack-avatar-winner .jack-avatar-frame video { filter: saturate(1.1) brightness(1.08); }
 @media (prefers-reduced-motion: reduce) {
   .jack-avatar-talking .jack-avatar-aura, .jack-avatar-roast .jack-avatar-aura,
   .jack-avatar-winner .jack-avatar-aura, .jack-avatar-shock .jack-avatar-aura { transform: none; }
@@ -706,7 +706,7 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 }
 .jack-avatar-talking .jack-avatar-aura { opacity: 1; animation: avatar-talk-glow 1.2s ease-in-out infinite; }
 .jack-avatar-talking .jack-avatar-frame { border-color: var(--neon); box-shadow: 0 0 18px rgba(57,255,20,0.35); }
-.jack-avatar-talking .jack-avatar-frame img { filter: saturate(1.1) brightness(1.05); }
+.jack-avatar-talking .jack-avatar-frame img, .jack-avatar-talking .jack-avatar-frame video { filter: saturate(1.1) brightness(1.05); }
 .jack-avatar-talking figcaption i { background: var(--neon); animation: avatar-speak-dot .5s infinite alternate; }
 @keyframes avatar-talk-glow { 0%,100% { opacity: .7; } 50% { opacity: 1; } }
 .jack-avatar-roast .jack-avatar-frame { border-color: #ff4444; }
@@ -986,6 +986,20 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .season-pool-card { display: flex; gap: 20px; flex-wrap: wrap; margin: 4px 0 22px; padding: 18px; border-radius: 16px; border: 1px solid rgba(255, 215, 0, 0.3); background: linear-gradient(135deg, rgba(255, 215, 0, 0.07), rgba(0, 0, 0, 0.2)); }
 .season-pool-main { flex: 2 1 300px; }
 .season-pool-figures { display: flex; gap: 26px; flex-wrap: wrap; margin: 12px 0 10px; }
+/* Three-place podium */
+.season-podium { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0 12px; }
+.season-podium-place { background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: 12px; padding: 12px 10px; text-align: center; display: flex; flex-direction: column; gap: 2px; }
+.season-podium-place .podium-medal { font-size: 20px; }
+.season-podium-place small { font-size: .6rem; letter-spacing: .08em; text-transform: uppercase; color: rgba(255,255,255,.5); }
+.season-podium-place strong { font-size: 1.15rem; color: #fff; }
+.season-podium-place em { font-style: normal; font-size: .68rem; color: var(--muted); }
+.season-podium-place.p1 { border-color: rgba(255,215,0,.45); background: linear-gradient(180deg, rgba(255,215,0,.08), rgba(255,255,255,.03)); }
+.season-podium-place.p1 strong { color: var(--gold); }
+.season-podium-place.p2 { border-color: rgba(200,200,210,.35); }
+.season-podium-place.p3 { border-color: rgba(205,127,50,.35); }
+.season-split-editor { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.season-split-editor input { width: 58px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 8px; color: var(--ink); text-align: center; }
+@media (max-width: 560px) { .season-podium { grid-template-columns: 1fr; } .season-podium-place { flex-direction: row; align-items: center; justify-content: space-between; text-align: left; } }
 .season-pool-figures small { display: block; font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255, 255, 255, 0.5); margin-bottom: 3px; }
 .season-pool-figures strong { font-size: 1.5rem; color: #FFD700; font-variant-numeric: tabular-nums; }
 .season-pool-figures strong i { font-size: 0.9rem; color: rgba(255, 255, 255, 0.4); font-style: normal; }

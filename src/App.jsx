@@ -1775,17 +1775,34 @@ function App() {
               const pool = serverLeague?.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
               const paidSet = new Set(pool.paidPlayerIds ?? []);
               const seasonPot = paidSet.size * (pool.entryFee ?? 25);
-              const leader = seasonStats.table[0];
+              const split = Array.isArray(pool.payoutSplit) && pool.payoutSplit.length === 3 ? pool.payoutSplit : [60, 30, 10];
               const seasonPaidOut = (serverLeague?.payouts ?? []).some((p) => p.pool === 'season');
+              const medals = ['🥇', '🥈', '🥉'];
+              const places = ['1st', '2nd', '3rd'];
+              // Payout dollars: round down 2nd/3rd, give the remainder to 1st so the pot always totals out.
+              const second = Math.floor(seasonPot * split[1] / 100);
+              const third = Math.floor(seasonPot * split[2] / 100);
+              const first = seasonPot - second - third;
+              const payouts = [first, second, third];
               return <section className="season-pool-card">
                 <div className="season-pool-main">
-                  <span className="eyebrow dark">SEASON POOL · ${pool.entryFee ?? 25}/PLAYER · WINNER TAKES ALL</span>
+                  <span className="eyebrow dark">SEASON POOL · ${pool.entryFee ?? 25}/PLAYER · PAYS THREE PLACES</span>
                   <div className="season-pool-figures">
                     <div><small>Season pot</small><strong>${seasonPot.toLocaleString()}</strong></div>
                     <div><small>Paid in</small><strong>{paidSet.size}<i>/{proofLeague.players.length}</i></strong></div>
-                    <div><small>Current leader</small><strong>{leader ? `${leader.name}` : '—'}</strong>{leader && <em>{leader.totalCorrect} correct picks · {leader.winPct}%</em>}</div>
                   </div>
-                  <p>Most total correct picks combined across all 18 weekly sheets takes the season pot — it's the whole season's work, not one hot week. Ties break on accuracy %.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
+                  <div className="season-podium">
+                    {payouts.map((amount, index) => {
+                      const row = seasonStats.table[index];
+                      return <div className={`season-podium-place p${index + 1}`} key={places[index]}>
+                        <span className="podium-medal">{medals[index]}</span>
+                        <small>{places[index]} · {split[index]}%</small>
+                        <strong>${amount.toLocaleString()}</strong>
+                        <em>{row && row.totalCorrect > 0 ? `${row.name} · ${row.totalCorrect} correct` : 'Up for grabs'}</em>
+                      </div>;
+                    })}
+                  </div>
+                  <p>Most total correct picks combined across all 18 weekly sheets sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three cash out.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
                 </div>
                 {isComm && <div className="season-pool-admin">
                   <small>SEASON ENTRIES PAID</small>
@@ -1795,6 +1812,22 @@ function App() {
                       <span>{player.name}</span>
                     </label>
                   ))}
+                  <small style={{ marginTop: 12 }}>PAYOUT SPLIT (1ST / 2ND / 3RD %)</small>
+                  <div className="season-split-editor">
+                    {split.map((pct, index) => (
+                      <input key={places[index]} type="number" min="0" max="100" defaultValue={pct} aria-label={`${places[index]} place percent`} id={`season-split-${index}`} />
+                    ))}
+                    <button className="button button-ghost" type="button" disabled={serverBusy === 'season-split'} onClick={async () => {
+                      const next = [0, 1, 2].map((i) => Number(document.getElementById(`season-split-${i}`)?.value));
+                      setServerBusy('season-split');
+                      try {
+                        await apiRequest(`/api/leagues/${LEAGUE_ID}/season-pool`, { method: 'PATCH', body: JSON.stringify({ payoutSplit: next }) });
+                        await loadLeague();
+                        notify(`Season payout split saved: ${next.join('/')}.`);
+                      } catch (err) { notify(err.message); }
+                      finally { setServerBusy(''); }
+                    }}>{serverBusy === 'season-split' ? 'Saving…' : 'Save split'}</button>
+                  </div>
                 </div>}
               </section>;
             })()}
@@ -2664,7 +2697,7 @@ function App() {
         {view === 'rules' && (
           <StandardPage eyebrow="THE FINE PRINT" title="House rules" subtitle="Simple enough to explain before kickoff. Firm enough to settle Monday-night arguments.">
             <div className="rules-grid">
-              <Rule number="01" title="Entry" text={`Each weekly sheet costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, and it goes to the most total correct picks combined across all 18 weeks, not the best single week.`} />
+              <Rule number="01" title="Entry" text={`Each weekly sheet costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE cash out (60/30/10 unless the commissioner changes the split).`} />
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. A locked sheet cannot be edited in this demo.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
               <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess takes it. Identical guesses split the pot." />

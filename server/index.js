@@ -768,14 +768,14 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
       `One point per correct pick. Highest total wins the weekly pot. A game that ends in a TIE counts as no point for anyone.`,
       `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess wins. Identical guesses split the pot.`,
       `DEADLINE: sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
-      `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. It goes to the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week or best single sheet. Paid out after Week 18.`,
+      `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. Standings are the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week. Pays THREE places: ${(league.settings?.seasonPool?.payoutSplit ?? [60, 30, 10]).map((pct, i) => `${['1st', '2nd', '3rd'][i]} gets ${pct}%`).join(', ')} of the pot. Paid out after Week 18.`,
       `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you; a TIE counts as surviving. Last one standing wins.`,
       `CFB PICK-EM POOLS: separate college football pools where players pick every game AGAINST THE SPREAD. Best ATS record wins that pool's pot; tiebreaker is closest to the total points of the last game.`,
       `PAYMENTS: players pay through the league's Cash App Pool link or with one tap from their credit balance. Winnings can be credited straight to a player's balance and rolled into future entries. The app only tracks money between friends — Cash App moves it.`,
     ],
     seasonPool: (() => {
       const pool = league.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
-      return { entryFee: pool.entryFee, paidCount: (pool.paidPlayerIds ?? []).length, pot: (pool.paidPlayerIds ?? []).length * pool.entryFee };
+      return { entryFee: pool.entryFee, paidCount: (pool.paidPlayerIds ?? []).length, pot: (pool.paidPlayerIds ?? []).length * pool.entryFee, payoutSplit: pool.payoutSplit ?? [60, 30, 10] };
     })(),
     submissionDeadline: getWeekDeadline(currentWeek)?.toISOString() ?? null,
     submissionLocked: isWeekLocked(currentWeek),
@@ -1669,7 +1669,18 @@ app.patch('/api/leagues/:leagueId/season-pool', auth.requireAdmin, asyncRoute(as
   const paidPlayerIds = Array.isArray(request.body?.paidPlayerIds)
     ? [...new Set(request.body.paidPlayerIds.filter((id) => validIds.has(id)))]
     : current.paidPlayerIds ?? [];
-  const seasonPool = { entryFee, paidPlayerIds, updatedAt: new Date().toISOString() };
+  // Three-place payout split (percentages, descending, must total 100).
+  let payoutSplit = current.payoutSplit ?? [60, 30, 10];
+  if (Array.isArray(request.body?.payoutSplit)) {
+    const split = request.body.payoutSplit.map(Number);
+    if (split.length !== 3 || split.some((pct) => !Number.isFinite(pct) || pct < 0 || pct > 100)) {
+      return response.status(422).json({ error: 'Payout split must be three percentages (1st, 2nd, 3rd).' });
+    }
+    if (Math.round(split[0] + split[1] + split[2]) !== 100) return response.status(422).json({ error: 'Payout split must add up to 100%.' });
+    if (split[0] < split[1] || split[1] < split[2]) return response.status(422).json({ error: 'Payout split must be descending — 1st ≥ 2nd ≥ 3rd.' });
+    payoutSplit = split;
+  }
+  const seasonPool = { entryFee, paidPlayerIds, payoutSplit, updatedAt: new Date().toISOString() };
   await store.updateLeagueSettings(request.params.leagueId, { ...(league.settings ?? {}), seasonPool });
   return response.json({ seasonPool });
 }));

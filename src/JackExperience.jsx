@@ -17,17 +17,30 @@ const STATE_LABELS = {
   roast: 'Roast mode', winner: 'Winner moment', shock: 'Breaking update', live: 'Live board', error: 'Data unavailable',
 };
 
+/* Animated video loops per avatar state. Talking-family states share the
+   animated delivery loop; everything else breathes on the idle loop. The
+   static photo stays as the instant fallback if a video can't load. */
+const AVATAR_VIDEO_BY_STATE = {
+  talking: '/jack-talking.mp4', roast: '/jack-talking.mp4', winner: '/jack-talking.mp4', shock: '/jack-talking.mp4',
+  idle: '/jack-idle.mp4', listening: '/jack-idle.mp4', thinking: '/jack-idle.mp4', live: '/jack-idle.mp4', error: '/jack-idle.mp4',
+};
+
 export function JackAvatar({ state = 'idle', settings, compact = false, caption }) {
   const jack = normalizeJackSettings(settings);
+  const [videoFailed, setVideoFailed] = useState(false);
   const resolved = nextJackAvatarState(state, {
     animationEnabled: jack.animation.enabled,
     reducedMotion: jack.animation.reducedMotion,
   });
   const label = caption || STATE_LABELS[resolved.state];
+  const prefersStill = jack.animation.reducedMotion || !jack.animation.enabled;
+  const videoSrc = !prefersStill && !videoFailed ? AVATAR_VIDEO_BY_STATE[resolved.state] : null;
   return <figure className={`jack-avatar jack-avatar-${resolved.state} ${resolved.motion} ${compact ? 'compact' : ''}`} data-state={resolved.state} aria-label={`Jack is ${label.toLowerCase()}`}>
     <div className="jack-avatar-frame">
       <span className="jack-avatar-aura" aria-hidden="true" />
-      <img src="/jack.jpg" alt="Jack, the 405 league host" />
+      {videoSrc
+        ? <video key={videoSrc} src={videoSrc} poster="/jack.jpg" autoPlay loop muted playsInline onError={() => setVideoFailed(true)} aria-label="Jack, the 405 league host" />
+        : <img src="/jack.jpg" alt="Jack, the 405 league host" />}
       <span className="jack-avatar-scan" aria-hidden="true" />
       <span className="jack-avatar-expression" aria-hidden="true">{resolved.state === 'winner' ? '♛' : resolved.state === 'shock' ? '!' : resolved.state === 'error' ? '×' : '●'}</span>
     </div>
