@@ -1769,3 +1769,9 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .cfb-autopilot-switch.on { background: var(--neon); }
 .cfb-autopilot-switch.on span { transform: translateX(18px); }
 .cfb-autopilot-switch:disabled { opacity: .6; }
+
+/* CFB autopilot default fee / games controls */
+.cfb-auto-defaults { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin: 0 0 10px; }
+.cfb-auto-defaults label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.cfb-auto-defaults input { width: 90px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 15px; }
+.cfb-auto-defaults .button { padding: 9px 14px; font-size: 13px; }

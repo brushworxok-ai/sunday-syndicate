@@ -283,6 +283,8 @@ function App() {
   // CFB Pick-Em pool state
   const [cfbSelected, setCfbSelected] = useState(() => new Set());
   const [cfbEntryFee, setCfbEntryFee] = useState(10);
+  const [cfbAutoFeeInput, setCfbAutoFeeInput] = useState('');
+  const [cfbAutoMaxInput, setCfbAutoMaxInput] = useState('');
   const [cfbMyPicks, setCfbMyPicks] = useState({});
   const [cfbTiebreaker, setCfbTiebreaker] = useState('');
   const [cfbBuilderOpen, setCfbBuilderOpen] = useState(false);
@@ -669,6 +671,23 @@ function App() {
       await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-auto`, { method: 'PATCH', body: JSON.stringify({ enabled: !enabled }) });
       await loadLeague();
       notify(!enabled ? 'College autopilot ON — pools open, lock & pay out each week automatically.' : 'College autopilot OFF — you\'ll build pools manually.');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const saveCfbAutoDefaults = async () => {
+    if (!(await ensureAdmin())) return;
+    const fee = Number(cfbAutoFeeInput);
+    const max = Number(cfbAutoMaxInput);
+    const body = {};
+    if (Number.isFinite(fee) && String(cfbAutoFeeInput).trim() !== '') body.entryFee = fee;
+    if (Number.isInteger(max) && String(cfbAutoMaxInput).trim() !== '') body.max = max;
+    if (Object.keys(body).length === 0) return notify('Nothing to save — set a fee or game count first.');
+    setServerBusy('cfb-auto-defaults');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-auto`, { method: 'PATCH', body: JSON.stringify(body) });
+      await loadLeague();
+      notify(`College defaults saved — $${data.cfbAutoFee} entry, up to ${data.cfbAutoMax} games each week.`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -2654,6 +2673,14 @@ function App() {
                 <button type="button" className={`cfb-autopilot-switch ${serverLeague?.settings?.cfbAuto !== false ? 'on' : ''}`} disabled={serverBusy === 'cfb-auto'} onClick={toggleCfbAuto} aria-pressed={serverLeague?.settings?.cfbAuto !== false}>
                   <span aria-hidden="true" />
                 </button>
+              </div>
+            )}
+
+            {isComm && serverLeague?.settings?.cfbAuto !== false && (
+              <div className="cfb-auto-defaults">
+                <label>Weekly entry $<input type="number" min="0" max="1000" placeholder={String(serverLeague?.settings?.cfbAutoFee ?? 10)} value={cfbAutoFeeInput} onChange={(e) => setCfbAutoFeeInput(e.target.value)} /></label>
+                <label>Games / week<input type="number" min="3" max="20" placeholder={String(serverLeague?.settings?.cfbAutoMax ?? 12)} value={cfbAutoMaxInput} onChange={(e) => setCfbAutoMaxInput(e.target.value)} /></label>
+                <button type="button" className="button button-ghost-dark" disabled={serverBusy === 'cfb-auto-defaults'} onClick={saveCfbAutoDefaults}>{serverBusy === 'cfb-auto-defaults' ? 'Saving…' : 'Save defaults'}</button>
               </div>
             )}
 
