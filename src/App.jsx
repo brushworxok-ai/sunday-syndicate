@@ -2200,7 +2200,18 @@ function App() {
         {view === 'entries' && (
           <StandardPage eyebrow={weekLabel.toUpperCase()} title="Locked entries" subtitle="Picks remain hidden here; the commissioner can score them after results arrive.">
             {weekSheets.length ? <div className="entry-list">{weekSheets.map((sheet, index) => (
-              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{Object.keys(sheet.picks).length} picks · TB {sheet.tiebreaker}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time>{sheet.paid && <b className="paid-pill">PAID</b>}</article>
+              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{Object.keys(sheet.picks).length} picks · TB {sheet.tiebreaker}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time>{sheet.paid && <b className="paid-pill">PAID</b>}{isComm && (
+                <button className="entry-remove" type="button" title="Remove sheet" disabled={serverBusy === `del-${sheet.id}`} onClick={async () => {
+                  if (!window.confirm(`Remove ${sheet.name}'s ${weekLabel} sheet? This can't be undone.`)) return;
+                  setServerBusy(`del-${sheet.id}`);
+                  try {
+                    await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheet.id}`, { method: 'DELETE' });
+                    await loadLeague();
+                    notify(`Removed ${sheet.name}'s ${weekLabel} sheet.`);
+                  } catch (err) { notify(err.message); }
+                  finally { setServerBusy(''); }
+                }}>{serverBusy === `del-${sheet.id}` ? '…' : '✕'}</button>
+              )}</article>
             ))}</div> : <EmptyState icon="◎" title="The board is quiet" text="Be the first entry on the sheet this week." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}

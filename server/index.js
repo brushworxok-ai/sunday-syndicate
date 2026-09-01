@@ -2015,6 +2015,12 @@ app.post('/api/leagues/:leagueId/cfb-pool/:poolId/claim-payment', playerAuth.req
   return response.json({ entry });
 }));
 
+app.delete('/api/leagues/:leagueId/sheets/:sheetId', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const removed = await store.deleteSheet(request.params.leagueId, request.params.sheetId, request.actor ?? 'commissioner');
+  if (!removed) return response.status(404).json({ error: 'Sheet not found.' });
+  return response.json({ removed });
+}));
+
 app.patch('/api/leagues/:leagueId/sheets/:sheetId/paid', auth.requireAdmin, asyncRoute(async (request, response) => {
   const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paid: Boolean(request.body?.paid) });
   if (!updated) return response.status(404).json({ error: 'Sheet not found.' });

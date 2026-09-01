@@ -351,6 +351,14 @@ export class LeagueStore {
     return { id: sheetId, playerId: updated.player_id, week: updated.week, name: updated.name, paid: Boolean(updated.paid), paymentClaim: parse(updated.claim_json, null) };
   }
 
+  deleteSheet(leagueId, sheetId, actor = 'commissioner') {
+    const row = this.db.prepare('SELECT * FROM sheets WHERE league_id = ? AND id = ?').get(leagueId, sheetId);
+    if (!row) return null;
+    this.db.prepare('DELETE FROM sheets WHERE league_id = ? AND id = ?').run(leagueId, sheetId);
+    this.writeAudit(leagueId, 'sheet.removed', `Removed ${row.name}'s Week ${row.week} sheet`, actor, { sheetId, playerId: row.player_id ?? null, week: row.week });
+    return { id: sheetId, name: row.name, week: row.week };
+  }
+
   upsertResult(leagueId, gameId, result, actor) {
     const verifiedAt = new Date().toISOString();
     this.db.prepare(`INSERT INTO results (league_id, game_id, result_json, verified_at, verified_by) VALUES (?, ?, ?, ?, ?)

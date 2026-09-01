@@ -285,6 +285,16 @@ export class PostgresLeagueStore {
     });
   }
 
+  async deleteSheet(leagueId, sheetId, actor = 'commissioner') {
+    return this.mutateLeague(leagueId, (draft) => {
+      const index = (draft.sheets ?? []).findIndex((item) => item.id === sheetId);
+      if (index < 0) return null;
+      const [removed] = draft.sheets.splice(index, 1);
+      draft.auditLog.push(auditEntry('sheet.removed', `Removed ${removed.name}'s Week ${removed.week} sheet`, actor, { sheetId, playerId: removed.playerId ?? null, week: removed.week }));
+      return { id: removed.id, name: removed.name, week: removed.week };
+    });
+  }
+
   async upsertResult(leagueId, gameId, result, actor) {
     const verifiedAt = new Date().toISOString();
     const saved = { ...clone(result), verifiedAt, verifiedBy: actor };

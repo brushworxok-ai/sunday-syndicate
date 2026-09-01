@@ -249,6 +249,9 @@ main { padding: 24px 0 40px; }
 /* ── Entries ── */
 .entry-list, .standings-table { border: 1px solid var(--glass-border); border-radius: 14px; background: var(--card); overflow: hidden; }
 .entry-row { display: grid; grid-template-columns: 50px 1fr 150px 75px; gap: 16px; align-items: center; min-height: 74px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+.entry-remove { justify-self: end; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line); background: var(--glass); color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; transition: all .15s; }
+.entry-remove:hover:not(:disabled) { border-color: #ff4444; color: #ff4444; }
+.entry-remove:disabled { opacity: .5; cursor: wait; }
 .entry-row:last-child { border-bottom: 0; }
 .rank-number { font-family: 'DM Mono'; color: var(--muted); font-size: 11px; }
 .entry-row strong { font-size: 15px; color: #fff; }
