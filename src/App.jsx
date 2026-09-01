@@ -905,7 +905,9 @@ function App() {
       if (!response.ok) throw new Error(data.error || 'Assistant request failed.');
       const reply = { id: `assistant-${Date.now()}`, role: 'assistant', text: data.text };
       setAssistantMessages((prev) => [...prev, reply]);
-      setJackAvatarState('talking');
+      setJackAvatarState(classifyJackMood(data.text));
+      // Mood flash settles back to ready after a beat when Jack isn't speaking aloud.
+      if (!jackVoiceConsent) setTimeout(() => setJackAvatarState((current) => (current === 'talking' || current === 'roast' || current === 'winner' || current === 'shock') ? 'idle' : current), 4000);
       setTimeout(() => { assistantEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 100);
       // Auto-speak only after user has opted in by tapping the speaker button
       if (jackVoiceConsent) readAssistantMessage(data.text);
@@ -919,15 +921,73 @@ function App() {
   };
 
   const jackAudioRef = useRef(null);
+  const jackAudioCtxRef = useRef(null);
+  const jackLevelRafRef = useRef(0);
+
+  /* Classify Jack's reply into an avatar mood so the frame reacts to WHAT he's
+     saying — red heat for roasts, gold for winner moments, alert for breaking
+     news — not just the fact that he's talking. */
+  const classifyJackMood = (text = '') => {
+    if (/\b(congrats?|congratulations|champ(ion)?|crown|winner|trophy|celebrat|victory|king of the week)\b|🏆|👑/i.test(text)) return 'winner';
+    if (/\b(roast|trash talk|washed|slander|cold(er)? than|clown|smoke|put some respect|catching strays|down bad)\b|🔥/i.test(text)) return 'roast';
+    if (/\b(breaking|injur(y|ed|ies)|upset alert|stunner|unbelievable|shock)\b|🚨/i.test(text)) return 'shock';
+    return 'talking';
+  };
+
+  const setJackLevel = (value) => {
+    document.documentElement.style.setProperty('--jack-level', String(Math.max(0, Math.min(1, value))));
+  };
+
+  const stopJackLevelLoop = () => {
+    cancelAnimationFrame(jackLevelRafRef.current);
+    setJackLevel(0);
+  };
+
+  /* Drive the avatar glow from the REAL audio amplitude of Jack's voice. */
+  const startVoiceSync = (audio) => {
+    try {
+      const ctx = jackAudioCtxRef.current ?? new (window.AudioContext || window.webkitAudioContext)();
+      jackAudioCtxRef.current = ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const source = ctx.createMediaElementSource(audio);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        if (audio.paused || audio.ended) { stopJackLevelLoop(); return; }
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 1) sum += data[i];
+        setJackLevel((sum / data.length / 255) * 2.2); // voices rarely peak — boost into a lively range
+        jackLevelRafRef.current = requestAnimationFrame(tick);
+      };
+      jackLevelRafRef.current = requestAnimationFrame(tick);
+      return true;
+    } catch { return false; }
+  };
+
+  /* Browser-voice fallback has no amplitude API — give the glow a natural cadence. */
+  const startSyntheticSync = () => {
+    const started = performance.now();
+    const tick = (now) => {
+      const t = (now - started) / 1000;
+      setJackLevel(0.35 + Math.abs(Math.sin(t * 5.1)) * 0.35 + Math.abs(Math.sin(t * 1.7)) * 0.2);
+      jackLevelRafRef.current = requestAnimationFrame(tick);
+    };
+    jackLevelRafRef.current = requestAnimationFrame(tick);
+  };
 
   const speakWithBrowser = (text) => {
     if (!('speechSynthesis' in window)) { setAssistantSpeaking(''); setJackAvatarState('idle'); return; }
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 0.95;
     utterance.pitch = 0.85;
-    utterance.onend = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); };
-    utterance.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); };
-    setJackAvatarState('talking');
+    utterance.onend = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); };
+    utterance.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); };
+    setJackAvatarState(classifyJackMood(text));
+    startSyntheticSync();
     window.speechSynthesis.speak(utterance);
   };
 
@@ -947,8 +1007,10 @@ function App() {
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         jackAudioRef.current = audio;
-        audio.onended = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); URL.revokeObjectURL(url); jackAudioRef.current = null; };
-        audio.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); URL.revokeObjectURL(url); jackAudioRef.current = null; };
+        audio.onended = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); URL.revokeObjectURL(url); jackAudioRef.current = null; };
+        audio.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); URL.revokeObjectURL(url); jackAudioRef.current = null; };
+        setJackAvatarState(classifyJackMood(text));
+        if (!startVoiceSync(audio)) startSyntheticSync();
         await audio.play();
         return;
       }
@@ -960,6 +1022,8 @@ function App() {
     if (jackAudioRef.current) { jackAudioRef.current.pause(); jackAudioRef.current = null; }
     window.speechSynthesis?.cancel();
     setAssistantSpeaking('');
+    setJackAvatarState('idle');
+    stopJackLevelLoop();
   };
 
   const JACK_QUICK_PROMPTS = [

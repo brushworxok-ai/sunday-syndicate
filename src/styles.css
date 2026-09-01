@@ -682,6 +682,28 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .jack-avatar-listening figcaption i { background: var(--blue); }
 .jack-avatar-thinking .jack-avatar-scan { opacity: 1; transform: scaleX(1); animation: avatar-scan 1.2s ease-in-out infinite; }
 .jack-avatar-thinking figcaption i { background: var(--gold); }
+/* ── Voice-reactive glow: --jack-level (0–1) is driven by a WebAudio analyser
+   on Jack's real voice, so the ring, halo, and wave bars move WITH the audio. ── */
+:root { --jack-level: 0; }
+.jack-avatar-talking .jack-avatar-aura,
+.jack-avatar-roast .jack-avatar-aura,
+.jack-avatar-winner .jack-avatar-aura,
+.jack-avatar-shock .jack-avatar-aura { transform: scale(calc(1 + var(--jack-level) * 0.12)); transition: transform .08s linear; }
+.jack-avatar-talking .jack-avatar-frame { box-shadow: 0 0 calc(10px + var(--jack-level) * 26px) rgba(57,255,20, calc(.25 + var(--jack-level) * .45)); }
+.jack-avatar-roast .jack-avatar-frame { box-shadow: 0 0 calc(10px + var(--jack-level) * 26px) rgba(255,68,68, calc(.25 + var(--jack-level) * .45)); }
+.jack-avatar-winner .jack-avatar-frame { box-shadow: 0 0 calc(10px + var(--jack-level) * 26px) rgba(255,215,0, calc(.25 + var(--jack-level) * .45)); }
+.jack-avatar-shock .jack-avatar-frame { box-shadow: 0 0 calc(10px + var(--jack-level) * 26px) rgba(80,160,255, calc(.25 + var(--jack-level) * .45)); }
+.jack-avatar-wave { transform: scaleY(calc(.55 + var(--jack-level) * .9)); transform-origin: bottom; transition: transform .08s linear; }
+.jack-avatar-roast .jack-avatar-wave i { background: #ff4444; }
+.jack-avatar-winner .jack-avatar-wave i { background: var(--gold); }
+.jack-avatar-shock .jack-avatar-wave i { background: var(--blue); }
+.jack-avatar-roast .jack-avatar-frame img { filter: saturate(1.15) contrast(1.05); }
+.jack-avatar-winner .jack-avatar-frame img { filter: saturate(1.1) brightness(1.08); }
+@media (prefers-reduced-motion: reduce) {
+  .jack-avatar-talking .jack-avatar-aura, .jack-avatar-roast .jack-avatar-aura,
+  .jack-avatar-winner .jack-avatar-aura, .jack-avatar-shock .jack-avatar-aura { transform: none; }
+  .jack-avatar-wave { transform: none; }
+}
 .jack-avatar-talking .jack-avatar-aura { opacity: 1; animation: avatar-talk-glow 1.2s ease-in-out infinite; }
 .jack-avatar-talking .jack-avatar-frame { border-color: var(--neon); box-shadow: 0 0 18px rgba(57,255,20,0.35); }
 .jack-avatar-talking .jack-avatar-frame img { filter: saturate(1.1) brightness(1.05); }

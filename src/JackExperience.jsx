@@ -32,7 +32,7 @@ export function JackAvatar({ state = 'idle', settings, compact = false, caption 
       <span className="jack-avatar-expression" aria-hidden="true">{resolved.state === 'winner' ? '♛' : resolved.state === 'shock' ? '!' : resolved.state === 'error' ? '×' : '●'}</span>
     </div>
     <figcaption><i aria-hidden="true" />{label}</figcaption>
-    {['listening', 'talking'].includes(resolved.state) && <span className="jack-avatar-wave" aria-hidden="true">{Array.from({ length: 7 }, (_, index) => <i key={index} />)}</span>}
+    {['listening', 'talking', 'roast', 'winner', 'shock'].includes(resolved.state) && <span className="jack-avatar-wave" aria-hidden="true">{Array.from({ length: 7 }, (_, index) => <i key={index} />)}</span>}
     {resolved.state === 'thinking' && <span className="jack-avatar-dots" aria-hidden="true"><i /><i /><i /></span>}
   </figure>;
 }
