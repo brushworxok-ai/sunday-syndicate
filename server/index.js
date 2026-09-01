@@ -1025,7 +1025,12 @@ app.post('/api/leagues/:leagueId/jack/weekly-roast', auth.requireAdmin, asyncRou
 }));
 
 /* ── Jack Weekly Recap Show (slideshow data) ── */
-app.get('/api/leagues/:leagueId/recap-show', asyncRoute(async (request, response) => {
+app.get('/api/leagues/:leagueId/recap-show', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  // Gated + rate-limited: when Gemini is configured this fans out one generation
+  // per player, so it must not be anonymously spammable.
+  if (!checkPlayerRate(ASSISTANT_RATE, `recap-${request.player.id}`, 6, 3600_000)) {
+    return response.status(429).json({ error: 'The recap show was just generated — give it a few minutes.' });
+  }
   const league = await store.getLeague(request.params.leagueId);
   if (!league) return response.status(404).json({ error: 'League not found.' });
 
@@ -1566,10 +1571,12 @@ app.post('/api/leagues/:leagueId/props', playerAuth.requirePlayer, asyncRoute(as
     picks[id] = value;
   }
   if (!Object.keys(picks).length) return response.status(422).json({ error: 'At least one prop pick is required.' });
-  const settings = league.settings ?? {};
-  const propPicks = { ...(settings.propPicks ?? {}) };
-  propPicks[week] = { ...(propPicks[week] ?? {}), [request.player.id]: { ...picks, savedAt: new Date().toISOString() } };
-  await store.updateLeagueSettings(request.params.leagueId, { ...settings, propPicks });
+  // Atomic merge so two players saving props for the same week don't clobber
+  // each other's entries in the shared settings blob.
+  await store.mergeLeagueSettings(request.params.leagueId, (s) => {
+    s.propPicks = s.propPicks ?? {};
+    s.propPicks[week] = { ...(s.propPicks[week] ?? {}), [request.player.id]: { ...picks, savedAt: new Date().toISOString() } };
+  });
   return response.status(201).json({ week, playerId: request.player.id, picks });
 }));
 
@@ -1585,10 +1592,10 @@ app.post('/api/leagues/:leagueId/props/settle', auth.requireAdmin, asyncRoute(as
     if (!Array.isArray(input[id])) continue;
     winners[id] = [...new Set(input[id].filter((pid) => validIds.has(pid)))];
   }
-  const settings = league.settings ?? {};
-  const propResults = { ...(settings.propResults ?? {}) };
-  propResults[week] = { winners, settledAt: new Date().toISOString(), settledBy: request.actor ?? 'admin' };
-  await store.updateLeagueSettings(request.params.leagueId, { ...settings, propResults });
+  await store.mergeLeagueSettings(request.params.leagueId, (s) => {
+    s.propResults = s.propResults ?? {};
+    s.propResults[week] = { winners, settledAt: new Date().toISOString(), settledBy: request.actor ?? 'admin' };
+  });
   return response.json({ week, winners });
 }));
 
@@ -1674,10 +1681,10 @@ async function autoSettlePropsForWeek({ leagueId, week, force = false, actor = '
     if (facts.turnovers && picks.turnovers === facts.turnovers) winners.turnovers.push(playerId);
   }
 
-  const settings = league.settings ?? {};
-  const propResults = { ...(settings.propResults ?? {}) };
-  propResults[week] = { winners, facts, settledAt: new Date().toISOString(), settledBy: actor, auto: true };
-  await store.updateLeagueSettings(leagueId, { ...settings, propResults });
+  await store.mergeLeagueSettings(leagueId, (s) => {
+    s.propResults = s.propResults ?? {};
+    s.propResults[week] = { winners, facts, settledAt: new Date().toISOString(), settledBy: actor, auto: true };
+  });
   return { week, winners, facts };
 }
 
@@ -1930,24 +1937,34 @@ async function creditCfbPoolWinners(leagueId, pool, actor = 'admin') {
   const { gradeCfbPool } = await import('../src/cfbPool.js');
   const board = gradeCfbPool(pool);
   if (!board.complete || !board.winners.length) return { ok: false, error: 'No winners to credit yet.' };
+  // Only players who PAID the entry are eligible for the pot — an unpaid best
+  // record wins bragging rights but can't be credited money they never put in.
+  const paidWinners = board.winners.filter((w) => pool.entries?.[w.playerId]?.paid);
+  if (!paidWinners.length) return { ok: false, error: 'The top record(s) haven’t paid — no one is eligible for the pot yet.' };
   const pot = Object.values(pool.entries ?? {}).filter((e) => e.paid).length * (Number(pool.entryFee) || 0);
   if (pot <= 0) return { ok: false, error: 'The pot is $0 — mark entries paid first.' };
-  const share = Math.round((pot / board.winners.length) * 100) / 100;
+  const share = Math.floor((pot / paidWinners.length) * 100) / 100;
   const at = new Date().toISOString();
-  const reason = `CFB Week ${pool.week} pot — winner${board.winners.length > 1 ? ' (split)' : ''}`;
+  const reason = `CFB Week ${pool.week} pot — winner${paidWinners.length > 1 ? ' (split)' : ''}`;
   // Atomic claim: only the first caller across all isolates credits this pot.
   const claimed = await store.claimOnce(leagueId, `cfb-pot-${pool.id}`);
   if (!claimed) return { ok: false, error: 'This pot was already credited to the winners.' };
-  const league = await store.getLeague(leagueId);
-  const alreadyCredited = new Set((league?.creditLedger ?? []).filter((e) => e.reason === reason && e.amount === share).map((e) => e.playerId));
-  for (const winner of board.winners) {
-    if (alreadyCredited.has(winner.playerId)) continue;
-    await store.addCreditEntry(leagueId, { id: randomUUID(), playerId: winner.playerId, amount: share, reason, by: actor, at });
+  try {
+    const league = await store.getLeague(leagueId);
+    const alreadyCredited = new Set((league?.creditLedger ?? []).filter((e) => e.reason === reason && e.amount === share).map((e) => e.playerId));
+    for (const winner of paidWinners) {
+      if (alreadyCredited.has(winner.playerId)) continue;
+      await store.addCreditEntry(leagueId, { id: randomUUID(), playerId: winner.playerId, amount: share, reason, by: actor, at });
+    }
+    pool.potCredited = true;
+    pool.updatedAt = at;
+    await store.saveCfbPool(leagueId, pool);
+  } catch (error) {
+    // Payout failed mid-write — release the claim so a later run can retry.
+    await store.releaseClaim(leagueId, `cfb-pot-${pool.id}`).catch(() => {});
+    throw error;
   }
-  pool.potCredited = true;
-  pool.updatedAt = at;
-  await store.saveCfbPool(leagueId, pool);
-  return { ok: true, pot, share, winners: board.winners.map((w) => w.name) };
+  return { ok: true, pot, share, winners: paidWinners.map((w) => w.name) };
 }
 
 /* ── CFB Pick-Em Pool — commissioner builds a weekly ATS slate, players pick every game ── */
@@ -2366,9 +2383,10 @@ app.post('/api/leagues/:leagueId/push/subscribe', playerAuth.requirePlayer, asyn
   if (!sub?.endpoint) return response.status(400).json({ error: 'Invalid subscription.' });
   const league = await store.getLeague(request.params.leagueId);
   if (!league) return response.status(404).json({ error: 'League not found.' });
-  const pushSubs = league?.settings?.pushSubscriptions ?? {};
-  pushSubs[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
-  await store.updateLeagueSettings(request.params.leagueId, { ...(league?.settings ?? {}), pushSubscriptions: pushSubs });
+  await store.mergeLeagueSettings(request.params.leagueId, (s) => {
+    s.pushSubscriptions = s.pushSubscriptions ?? {};
+    s.pushSubscriptions[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
+  });
   response.json({ ok: true });
 }));
 // Legacy route for existing clients
@@ -2376,10 +2394,10 @@ app.post('/api/push/subscribe', playerAuth.requirePlayer, asyncRoute(async (requ
   if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
   const sub = request.body?.subscription;
   if (!sub?.endpoint) return response.status(400).json({ error: 'Invalid subscription.' });
-  const league = await store.getLeague(leagueId);
-  const pushSubs = league?.settings?.pushSubscriptions ?? {};
-  pushSubs[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
-  await store.updateLeagueSettings(leagueId, { ...(league?.settings ?? {}), pushSubscriptions: pushSubs });
+  await store.mergeLeagueSettings(leagueId, (s) => {
+    s.pushSubscriptions = s.pushSubscriptions ?? {};
+    s.pushSubscriptions[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
+  });
   response.json({ ok: true });
 }));
 
@@ -2440,9 +2458,10 @@ let autoPilotRunning = false;
 
 async function appendAutoPilotLog(league, entries) {
   if (!entries.length) return;
-  const settings = (await store.getLeague(leagueId))?.settings ?? league.settings ?? {};
-  const log = [...entries.map((message) => ({ at: new Date().toISOString(), message })), ...(settings.autoPilotLog ?? [])].slice(0, 30);
-  await store.updateLeagueSettings(leagueId, { ...settings, autoPilotLog: log });
+  const stamped = entries.map((message) => ({ at: new Date().toISOString(), message }));
+  // Atomic merge so appending the log doesn't clobber settings (prop picks,
+  // subscriptions) written by players while auto-pilot was running.
+  await store.mergeLeagueSettings(leagueId, (s) => { s.autoPilotLog = [...stamped, ...(s.autoPilotLog ?? [])].slice(0, 30); });
 }
 
 /* Weekly College Pick-Em on autopilot: open each week's pool from the Top 25,
@@ -2585,34 +2604,46 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
           ? await store.claimOnce(leagueId, `weekly-pot-${week}`)
           : false;
         if (claimedWeekly) {
-          const pot = weekSheets.filter((s) => s.paid).length * ENTRY_FEE;
-          const winners = recognition.winners;
-          const share = Math.floor((pot / winners.length) * 100) / 100;
-          const { validateCreditEntry } = await import('../src/credits.js');
-          let credited = 0;
-          for (const winner of winners) {
-            if (!winner.playerId || share <= 0) continue;
-            const verdict = validateCreditEntry({ amount: share, reason: `Week ${week} winnings` });
-            if (!verdict.ok) continue;
-            await store.addCreditEntry(leagueId, { id: randomUUID(), playerId: winner.playerId, amount: verdict.value, reason: `Week ${week} winnings — auto payout`, by: 'auto-pilot', at: new Date().toISOString() });
-            credited += 1;
+          try {
+            const pot = weekSheets.filter((s) => s.paid).length * ENTRY_FEE;
+            // Only PAID winners are eligible for the pot; an unpaid best record
+            // takes bragging rights but isn't credited money they didn't put in.
+            const winners = recognition.winners.filter((w) => weekSheets.some((s) => s.playerId === w.playerId && s.paid));
+            if (pot <= 0 || !winners.length) {
+              // Nothing payable — release the claim so it doesn't block a later run.
+              await store.releaseClaim(leagueId, `weekly-pot-${week}`).catch(() => {});
+            } else {
+              const share = Math.floor((pot / winners.length) * 100) / 100;
+              const { validateCreditEntry } = await import('../src/credits.js');
+              let credited = 0;
+              for (const winner of winners) {
+                if (!winner.playerId || share <= 0) continue;
+                const verdict = validateCreditEntry({ amount: share, reason: `Week ${week} winnings` });
+                if (!verdict.ok) continue;
+                await store.addCreditEntry(leagueId, { id: randomUUID(), playerId: winner.playerId, amount: verdict.value, reason: `Week ${week} winnings — auto payout`, by: 'auto-pilot', at: new Date().toISOString() });
+                credited += 1;
+              }
+              await store.savePayout(leagueId, {
+                id: `payout-${randomUUID()}`, week, pool: 'weekly', amount: pot,
+                winnerNames: winners.map((w) => String(w.name ?? '').slice(0, 50)),
+                method: credited ? 'credit' : 'pending', note: 'Auto-pilot weekly payout', paidAt: new Date().toISOString(), paidBy: 'auto-pilot',
+              });
+              const names = winners.map((w) => w.name.split(' ')[0]).join(' & ');
+              await store.addChatMessage(leagueId, {
+                id: `chat-payout-w${week}`, playerId: null, name: 'Jack',
+                msg: `🏆 WEEK ${week} IS OFFICIAL: ${names} take${winners.length > 1 ? '' : 's'} the $${pot} pot${winners.length > 1 ? ` ($${share} each)` : ''}. Winnings dropped straight into ${winners.length > 1 ? 'their' : 'the'} credit balance. Everybody else — Jack's got jokes waiting.`,
+                time: new Date().toISOString(),
+              });
+              for (const winner of winners) {
+                if (winner.playerId) await saveNotification(leagueId, { playerId: winner.playerId, kind: 'payout', title: `You won Week ${week}!`, body: `$${share} credited to your balance. Nice work!`, metadata: { week, amount: share } });
+              }
+              await saveNotification(leagueId, { kind: 'payout', title: `Week ${week} payout — $${pot}`, body: `${names} won the Week ${week} pot.`, metadata: { week, amount: pot } });
+              actions.push(`Paid Week ${week} pot ($${pot}) to ${names} via credit balance and announced it in chat.`);
+            }
+          } catch (error) {
+            await store.releaseClaim(leagueId, `weekly-pot-${week}`).catch(() => {});
+            throw error;
           }
-          await store.savePayout(leagueId, {
-            id: `payout-${randomUUID()}`, week, pool: 'weekly', amount: pot,
-            winnerNames: winners.map((w) => String(w.name ?? '').slice(0, 50)),
-            method: credited ? 'credit' : 'pending', note: 'Auto-pilot weekly payout', paidAt: new Date().toISOString(), paidBy: 'auto-pilot',
-          });
-          const names = winners.map((w) => w.name.split(' ')[0]).join(' & ');
-          await store.addChatMessage(leagueId, {
-            id: `chat-payout-w${week}`, playerId: null, name: 'Jack',
-            msg: `🏆 WEEK ${week} IS OFFICIAL: ${names} take${winners.length > 1 ? '' : 's'} the $${pot} pot${winners.length > 1 ? ` ($${share} each)` : ''}. Winnings dropped straight into ${winners.length > 1 ? 'their' : 'the'} credit balance. Everybody else — Jack's got jokes waiting.`,
-            time: new Date().toISOString(),
-          });
-          for (const winner of winners) {
-            if (winner.playerId) await saveNotification(leagueId, { playerId: winner.playerId, kind: 'payout', title: `You won Week ${week}!`, body: `$${share} credited to your balance. Nice work!`, metadata: { week, amount: share } });
-          }
-          await saveNotification(leagueId, { kind: 'payout', title: `Week ${week} payout — $${pot}`, body: `${names} won the Week ${week} pot.`, metadata: { week, amount: pot } });
-          actions.push(`Paid Week ${week} pot ($${pot}) to ${names} via credit balance and announced it in chat.`);
         }
       }
     } catch (error) { console.error('Auto-pilot winner payout failed:', error.message); }
@@ -2624,7 +2655,9 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
         const hoursLeft = (deadline.getTime() - Date.now()) / 3_600_000;
         const sentFlags = settings.autoPilotReminders ?? {};
         const windowKey = hoursLeft <= 3 ? `${week}-3h` : hoursLeft <= 24 ? `${week}-24h` : null;
-        if (windowKey && !sentFlags[windowKey]) {
+        // Atomic claim so two concurrent isolates can't both fire this window's
+        // reminder batch (which would double-text everyone).
+        if (windowKey && !sentFlags[windowKey] && await store.claimOnce(leagueId, `reminder-${windowKey}`)) {
           const submitted = new Set((league.sheets ?? []).filter((s) => s.week === week && s.playerId).map((s) => s.playerId));
           const missing = (league.players ?? []).filter((p) => !submitted.has(p.id));
           if (missing.length) {
@@ -2649,8 +2682,7 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
               const broadcast = await sendJackBroadcast({ store, leagueId, provider, messages, actor: 'auto-pilot', kind: 'pick_reminder' });
               texted = (broadcast?.deliveries ?? []).filter((d) => d.status === 'delivered' || d.status === 'queued').length;
             } catch (error) { console.error('Auto-pilot SMS reminder failed:', error.message); }
-            const fresh = (await store.getLeague(leagueId))?.settings ?? settings;
-            await store.updateLeagueSettings(leagueId, { ...fresh, autoPilotReminders: { ...(fresh.autoPilotReminders ?? {}), [windowKey]: new Date().toISOString() } });
+            await store.mergeLeagueSettings(leagueId, (s) => { s.autoPilotReminders = { ...(s.autoPilotReminders ?? {}), [windowKey]: new Date().toISOString() }; });
             actions.push(`Reminded ${missing.length} player(s) missing Week ${week} sheets (${pushed} push, ${texted} text) — ${windowKey.endsWith('3h') ? '3-hour' : '24-hour'} warning.`);
           }
         }

@@ -324,6 +324,30 @@ export class LeagueStore {
     return settings;
   }
 
+  /* Atomic read-modify-write of a league's settings. The mutator receives the
+     current settings object and mutates it in place; the whole thing runs in a
+     transaction so concurrent callers can't clobber each other's changes. */
+  mergeLeagueSettings(leagueId, mutator) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.db.prepare('SELECT settings_json FROM leagues WHERE id = ?').get(leagueId);
+      const settings = parse(row?.settings_json, {}) ?? {};
+      mutator(settings);
+      this.db.prepare('UPDATE leagues SET settings_json = ? WHERE id = ?').run(stringify(settings), leagueId);
+      this.db.exec('COMMIT');
+      return settings;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /* Release a claimOnce claim so a failed payout can be retried. */
+  releaseClaim(leagueId, key) {
+    this.db.prepare('DELETE FROM app_config WHERE key = ?').run(`claim:${leagueId}:${key}`);
+    return true;
+  }
+
   createSheet(leagueId, sheet) {
     // One sheet per player per week: a signed-in resubmission REPLACES the
     // old sheet (keeping paid status if the old one was already paid).

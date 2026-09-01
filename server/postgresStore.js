@@ -256,6 +256,22 @@ export class PostgresLeagueStore {
     });
   }
 
+  /* Atomic read-modify-write of settings via the version-checked mutator, so
+     concurrent isolates merge instead of clobbering the whole settings blob. */
+  async mergeLeagueSettings(leagueId, mutator) {
+    return this.mutateLeague(leagueId, (draft) => {
+      draft.settings = draft.settings ?? {};
+      mutator(draft.settings);
+      return draft.settings;
+    });
+  }
+
+  /* Release a claimOnce claim so a failed payout can be retried. */
+  async releaseClaim(leagueId, key) {
+    await this.sql`DELETE FROM app_config WHERE key = ${`claim:${leagueId}:${key}`}`;
+    return true;
+  }
+
   async createSheet(leagueId, sheet) {
     return this.mutateLeague(leagueId, (draft) => {
       // One sheet per player per week: a signed-in resubmission REPLACES the

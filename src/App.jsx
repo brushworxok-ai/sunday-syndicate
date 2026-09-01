@@ -1423,6 +1423,7 @@ function App() {
   };
 
   const launchRecapShow = async () => {
+    if (!playerSession.authenticated) { setWelcomeMode('signin'); setShowWelcome(true); return notify('Sign in to watch the recap show.'); }
     setRecapShowLoading(true);
     try {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/recap-show`);
@@ -2468,7 +2469,7 @@ function App() {
                   </select>
                 </label>
                 <label>Trash-talk level <small>Maximum / unfiltered is ON by default — switch to "No trash talk" anytime to opt out</small>
-                  <select value={player.trashTalk.level} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { trashTalkLevel: event.target.value })}>
+                  <select value={player.trashTalk?.level === 'maximum' ? 'competitive' : (player.trashTalk?.level || 'competitive')} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { trashTalkLevel: event.target.value })}>
                     <option value="none">No trash talk (opted out)</option><option value="light">Light / PG-13</option><option value="competitive">Maximum / unfiltered (default)</option>
                   </select>
                 </label>
