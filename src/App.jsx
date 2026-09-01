@@ -2467,9 +2467,9 @@ function App() {
                     <option value="opted_in">Opted in</option><option value="opted_out">STOP / opted out</option>
                   </select>
                 </label>
-                <label>Trash-talk level <small>Roasts are ON by default — switch to "No trash talk" anytime to opt out</small>
+                <label>Trash-talk level <small>Explicit is ON by default — switch to "No trash talk" anytime to opt out</small>
                   <select value={player.trashTalk.level} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { trashTalkLevel: event.target.value })}>
-                    <option value="none">No trash talk (opted out)</option><option value="light">Light / friendly</option><option value="competitive">Competitive (default)</option><option value="maximum">Maximum roast</option>
+                    <option value="none">No trash talk (opted out)</option><option value="light">Light / PG-13</option><option value="competitive">Explicit (default)</option><option value="maximum">Maximum / unfiltered</option>
                   </select>
                 </label>
                 <label>Favorite team <small>Jack tracks rivalry bragging rights</small>
