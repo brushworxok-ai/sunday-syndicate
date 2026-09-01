@@ -431,6 +431,19 @@ export class PostgresLeagueStore {
     return true;
   }
 
+  /* Atomic once-only claim used to make pot payouts idempotent across
+     concurrent serverless isolates. The conditional INSERT is a single atomic
+     statement, so exactly one caller gets the row (RETURNING) and claims. */
+  async claimOnce(leagueId, key) {
+    const ckey = `claim:${leagueId}:${key}`;
+    const rows = await this.sql`
+      INSERT INTO app_config (key, value, updated_at) VALUES (${ckey}, ${new Date().toISOString()}, NOW())
+      ON CONFLICT (key) DO NOTHING
+      RETURNING key
+    `;
+    return rows.length === 1;
+  }
+
   async getCreditBalance(leagueId, playerId) {
     const state = await this.readState(leagueId);
     return ledgerBalance(state?.creditLedger, playerId);

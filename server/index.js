@@ -156,12 +156,31 @@ app.patch('/api/admin/config', auth.requireAdmin, asyncRoute(async (request, res
 }));
 
 /* ── OTP verification (TextBelt) ── */
-const OTP_STORE = new Map(); // key: phoneE164, value: { code, expiresAt, attempts }
 const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_COOLDOWN_MS = 60 * 1000; // 1 minute between sends
-const OTP_LAST_SENT = new Map(); // rate-limit per phone
-const VERIFIED_PHONES = new Map(); // key: phoneE164, value: timestamp — server-side OTP verification record
+/* OTP + phone-verification state is persisted in the shared config store, not
+   in memory: on serverless (Vercel) the /otp/send and /otp/verify calls often
+   land on different isolates, so an in-memory Map made verification always fail
+   ("No code found"). The store is shared across isolates. Keys are per-phone. */
+const otpCodeKey = (phone) => `otp:${phone}`;
+const otpVerifiedKey = (phone) => `otpv:${phone}`;
+async function otpGet(phone) {
+  const raw = await store.getConfig(otpCodeKey(phone));
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+async function otpPut(phone, entry) { await store.setConfig(otpCodeKey(phone), JSON.stringify(entry)); }
+async function otpClear(phone) { await store.setConfig(otpCodeKey(phone), ''); }
+async function markPhoneVerified(phone) { await store.setConfig(otpVerifiedKey(phone), String(Date.now())); }
+/* Consume a verification record: true only if verified within the last 30 min. */
+async function consumePhoneVerified(phone) {
+  const raw = await store.getConfig(otpVerifiedKey(phone));
+  if (!raw) return false;
+  await store.setConfig(otpVerifiedKey(phone), ''); // one-time use
+  const ts = Number(raw);
+  return Number.isFinite(ts) && Date.now() - ts < 30 * 60 * 1000;
+}
 
 /* ── Per-player rate limiters for AI/TTS endpoints ── */
 const ASSISTANT_RATE = new Map(); // key: playerId, value: { count, windowStart }
@@ -178,19 +197,10 @@ function checkPlayerRate(map, playerId, maxRequests, windowMs) {
   return true;
 }
 
-// Clean expired OTPs every 2 minutes
+// Clean expired rate-limit windows every 2 minutes (OTP records live in the
+// shared store now and are expiry-checked on read, so no sweep is needed here)
 setInterval(() => {
   const now = Date.now();
-  for (const [key, entry] of OTP_STORE) {
-    if (now > entry.expiresAt) OTP_STORE.delete(key);
-  }
-  for (const [key, ts] of OTP_LAST_SENT) {
-    if (now - ts > OTP_COOLDOWN_MS * 2) OTP_LAST_SENT.delete(key);
-  }
-  // Verified phones expire after 10 minutes (registration should happen right after OTP)
-  for (const [key, ts] of VERIFIED_PHONES) {
-    if (now - ts > 10 * 60 * 1000) VERIFIED_PHONES.delete(key);
-  }
   // Clean expired rate-limit windows
   for (const [key, entry] of ASSISTANT_RATE) {
     if (now - entry.windowStart > 3600_000) ASSISTANT_RATE.delete(key);
@@ -207,16 +217,15 @@ app.post('/api/otp/send', asyncRoute(async (request, response) => {
   const phoneE164 = `+1${digits}`;
 
   // Rate limit: 1 send per phone per minute
-  const lastSent = OTP_LAST_SENT.get(phoneE164);
-  if (lastSent && Date.now() - lastSent < OTP_COOLDOWN_MS) {
-    const waitSec = Math.ceil((OTP_COOLDOWN_MS - (Date.now() - lastSent)) / 1000);
+  const existing = await otpGet(phoneE164);
+  if (existing?.sentAt && Date.now() - existing.sentAt < OTP_COOLDOWN_MS) {
+    const waitSec = Math.ceil((OTP_COOLDOWN_MS - (Date.now() - existing.sentAt)) / 1000);
     return response.status(429).json({ error: `Wait ${waitSec}s before requesting another code.` });
   }
 
   // Generate 6-digit code
   const code = String(randomInt(100000, 999999));
-  OTP_STORE.set(phoneE164, { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0 });
-  OTP_LAST_SENT.set(phoneE164, Date.now());
+  await otpPut(phoneE164, { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0, sentAt: Date.now() });
 
   // Send via TextBelt (or skip in demo mode)
   if (process.env.SMS_PROVIDER === 'textbelt' && process.env.TEXTBELT_API_KEY) {
@@ -224,7 +233,7 @@ app.post('/api/otp/send', asyncRoute(async (request, response) => {
       await sendTextBeltRaw({ phone: phoneE164, text: `405 BadGuys Parlay: Your verification code is ${code}. Expires in 5 min.`, apiKey: process.env.TEXTBELT_API_KEY });
     } catch (error) {
       console.error('OTP send error:', error.message);
-      OTP_STORE.delete(phoneE164);
+      await otpClear(phoneE164);
       return response.status(502).json({ error: 'Failed to send verification code. Try again.' });
     }
   } else {
@@ -235,32 +244,33 @@ app.post('/api/otp/send', asyncRoute(async (request, response) => {
   return response.json({ sent: true, expiresIn: OTP_TTL_MS / 1000 });
 }));
 
-app.post('/api/otp/verify', (request, response) => {
+app.post('/api/otp/verify', asyncRoute(async (request, response) => {
   let digits = String(request.body?.phone ?? '').replace(/\D/g, '');
   if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
   if (digits.length !== 10) return response.status(422).json({ error: 'Invalid phone number.' });
   const phoneE164 = `+1${digits}`;
   const code = String(request.body?.code ?? '').replace(/\D/g, '');
 
-  const entry = OTP_STORE.get(phoneE164);
+  const entry = await otpGet(phoneE164);
   if (!entry) return response.status(410).json({ error: 'No code found for this number. Request a new one.' });
   if (Date.now() > entry.expiresAt) {
-    OTP_STORE.delete(phoneE164);
+    await otpClear(phoneE164);
     return response.status(410).json({ error: 'Code expired. Request a new one.' });
   }
-  entry.attempts += 1;
+  entry.attempts = (entry.attempts ?? 0) + 1;
   if (entry.attempts > OTP_MAX_ATTEMPTS) {
-    OTP_STORE.delete(phoneE164);
+    await otpClear(phoneE164);
     return response.status(429).json({ error: 'Too many attempts. Request a new code.' });
   }
   if (entry.code !== code) {
+    await otpPut(phoneE164, entry); // persist the incremented attempt count
     return response.status(401).json({ error: `Wrong code. ${OTP_MAX_ATTEMPTS - entry.attempts} attempts left.` });
   }
   // Success — mark phone as verified server-side (used during registration)
-  OTP_STORE.delete(phoneE164);
-  VERIFIED_PHONES.set(phoneE164, Date.now());
+  await otpClear(phoneE164);
+  await markPhoneVerified(phoneE164);
   return response.json({ verified: true, phoneE164 });
-});
+}));
 
 app.post('/api/auth/admin', (request, response) => auth.login(request, response));
 app.delete('/api/auth/admin', (request, response) => auth.logout(request, response));
@@ -361,8 +371,9 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
     return response.status(409).json({ error: 'That name is taken in this league. Add a last initial or nickname.' });
   }
 
-  // OTP must have been verified for this phone before registration completes (server-side check)
-  const otpVerified = VERIFIED_PHONES.has(phoneE164);
+  // OTP must have been verified for this phone before registration completes
+  // (server-side check; consumes the one-time verification record)
+  const otpVerified = await consumePhoneVerified(phoneE164);
   const at = new Date().toISOString();
   const player = {
     id: `player-${randomUUID()}`,
@@ -379,7 +390,6 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
     avatar: typeof request.body?.avatar === 'string' ? request.body.avatar.slice(0, 200_000) : null,
   };
   await store.createPlayer(request.params.leagueId, player, hashPin(pin));
-  VERIFIED_PHONES.delete(phoneE164); // consumed — can't be reused for another registration
 
   // Jack welcomes the new player with a chat message and notification
   const entryFee = league.settings?.entryFee ?? 20;
@@ -722,7 +732,8 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
   const league = await store.getLeague(targetLeagueId);
   if (!league) return { error: 'League not found.', status: 404 };
 
-  const geminiConfigured = Boolean((await getGeminiKey()).value);
+  const geminiKeyValue = (await getGeminiKey()).value;
+  const geminiConfigured = Boolean(geminiKeyValue);
   const currentWeek = getCurrentWeek();
   const weekGames = getGames(currentWeek);
   const weekLabel = SCHEDULE.find((w) => w.week === currentWeek)?.label ?? `Week ${currentWeek}`;
@@ -848,9 +859,14 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
     } catch { /* credit context is optional */ }
   }
 
-  // Ground Jack in the latest NFL wire (injuries, statuses, team news).
+  // Ground Jack in the latest NFL wire, but never let a cold/slow ESPN fetch
+  // stall his reply: time-box it to 1.5s and use whatever's cached otherwise.
+  // (fetchNflNews keeps running in the background and warms the cache for next time.)
   try {
-    const news = await fetchNflNews();
+    const news = await Promise.race([
+      fetchNflNews(),
+      new Promise((resolve) => setTimeout(() => resolve(newsCache.data ?? { items: [] }), 1500)),
+    ]);
     context.nflNews = (news.items ?? []).slice(0, 6).map((item) => ({ headline: item.headline, description: item.description, published: item.published }));
   } catch { context.nflNews = []; }
 
@@ -867,11 +883,13 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
   try {
     const { buildPrompt } = await import('./prompts.js');
     const { systemInstruction, prompt } = buildPrompt('assistant', { question, history, context });
-    const client = new GoogleGenAI({ apiKey: (await getGeminiKey()).value });
+    const client = new GoogleGenAI({ apiKey: geminiKeyValue });
     const result = await client.models.generateContent({
       model,
       contents: prompt,
-      config: { systemInstruction, temperature: 0.5, maxOutputTokens: 1024 },
+      // Jack's chat answers are short (prompt caps ~140 words); a tighter output
+      // ceiling keeps replies snappy instead of generating up to 1024 tokens.
+      config: { systemInstruction, temperature: 0.5, maxOutputTokens: 400 },
     });
     const text = result?.text?.trim();
     if (!text) throw new Error('Empty response from model.');
@@ -1917,6 +1935,9 @@ async function creditCfbPoolWinners(leagueId, pool, actor = 'admin') {
   const share = Math.round((pot / board.winners.length) * 100) / 100;
   const at = new Date().toISOString();
   const reason = `CFB Week ${pool.week} pot — winner${board.winners.length > 1 ? ' (split)' : ''}`;
+  // Atomic claim: only the first caller across all isolates credits this pot.
+  const claimed = await store.claimOnce(leagueId, `cfb-pot-${pool.id}`);
+  if (!claimed) return { ok: false, error: 'This pot was already credited to the winners.' };
   const league = await store.getLeague(leagueId);
   const alreadyCredited = new Set((league?.creditLedger ?? []).filter((e) => e.reason === reason && e.amount === share).map((e) => e.playerId));
   for (const winner of board.winners) {
@@ -2230,7 +2251,10 @@ app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyn
       totalPaid: Math.round(totalPaid * 100) / 100,
       totalWon: Math.round(totalWon * 100) / 100,
       creditBalance: Math.round(creditBalance * 100) / 100,
-      netPosition: Math.round((totalWon - totalPaid + creditBalance) * 100) / 100,
+      // Net = what you won minus what you paid in. Credit balance is shown
+      // separately (it's where winnings land) — folding it in here would
+      // double-count the winnings that are already in totalWon.
+      netPosition: Math.round((totalWon - totalPaid) * 100) / 100,
     },
     history,
   });
@@ -2446,7 +2470,8 @@ async function autoManageCfb({ leagueId: lid, actions }) {
       } catch { /* chat is non-critical */ }
       actions.push(`Auto-opened CFB Week ${week} pool from the Top 25 (${gameIds.length} games).`);
     }
-    return; // just opened — let players pick before doing anything else
+    await sweepPriorCfbPools({ lid, currentWeek: week, actions });
+    return; // freshly opened — let players pick; still sweep older weeks above
   }
 
   // 2. Auto-lock once the first game kicks off
@@ -2476,6 +2501,31 @@ async function autoManageCfb({ leagueId: lid, actions }) {
       }
     } catch (error) { console.error('Auto-pilot CFB finalize failed:', error.message); }
   }
+
+  await sweepPriorCfbPools({ lid, currentWeek: week, actions });
+}
+
+/* Finalize any earlier CFB weeks that are still locked/unpaid — covers the case
+   where ESPN's week number rolled over before a prior week's late games ended. */
+async function sweepPriorCfbPools({ lid, currentWeek, actions }) {
+  try {
+    const fresh = await store.getLeague(lid);
+    for (const p of (fresh?.cfbPools ?? [])) {
+      if (p.week === currentWeek || p.potCredited) continue;
+      if (p.status !== 'locked' && p.status !== 'final') continue;
+      try {
+        const { allFinal } = await syncCfbPoolScores(lid, p);
+        if (allFinal && !p.potCredited) {
+          const credit = await creditCfbPoolWinners(lid, p, 'auto-pilot');
+          if (credit.ok) {
+            const names = credit.winners.join(' & ');
+            try { await store.addChatMessage(lid, { id: `chat-cfb-final-w${p.week}`, playerId: null, name: 'Jack 🤖', msg: `🎓🏁 CFB Week ${p.week} is official: ${names} take${credit.winners.length > 1 ? '' : 's'} the $${credit.pot} college pot${credit.winners.length > 1 ? ` ($${credit.share} each)` : ''}. 💰`, time: new Date().toISOString() }); } catch { /* chat non-critical */ }
+            actions.push(`Finalized CFB Week ${p.week} and credited $${credit.pot} to ${names}.`);
+          }
+        }
+      } catch (error) { console.error(`Auto-pilot CFB sweep (week ${p.week}) failed:`, error.message); }
+    }
+  } catch (error) { console.error('Auto-pilot CFB sweep failed:', error.message); }
 }
 
 async function runAutoPilot({ source = 'traffic' } = {}) {
@@ -2529,7 +2579,12 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
       const alreadyPaid = (freshLeague.payouts ?? []).some((p) => p.week === week && p.pool === 'weekly');
       if (allVerified && weekSheets.length && !alreadyPaid) {
         const recognition = computeWinnerRecognition(freshLeague, week);
-        if ((recognition?.status === 'winner' || recognition?.status === 'co_winners') && recognition.week === week && recognition.winners?.length) {
+        // Atomic claim (only once a real winner is confirmed) so two concurrent
+        // isolates can't both pay the weekly pot.
+        const claimedWeekly = (recognition?.status === 'winner' || recognition?.status === 'co_winners') && recognition.week === week && recognition.winners?.length
+          ? await store.claimOnce(leagueId, `weekly-pot-${week}`)
+          : false;
+        if (claimedWeekly) {
           const pot = weekSheets.filter((s) => s.paid).length * ENTRY_FEE;
           const winners = recognition.winners;
           const share = Math.floor((pot / winners.length) * 100) / 100;

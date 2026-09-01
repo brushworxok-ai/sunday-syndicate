@@ -484,6 +484,17 @@ export class LeagueStore {
     return true;
   }
 
+  /* Atomic once-only claim used to make pot payouts idempotent across
+     concurrent runs. Returns true only for the first caller of a given key.
+     SQLite serializes writes in-process, so INSERT-OR-IGNORE is a safe CAS. */
+  claimOnce(leagueId, key) {
+    const ckey = `claim:${leagueId}:${key}`;
+    const now = new Date().toISOString();
+    const res = this.db.prepare(`INSERT INTO app_config (key, value, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO NOTHING`).run(ckey, now, now);
+    return res.changes === 1;
+  }
+
   getCreditBalance(leagueId, playerId) {
     const row = this.db.prepare('SELECT COALESCE(SUM(amount), 0) AS balance FROM credit_ledger WHERE league_id = ? AND player_id = ?').get(leagueId, playerId);
     return Math.round((row?.balance ?? 0) * 100) / 100;

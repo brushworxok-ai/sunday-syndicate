@@ -145,7 +145,11 @@ function App() {
   const currentByeTeams = useMemo(() => getByeTeams(selectedWeek), [selectedWeek]);
   const weekLabel = useMemo(() => getWeek(selectedWeek)?.label ?? `Week ${selectedWeek}`, [selectedWeek]);
 
-  // Load this player's saved prop picks for the selected week from the server
+  // Load this player's saved prop picks for the selected week from the server.
+  // Keyed on the SERIALIZED saved slice (not the whole propPicks object, which
+  // is a fresh reference on every loadLeague) so a background refresh that
+  // didn't change this player's saved picks won't wipe unsaved in-progress edits.
+  const savedPropSliceKey = JSON.stringify(serverLeague?.settings?.propPicks?.[selectedWeek]?.[playerSession.playerId] ?? null);
   useEffect(() => {
     const saved = serverLeague?.settings?.propPicks?.[selectedWeek]?.[playerSession.playerId];
     if (saved) {
@@ -154,7 +158,7 @@ function App() {
     } else {
       setPropPicks({});
     }
-  }, [serverLeague?.settings?.propPicks, selectedWeek, playerSession.playerId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [savedPropSliceKey, selectedWeek, playerSession.playerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Season-long prop standings: categories won per player across all settled weeks
   const propStandings = useMemo(() => {
@@ -2423,7 +2427,7 @@ function App() {
             )}
 
             <section className="device-prefs">
-              <button type="button" className={`sound-toggle ${soundEnabled ? 'on' : ''}`} onClick={() => { setSoundEnabled((v) => !v); unlockSfx(); if (!soundEnabled) tapSound(); }} aria-pressed={soundEnabled}>
+              <button type="button" className={`sound-toggle ${soundEnabled ? 'on' : ''}`} onClick={() => { const next = !soundEnabled; setSfxEnabled(next); setSoundEnabled(next); unlockSfx(); if (next) tapSound(); }} aria-pressed={soundEnabled}>
                 <span className="sound-toggle-icon">{soundEnabled ? '🔊' : '🔇'}</span>
                 <span className="sound-toggle-label"><strong>Button sounds</strong><small>{soundEnabled ? 'On — you\'ll hear a tap on every button' : 'Off — buttons are silent'}</small></span>
                 <span className="sound-toggle-switch" aria-hidden="true" />
