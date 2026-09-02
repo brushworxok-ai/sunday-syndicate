@@ -997,18 +997,21 @@ app.patch('/api/leagues/:leagueId/players/:playerId/jack-policy', auth.requireAd
   if (input.adminAssignedLevel && !['clean', 'pg13', 'explicit', 'target'].includes(input.adminAssignedLevel)) {
     return response.status(422).json({ error: 'Invalid adminAssignedLevel.' });
   }
-  const currentPolicy = normalizePlayerJackPolicy(player);
+  // The commissioner only owns the assigned level + on/off switch. Consent
+  // and adult flags belong to the player (derived from their Roast setting),
+  // so they are never snapshotted here.
+  const stored = player.trashTalk?.jackPolicy ?? {};
   const updated = {
-    ...currentPolicy,
-    ...(input.adminAssignedLevel ? { adminAssignedLevel: input.adminAssignedLevel } : {}),
-    ...(typeof input.roastEnabled === 'boolean' ? { roastEnabled: input.roastEnabled } : {}),
+    favoriteTeam: stored.favoriteTeam ?? null,
+    adminAssignedLevel: input.adminAssignedLevel ?? stored.adminAssignedLevel ?? 'target',
+    roastEnabled: typeof input.roastEnabled === 'boolean' ? input.roastEnabled : (stored.roastEnabled ?? true),
     updatedAt: new Date().toISOString(),
     updatedBy: 'admin',
   };
   const trashTalk = { ...(player.trashTalk ?? {}), jackPolicy: updated };
   await store.updatePlayerPreferences(request.params.playerId, { trashTalk }, 'admin');
   const resolved = resolveJackRoastPolicy({ player: { ...player, trashTalk }, leagueSettings: league.settings });
-  return response.json({ jackPolicy: updated, resolved });
+  return response.json({ jackPolicy: normalizePlayerJackPolicy({ ...player, trashTalk }), resolved });
 }));
 
 /* ── Jack Weekly Roast Generation ── */

@@ -68,17 +68,24 @@ export function normalizeJackSettings(settings = {}) {
 
 export function normalizePlayerJackPolicy(player = {}) {
   const stored = player.jackPolicy ?? player.trashTalk?.jackPolicy ?? {};
-  const legacy = legacyLevel[player.trashTalk?.level] ?? 'clean';
-  const legacyOptOut = player.trashTalk?.level === 'none';
+  const level = player.trashTalk?.level;
+  // The player's own control is the Roast setting in their profile
+  // (trashTalk.level). Unset = Maximum for this no-holds-barred crew.
+  const legacy = level ? (legacyLevel[level] ?? 'target') : 'target';
+  const legacyOptOut = level === 'none';
+  const dialedDown = level === 'none' || level === 'light';
+  // Consent fields are only trusted when the PLAYER wrote them. Records
+  // stamped by the commissioner were snapshots of old defaults (PG-13,
+  // adult flags off) and must not freeze a player below their own setting.
+  const playerOwned = stored.updatedBy !== 'admin';
   return {
-    playerConsentLevel: validLevel(stored.playerConsentLevel, legacy),
-    adminAssignedLevel: validLevel(stored.adminAssignedLevel, legacy),
+    playerConsentLevel: playerOwned ? validLevel(stored.playerConsentLevel, legacy) : legacy,
+    adminAssignedLevel: validLevel(stored.adminAssignedLevel, 'target'),
     roastEnabled: stored.roastEnabled ?? !legacyOptOut,
-    // Private adult friend group: adult language + age gate default ON so the
-    // league runs Explicit out of the box. A player who opts down still lands
-    // below explicit via their consent level.
-    adultLanguageConsent: stored.adultLanguageConsent ?? true,
-    adultAgeGate: stored.adultAgeGate ?? true,
+    // Private adult friend group: adult language + age gate ON unless the
+    // player personally dialed down (Light / opted out).
+    adultLanguageConsent: playerOwned ? (stored.adultLanguageConsent ?? !dialedDown) : !dialedDown,
+    adultAgeGate: playerOwned ? (stored.adultAgeGate ?? true) : true,
     favoriteTeam: stored.favoriteTeam ?? player.favoriteTeam ?? null,
     updatedAt: stored.updatedAt ?? player.trashTalk?.updatedAt ?? null,
     updatedBy: stored.updatedBy ?? 'player',

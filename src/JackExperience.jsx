@@ -91,7 +91,7 @@ export default function JackControlStudio({ settings, players = [], auditLog = [
     setSaving(playerId);
     try {
       await onSavePlayer?.(playerId, playerDrafts[playerId]);
-      setMessage(demo ? 'Demo player limit updated locally.' : 'Player limit saved. Player consent still has final say.');
+      setMessage(demo ? 'Demo player limit updated locally.' : 'Saved. A player can still dial Jack down in their own profile.');
     } finally { setSaving(''); }
   };
 
