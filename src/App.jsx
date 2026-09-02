@@ -113,6 +113,9 @@ function App() {
   const [groupTextMsg, setGroupTextMsg] = useState('');
   const [groupTextMode, setGroupTextMode] = useState('individual');
   const [soundEnabled, setSoundEnabled] = useState(() => { try { return localStorage.getItem('sfx') !== 'off'; } catch { return true; } });
+  const [showOnboarding, setShowOnboarding] = useState(() => { try { return localStorage.getItem('onboarded-v1') !== 'yes'; } catch { return true; } });
+  const [onboardStep, setOnboardStep] = useState(0);
+  const dismissOnboarding = () => { try { localStorage.setItem('onboarded-v1', 'yes'); } catch { /* private mode */ } setShowOnboarding(false); };
 
   // Prop picks state
   const [propPicks, setPropPicks] = useState({});
@@ -1595,6 +1598,34 @@ function App() {
         </div>
       )}
 
+      {/* ── First-run welcome / how-it-works ── */}
+      {showOnboarding && (() => {
+        const slides = [
+          { icon: '🏈', title: 'Welcome to 405 BADGUYS', body: 'A pick’em league for the crew. Every week you call the winner of every NFL game — straight up, no spreads. Most right wins the pot.' },
+          { icon: '💰', title: 'Pick. Pay. Cash out.', body: 'Make your picks before kickoff, pay your entry through Cash App or your credit balance, and watch the live leaderboard. Win the week, the pot hits your balance automatically.' },
+          { icon: '🔥', title: 'Meet Jack', body: 'Jack is your AI commissioner. He tracks the standings, runs the recaps, and talks all the trash — tap the 🔊 to hear him. There’s also a season-long pool, survivor, props, and college pick’em when you’re ready.' },
+        ];
+        const last = onboardStep >= slides.length - 1;
+        const s = slides[onboardStep];
+        return (
+          <div className="onboard-overlay" onClick={(e) => e.target === e.currentTarget && dismissOnboarding()}>
+            <div className="onboard-card">
+              <button className="onboard-skip" type="button" onClick={dismissOnboarding}>Skip</button>
+              <div className="onboard-icon" aria-hidden="true">{s.icon}</div>
+              <h2>{s.title}</h2>
+              <p>{s.body}</p>
+              <div className="onboard-dots" aria-hidden="true">{slides.map((_, i) => <i key={i} className={i === onboardStep ? 'on' : ''} />)}</div>
+              <div className="onboard-actions">
+                {onboardStep > 0 && <button type="button" className="button button-ghost" onClick={() => setOnboardStep((n) => n - 1)}>← Back</button>}
+                {!last
+                  ? <button type="button" className="button button-primary" onClick={() => setOnboardStep((n) => n + 1)}>Next →</button>
+                  : <button type="button" className="button button-primary" onClick={() => { dismissOnboarding(); if (!playerSession.authenticated) { setWelcomeMode('join'); setShowWelcome(true); } }}>{playerSession.authenticated ? 'Let’s go 🏈' : 'Join the league →'}</button>}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Welcome / Account Creation Screen ── */}
       {showWelcome && (
         <div className="more-menu-overlay" onClick={(e) => e.target === e.currentTarget && setShowWelcome(false)}>
@@ -2971,6 +3002,36 @@ function App() {
 
         {view === 'admin' && isComm && (
           <StandardPage eyebrow="COMMISSIONER ACCESS" title="League operations" subtitle="Verify scores, generate and approve grounded recaps, send consent-aware broadcasts, and inspect delivery outcomes from one durable workflow.">
+            {(() => {
+              const players = (proofLeague.players ?? []).length;
+              const picksIn = weekSheets.length;
+              const paidIn = weekSheets.filter((s) => s.paid).length;
+              const cashSet = Boolean(serverLeague?.settings?.cashAppPool?.url);
+              const jackOn = serverLeague?.settings?.jack?.enabled !== false;
+              const cfbBuilt = Boolean(cfbPool);
+              const items = [
+                { ok: players > 0, label: 'Players joined', value: `${players} in the league`, hint: players > 0 ? null : 'Share the invite link so friends can register.', action: null },
+                { ok: cashSet, label: 'Cash App Pool link', value: cashSet ? 'Set — players can pay in-app' : 'Not set', hint: cashSet ? null : 'Set it below so players get a one-tap pay button.', action: null },
+                { ok: jackOn, label: 'Jack (AI commissioner)', value: jackOn ? 'On' : 'Off', hint: null, action: null },
+                { ok: currentGames.length > 0, label: `${weekLabel} NFL board`, value: `${currentGames.length} games ready · ${picksIn} sheet${picksIn === 1 ? '' : 's'} in · ${paidIn} paid`, hint: null, action: null },
+                { ok: cfbBuilt, label: 'College pool (this week)', value: cfbBuilt ? `Live — ${cfbPool.games.length} games` : 'Not built yet', hint: cfbBuilt ? null : 'Optional — autopilot opens it, or build it on the College FB tab.', action: cfbBuilt ? null : { label: 'Go to College FB', to: 'cfb' } },
+              ];
+              const ready = items.filter((i) => i.ok).length;
+              return (
+                <section className="launch-checklist">
+                  <div className="launch-head"><div><span className="eyebrow dark">PRE-FLIGHT</span><h2>Launch checklist</h2></div><StatusPill state={ready >= 3 ? 'pass' : 'warn'}>{ready}/{items.length} ready</StatusPill></div>
+                  <div className="launch-items">
+                    {items.map((item) => (
+                      <div className={`launch-item ${item.ok ? 'ok' : 'todo'}`} key={item.label}>
+                        <span className="launch-mark">{item.ok ? '✅' : '⚠️'}</span>
+                        <div className="launch-copy"><strong>{item.label}</strong><small>{item.value}</small>{item.hint && <em>{item.hint}</em>}</div>
+                        {item.action && <button type="button" className="button button-ghost-dark" onClick={() => navigate(item.action.to)}>{item.action.label}</button>}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              );
+            })()}
             <section className="admin-command-grid">
               <article><span className="eyebrow dark">PROVIDERS</span><h2>System readiness</h2><dl><div><dt>Database</dt><dd>{aiStatus.database === 'postgres' ? 'Neon Postgres · durable' : aiStatus.database === 'sqlite' ? 'SQLite · local' : 'Unavailable'}</dd></div><div><dt>Gemini</dt><dd>{aiStatus.configured ? aiStatus.model : 'Fallback mode'}</dd></div><div><dt>SMS</dt><dd>{aiStatus.smsProvider === 'twilio' ? 'Twilio live' : aiStatus.smsProvider === 'textbelt' ? 'TextBelt live' : 'Demo adapter'}</dd></div></dl></article>
               <article><span className="eyebrow dark">POLICY</span><h2>Send guardrails</h2><dl><div><dt>Auto-send</dt><dd>Off</dd></div><div><dt>Approval</dt><dd>Required</dd></div><div><dt>Tone cap</dt><dd>{proofLeague.settings.maximumTone}</dd></div></dl></article>

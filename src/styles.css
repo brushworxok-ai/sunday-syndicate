@@ -1775,3 +1775,30 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .cfb-auto-defaults label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .cfb-auto-defaults input { width: 90px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 15px; }
 .cfb-auto-defaults .button { padding: 9px 14px; font-size: 13px; }
+
+/* ── Launch checklist (commissioner) ── */
+.launch-checklist { background: linear-gradient(150deg, rgba(57,255,20,.06), rgba(0,212,255,.04)); border: 1px solid var(--glass-border); border-radius: 18px; padding: 18px; margin-bottom: 18px; }
+.launch-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.launch-head h2 { font-size: 20px; margin: 2px 0 0; }
+.launch-items { display: flex; flex-direction: column; gap: 8px; }
+.launch-item { display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,.25); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.launch-item.todo { border-color: rgba(255,215,0,.35); }
+.launch-mark { font-size: 18px; line-height: 1; flex-shrink: 0; }
+.launch-copy { flex: 1; min-width: 0; }
+.launch-copy strong { display: block; font-size: 14px; color: #fff; }
+.launch-copy small { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; }
+.launch-copy em { display: block; font-size: 11.5px; color: var(--gold); font-style: normal; margin-top: 3px; }
+.launch-item .button { flex-shrink: 0; padding: 8px 12px; font-size: 12px; }
+
+/* ── First-run onboarding ── */
+.onboard-overlay { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.72); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; padding: 20px; padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+.onboard-card { position: relative; width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--glass-border); border-radius: 22px; padding: 32px 24px 24px; text-align: center; animation: slide-up .25s ease both; }
+.onboard-skip { position: absolute; top: 14px; right: 16px; background: none; border: none; color: var(--muted); font-size: 13px; cursor: pointer; }
+.onboard-icon { font-size: 52px; line-height: 1; margin-bottom: 14px; }
+.onboard-card h2 { font-size: 22px; margin: 0 0 10px; }
+.onboard-card p { font-size: 14px; line-height: 1.55; color: var(--muted); margin: 0 0 20px; }
+.onboard-dots { display: flex; justify-content: center; gap: 7px; margin-bottom: 18px; }
+.onboard-dots i { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,.2); transition: background .2s, width .2s; }
+.onboard-dots i.on { background: var(--neon); width: 20px; border-radius: 4px; }
+.onboard-actions { display: flex; gap: 10px; }
+.onboard-actions .button { flex: 1; }
