@@ -805,6 +805,23 @@ function App() {
     [proofLeague, playerSession],
   );
 
+  // Sign-in dropdown must always point at a real player. The old default was a
+  // demo id that no longer exists, so the form LOOKED right but sent a dead id.
+  useEffect(() => {
+    const players = proofLeague.players ?? [];
+    if (!players.length) return;
+    if (!players.some((p) => p.id === playerLogin.playerId)) setPlayerLogin((current) => ({ ...current, playerId: players[0].id }));
+  }, [proofLeague.players, playerLogin.playerId]);
+
+  // Lock the page behind any sheet/modal so the phone scrolls the sheet, not
+  // the app underneath (iOS otherwise scrolls the background and the sheet's
+  // buttons look "frozen" below the fold).
+  useEffect(() => {
+    const open = showWelcome || showMore || showOnboarding;
+    document.body.classList.toggle('modal-open', open);
+    return () => document.body.classList.remove('modal-open');
+  }, [showWelcome, showMore, showOnboarding]);
+
   // Keep the pay-handle form in sync with the saved profile (per player, per save).
   useEffect(() => {
     const key = currentPlayer ? `${currentPlayer.id}:${currentPlayer.payment?.updatedAt ?? ''}` : null;
@@ -1604,11 +1621,25 @@ function App() {
         role: 'assistant',
         text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Picks lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours BEFORE the week's first game — the exact time is on the Picks page — so don't be that guy texting me at kickoff. Ask me anything — rules, standings, your picks. I got you.`,
       }]);
-      setAssistantOpen(true);
-      // Auto-speak the welcome message
-      const welcomeText = `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses.`;
-      setTimeout(() => readAssistantMessage(welcomeText), 500);
-    } catch (error) { notify(error.message); }
+      // Don't slam a full-screen Jack drawer over the app the second someone
+      // joins — on a phone it hides the tab bar and reads as a freeze. Jack's
+      // welcome is waiting in Chat and in the Ask Jack drawer; land on Home.
+      setAssistantOpen(false);
+      setShowMore(false);
+      setView('home');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (error) {
+      if (/already registered/i.test(error.message)) {
+        const digits = signupPhone.replace(/\D/g, '').slice(-10);
+        const match = (proofLeague.players ?? []).find((p) => String(p.phone ?? '').replace(/\D/g, '').slice(-10) === digits);
+        if (match) setPlayerLogin((current) => ({ ...current, playerId: match.id, pin: '' }));
+        setWelcomeMode('signin');
+        setSignupStep(1);
+        notify(match ? `You already have an account, ${match.name.split(' ')[0]} — just enter your PIN to sign in.` : 'That number already has an account — sign in with your PIN instead.');
+        return;
+      }
+      notify(error.message);
+    }
     finally { setServerBusy(''); }
   };
 
@@ -1780,7 +1811,7 @@ function App() {
       {/* ── Welcome / Account Creation Screen ── */}
       {showWelcome && (
         <div className="more-menu-overlay" onClick={(e) => e.target === e.currentTarget && setShowWelcome(false)}>
-          <div className="more-menu" style={{ maxHeight: '85vh' }}>
+          <div className="more-menu tall">
             <div className="more-menu-header">
               <h3>{welcomeMode === 'join' ? 'Join the League' : welcomeMode === 'reset' ? 'Reset your PIN' : 'Sign In'}</h3>
               <button className="more-menu-close" type="button" onClick={() => setShowWelcome(false)}>×</button>
@@ -1794,10 +1825,10 @@ function App() {
                 <form onSubmit={handleSignup}>
                   {/* Step indicator */}
                   <div className="signup-steps">
-                    <span className={`signup-step ${signupStep >= 1 ? 'active' : ''}`}>1 · Info</span>
+                    <span className={`signup-step ${signupStep === 1 ? 'current' : 'done'}`}>1 · Info</span>
                     <span className="signup-step-line" />
-                    <span className={`signup-step ${signupStep >= 2 ? 'active' : ''}`}>2 · Identity</span>
-                    {smsLive() && (<><span className="signup-step-line" /><span className={`signup-step ${signupStep >= 3 ? 'active' : ''}`}>3 · Verify</span></>)}
+                    <span className={`signup-step ${signupStep === 2 ? 'current' : signupStep > 2 ? 'done' : ''}`}>2 · Identity</span>
+                    {smsLive() && (<><span className="signup-step-line" /><span className={`signup-step ${signupStep === 3 ? 'current' : ''}`}>3 · Verify</span></>)}
                   </div>
 
                   {signupStep === 1 && (<>
