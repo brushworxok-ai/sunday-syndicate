@@ -43,10 +43,10 @@ const MORE_ITEMS = [
   ['cfb',      'College FB',       '🏟️', 'CFB rankings, games & pick-em pools'],
   ['payments', 'My Payments',      '💰', 'Payment history & balance'],
   ['notifs',   'Notifications',    '🔔', 'Reminders, payouts & messages'],
-  ['entries',  'Locked Entries',   '📋', 'View submitted pick sheets'],
+  ['entries',  "Who's In",         '📋', 'Who has picks in & who paid'],
   ['players',  'My Profile',       '👤', 'Your pic, the crew & settings'],
   ['bets',     'Side Bets',        '🎲', 'Challenge your crew'],
-  ['ai',       'AI Tools',         '✦',  'Gemini-powered insights'],
+  ['ai',       'AI Tools',         '✦',  'Jack-powered insights'],
   ['rules',    'House Rules',      '📖', 'The fine print'],
   ['demo',     'Demo Proof',       '🔍', 'Acceptance scenario'],
   ['admin',    'Commissioner',     '🔒', 'Admin controls'],
@@ -156,7 +156,7 @@ function App() {
   const assistantEndRef = useRef(null);
   const [jackAvatarState, setJackAvatarState] = useState('idle');
   const [jackVoiceConsent, setJackVoiceConsent] = useState(false);
-  const [selectedWeek, setSelectedWeek] = useState(WEEK);
+  const [selectedWeek, setSelectedWeek] = useState(() => getCurrentWeek() || WEEK);
   const [liveScores, setLiveScores] = useState({ week: null, anyLive: false, scores: [] });
   const [nflNews, setNflNews] = useState({ items: [] });
   const [nflInjuries, setNflInjuries] = useState({ teams: [] });
@@ -348,6 +348,11 @@ function App() {
     } catch { /* non-fatal */ }
   }, [playerSession.authenticated]);
 
+  const [notifsSeenAt, setNotifsSeenAt] = useState(() => { try { return localStorage.getItem('notifs-seen-at') || ''; } catch { return ''; } });
+  const unreadNotifs = useMemo(
+    () => notifications.filter((n) => n.kind !== 'payment_claimed' && (!notifsSeenAt || String(n.at) > notifsSeenAt)).length,
+    [notifications, notifsSeenAt],
+  );
   const loadNotifications = useCallback(async () => {
     if (!playerSession.authenticated) return;
     try {
@@ -359,8 +364,14 @@ function App() {
   // Load payment & notification data when switching to those views
   useEffect(() => {
     if (view === 'payments') loadPaymentHistory();
-    if (view === 'notifs') loadNotifications();
-  }, [view, loadPaymentHistory, loadNotifications]);
+    if (playerSession.authenticated && notifications.length === 0) loadNotifications();
+    if (view === 'notifs') {
+      loadNotifications();
+      const stamp = new Date().toISOString();
+      setNotifsSeenAt(stamp);
+      try { localStorage.setItem('notifs-seen-at', stamp); } catch { /* private mode */ }
+    }
+  }, [view, loadPaymentHistory, loadNotifications, playerSession.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Deep-link: open the view specified in ?view= (e.g. invite links)
   useEffect(() => {
@@ -440,6 +451,22 @@ function App() {
   const liveByGame = useMemo(() => Object.fromEntries((liveScores.scores ?? []).map((s) => [s.gameId, s])), [liveScores]);
 
   const weekSheets = useMemo(() => sheets.filter((sheet) => sheet.week === selectedWeek), [sheets, selectedWeek]);
+  // The signed-in player's own entry for the selected week (null if none yet).
+  const mySheet = useMemo(
+    () => (playerSession.playerId ? weekSheets.find((s) => s.playerId === playerSession.playerId) ?? null : null),
+    [weekSheets, playerSession.playerId],
+  );
+  const slipRef = useRef(null);
+  const tiebreakerRef = useRef(null);
+
+  // Prefill the sheet from the player's saved entry so "edit one pick" doesn't
+  // mean redoing all 16. Never clobbers in-progress edits.
+  useEffect(() => {
+    if (view !== 'picks' || !mySheet) return;
+    if (Object.keys(picks).length > 0) return;
+    setPicks({ ...(mySheet.picks ?? {}) });
+    if (mySheet.tiebreaker != null && tiebreaker === '') setTiebreaker(String(mySheet.tiebreaker));
+  }, [view, mySheet?.id, selectedWeek]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Game-day live: provisional winner per game (final result, else current leader)
   const liveProvisional = useMemo(() => {
@@ -579,7 +606,7 @@ function App() {
       await apiRequest('/api/auth/admin', { method: 'POST', body: JSON.stringify({ password: adminPassword }) });
       setIsComm(true);
       setAdminPassword('');
-      notify('Commissioner session active for eight hours.');
+      notify('Signed in as commissioner.');
     } catch (error) {
       notify(error.message);
     } finally { setServerBusy(''); }
@@ -873,7 +900,8 @@ function App() {
   };
 
   const submit = async () => {
-    if (weekLocked) return notify(`${weekLabel} is locked — sheets were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff.`);
+    if (weekLocked) return notify(`${weekLabel} is locked — picks were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first game.`);
+    if (selectedWeek !== getCurrentWeek()) return notify(`Picks are only open for Week ${getCurrentWeek()} right now — switch the week at the top to lock in.`);
     // Signed-in players are identified by their session — the server uses that,
     // not this field — so only guests need to type a name.
     if (!playerSession.authenticated && !name.trim()) return notify('Add your name before locking in.');
@@ -885,14 +913,35 @@ function App() {
     try {
       await apiRequest(`/api/leagues/${LEAGUE_ID}/entries`, { method: 'POST', body: JSON.stringify({ name: name.trim(), handle: handle.trim(), picks, tiebreaker: Number(tiebreaker), paid, week: selectedWeek, playerId: playerSession.playerId ?? undefined }) });
       await loadLeague();
-      setName(''); setHandle(''); setPicks({}); setTiebreaker(''); setPaid(false);
-      notify(paid ? 'Picks locked in and saved to the league database.' : 'Picks locked in — now pay your entry from credit or the Cash App link.');
-      setView('entries');
+      // Stay on the sheet in a confirmed state (picks + tiebreaker kept), and
+      // bring the pay block into view if they still owe the entry.
+      const wasPaid = paid || Boolean(mySheet?.paid);
+      notify(wasPaid ? `You're in for ${weekLabel}. Good luck.` : `You're in for ${weekLabel} — now pay your $${ENTRY_FEE} entry below.`);
+      setTimeout(() => slipRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
 
+  // Sticky-bar lock: route the player to whatever's still missing.
+  const lockFromBar = () => {
+    const done = Object.keys(picks).length;
+    if (done < currentGames.length) return notify(`Pick all ${currentGames.length} games — ${currentGames.length - done} to go.`);
+    if (!tiebreaker) {
+      slipRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setTimeout(() => tiebreakerRef.current?.focus(), 400);
+      return notify('Set your tiebreaker total, then lock in.');
+    }
+    submit();
+  };
+
   const chatEndRef = useRef(null);
+
+  // Keep the chat live: refresh every 12s while the Chat tab is open.
+  useEffect(() => {
+    if (view !== 'chat') return undefined;
+    const timer = setInterval(() => { loadLeague(); }, 12_000);
+    return () => clearInterval(timer);
+  }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll chat to bottom when messages change
   useEffect(() => {
@@ -902,7 +951,7 @@ function App() {
   }, [chatMsgs, view]);
 
   const sendChat = async () => {
-    if (!chatName.trim()) return notify('Add your chat name first.');
+    if (!playerSession.authenticated) { setWelcomeMode('signin'); setShowWelcome(true); return notify('Sign in to post in the chat.'); }
     if (!chatInput.trim()) return;
     try {
       await apiRequest(`/api/leagues/${LEAGUE_ID}/chat`, { method: 'POST', body: JSON.stringify({ name: chatName.trim(), msg: chatInput.trim() }) });
@@ -1198,7 +1247,7 @@ function App() {
     try {
       await apiRequest(`/api/players/${playerId}/preferences`, { method: 'PATCH', body: JSON.stringify(changes) });
       await loadLeague();
-      notify('Preferences saved with a new consent record.');
+      notify('Settings saved.');
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -1222,7 +1271,7 @@ function App() {
   const logoutPlayer = async () => {
     await apiRequest('/api/auth/player', { method: 'DELETE' });
     setPlayerSession({ authenticated: false, playerId: null, name: null });
-    notify('Player session ended.');
+    notify('Signed out.');
   };
 
   const createBet = async (event) => {
@@ -1526,7 +1575,7 @@ function App() {
       setAssistantMessages((prev) => [...prev, {
         id: `jack-onboard-${Date.now()}`,
         role: 'assistant',
-        text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Sheets lock at the first kickoff, so don't be that guy texting me Thursday night. Ask me anything — rules, standings, your picks. I got you.`,
+        text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Picks lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours BEFORE the week's first game — the exact time is on the Picks page — so don't be that guy texting me at kickoff. Ask me anything — rules, standings, your picks. I got you.`,
       }]);
       setAssistantOpen(true);
       // Auto-speak the welcome message
@@ -1646,7 +1695,7 @@ function App() {
       <nav className="nav-tabs" aria-label="Main navigation">
         {MAIN_NAV.map(([id, label, icon]) => (
           <button className={activeTab === id ? 'active' : ''} type="button" key={id} onClick={() => navigate(id)}>
-            <span className="nav-icon">{icon}</span>
+            <span className="nav-icon">{icon}{id === 'more' && unreadNotifs > 0 && <i className="nav-badge" aria-label={`${unreadNotifs} new`}>{unreadNotifs > 9 ? '9+' : unreadNotifs}</i>}</span>
             {label}
           </button>
         ))}
@@ -1664,7 +1713,7 @@ function App() {
               {MORE_ITEMS.filter(([id]) => isComm || !['demo', 'ai'].includes(id)).map(([id, label, icon, desc]) => (
                 <button className="more-menu-item" type="button" key={id} onClick={() => { setView(id); setShowMore(false); }}>
                   <span className="menu-icon">{icon}</span>
-                  {label}
+                  {label}{id === 'notifs' && unreadNotifs > 0 && <i className="menu-badge">{unreadNotifs > 9 ? '9+' : unreadNotifs}</i>}
                   <span>{desc}</span>
                 </button>
               ))}
@@ -1677,7 +1726,7 @@ function App() {
       {showOnboarding && (() => {
         const slides = [
           { icon: '🏈', title: 'Welcome to 405 BADGUYS', body: 'A pick’em league for the crew. Every week you call the winner of every NFL game — straight up, no spreads. Most right wins the pot.' },
-          { icon: '💰', title: 'Pick. Pay. Cash out.', body: 'Make your picks before kickoff, pay your entry through Cash App or your credit balance, and watch the live leaderboard. Win the week, the pot hits your balance automatically.' },
+          { icon: '💰', title: 'Pick. Pay. Cash out.', body: 'Get your picks in early — they lock 5 hours before the week’s first game (the Picks page shows the exact time). Pay through Cash App or your credit balance, then watch the live leaderboard. Win the week, the pot hits your balance automatically.' },
           { icon: '🔥', title: 'Meet Jack', body: 'Jack is your AI commissioner. He tracks the standings, runs the recaps, and talks all the trash — tap the 🔊 to hear him. There’s also a season-long pool, survivor, props, and college pick’em when you’re ready.' },
         ];
         const last = onboardStep >= slides.length - 1;
@@ -1759,7 +1808,7 @@ function App() {
 
                     <div className="signup-btn-row">
                       <button type="button" className="button button-ghost" onClick={() => setSignupStep(1)}>← Back</button>
-                      <button className="button button-primary">Next · Verify phone →</button>
+                      <button className="button button-primary">{smsLive() ? 'Next · Verify phone →' : 'Join the league →'}</button>
                     </div>
                   </>)}
 
@@ -1828,9 +1877,9 @@ function App() {
           <div className="stack-lg">
             <section className="hero">
               <div className="hero-copy">
-                <span className="eyebrow">THE BOARD IS OPEN</span>
+                <span className="eyebrow">{weekLocked ? 'PICKS ARE LOCKED' : 'THE BOARD IS OPEN'}</span>
                 <h1>{currentGames.length} games.<br /><em>One clean sheet.</em></h1>
-                <p>Call every winner, survive the tiebreaker, and earn the right to be unbearable until Thursday.</p>
+                <p>{weekLocked ? 'Picks are in — watch the board and talk your trash.' : 'Call every winner, survive the tiebreaker, and earn the right to be unbearable until next week.'}</p>
                 <div className="hero-actions">
                   <button className="button button-light" type="button" onClick={() => setView('picks')}>Make my picks <span>→</span></button>
                   {!playerSession.authenticated && (
@@ -1843,7 +1892,7 @@ function App() {
                 </div>
               </div>
               <div className="hero-scorecard">
-                <span className="scorecard-label">This week's purse</span>
+                <span className="scorecard-label">This week's pot</span>
                 <strong>${totalPot.toLocaleString()}</strong>
                 <div><span>{weekSheets.length} entries</span><span>{completedGames}/{currentGames.length} final</span></div>
                 {rolloverPot > 0 && <p>Includes ${Number(rolloverPot).toLocaleString()} rollover</p>}
@@ -1918,56 +1967,61 @@ function App() {
               </section>
             )}
 
-            <section className="stat-grid">
-              <article className="stat-card"><span>01</span><strong>{currentGames.length}</strong><p>games on the board</p></article>
-              <article className="stat-card"><span>02</span><strong>{weekSheets.length}</strong><p>locked entries</p></article>
-              <article className="stat-card"><span>03</span><strong>${ENTRY_FEE}</strong><p>per sheet</p></article>
-              <article className="stat-card accent"><span>04</span><strong>{completedGames}</strong><p>results posted</p></article>
-            </section>
-
-            <section className="section-grid">
-              <div className="panel">
-                <div className="panel-heading"><div><span className="eyebrow dark">GEMINI COMMISSIONER</span><h2>League pulse</h2></div><span className={`status-dot ${aiStatus.configured ? 'online' : ''}`}>{aiStatus.configured ? 'Live ready' : 'Approved demo'}</span></div>
-                {aiResult.recap ? <p className="ai-copy">{aiResult.recap}</p> : <p className="muted">Turn your entries and posted results into a sharp, grounded league update—no invented stats.</p>}
-                {aiError && <p className="error-text">{aiError}</p>}
-                <button className="text-button" type="button" onClick={getRecap} disabled={!weekSheets.length || aiLoading === 'recap'}>{aiLoading === 'recap' ? 'Writing…' : aiResult.recap ? 'Refresh recap ↗' : 'Generate league recap ↗'}</button>
-                <button className="text-button recap-show-btn" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading…' : '▶ Watch Recap Show'}</button>
-              </div>
-              <div className="panel next-up">
-                <span className="eyebrow dark">NEXT UP</span><h2>{currentGames[0]?.away} <i>at</i> {currentGames[0]?.home}</h2><p>{currentGames[0]?.time}</p>
-                <div className="matchup-teams"><span>{currentGames[0]?.away}</span><b>VS</b><span>{currentGames[0]?.home}</span></div>
-              </div>
-            </section>
-
-            {nflNews.items?.length > 0 && (
-              <section className="panel nfl-wire">
-                <div className="panel-heading"><div><span className="eyebrow dark">NFL WIRE</span><h2>Injuries, statuses & team news</h2></div><small className="wire-updated">Updated {nflNews.fetchedAt ? new Date(nflNews.fetchedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}</small></div>
-                <div className="wire-list">
-                  {nflNews.items.slice(0, 8).map((item, index) => (
-                    <article key={index}>
-                      <strong>{item.headline}</strong>
-                      {item.description && <p>{item.description}</p>}
-                      <div className="wire-meta">
-                        {item.published && <time>{new Date(item.published).toLocaleDateString([], { month: 'short', day: 'numeric' })}</time>}
-                        {item.url && <a href={item.url} target="_blank" rel="noreferrer">Full story ↗</a>}
+            {/* ── You this week: the one card a player actually wants ── */}
+            {(() => {
+              const nextGame = currentGames.find((g) => { const l = liveByGame[g.id]; return !(l?.state === 'post' || results[g.id]?.winner); }) ?? currentGames[0];
+              const myRank = playerSession.playerId ? leaderboard.findIndex((e) => e.playerId === playerSession.playerId) + 1 : 0;
+              return (
+                <section className="section-grid">
+                  {playerSession.authenticated ? (
+                    <div className="panel you-week">
+                      <div className="panel-heading"><div><span className="eyebrow dark">YOU · {weekLabel.toUpperCase()}</span><h2>{mySheet ? (mySheet.paid ? "You're in and paid" : 'Picks in — entry not paid') : weekLocked ? 'You sat this week out' : 'No picks in yet'}</h2></div></div>
+                      <div className="you-week-rows">
+                        <div className={`you-row ${mySheet ? 'ok' : 'todo'}`}><span>{mySheet ? '✅' : '○'}</span><div><strong>Picks</strong><small>{mySheet ? `${Object.keys(mySheet.picks ?? {}).length}/${currentGames.length} in · TB ${mySheet.tiebreaker}` : weekLocked ? 'Locked' : `Lock in before ${deadlineCountdown ? `${deadlineCountdown} from now` : 'the deadline'}`}</small></div></div>
+                        <div className={`you-row ${mySheet?.paid ? 'ok' : mySheet ? 'todo' : ''}`}><span>{mySheet?.paid ? '✅' : mySheet ? '⚠️' : '○'}</span><div><strong>Entry</strong><small>{mySheet?.paid ? `$${ENTRY_FEE} paid` : mySheet ? (mySheet.paymentClaim ? 'You said you sent it — waiting on commissioner' : `$${ENTRY_FEE} due`) : 'Pay after your picks are in'}</small></div></div>
+                        {myRank > 0 && <div className="you-row ok"><span>🏆</span><div><strong>Rank</strong><small>#{myRank} of {leaderboard.length} · {leaderboard[myRank - 1]?.score ?? 0} correct so far</small></div></div>}
                       </div>
-                    </article>
-                  ))}
-                </div>
-                <p className="wire-note">Ask Jack about any of these — he's read the wire.</p>
+                      <div className="you-week-actions">
+                        {!weekLocked && <button className="button button-primary" type="button" onClick={() => setView('picks')}>{mySheet ? 'Update picks' : 'Make my picks'} →</button>}
+                        {mySheet && !mySheet.paid && <button className="button button-ghost-dark" type="button" onClick={() => setView('payments')}>Pay entry</button>}
+                        {weekLocked && <button className="button button-ghost-dark" type="button" onClick={() => setView('results')}>See the board</button>}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="panel you-week">
+                      <div className="panel-heading"><div><span className="eyebrow dark">{weekLabel.toUpperCase()}</span><h2>Jump in this week</h2></div></div>
+                      <p className="muted">Join in 30 seconds, pick every game, and you're in the pot.</p>
+                      <div className="you-week-actions"><button className="button button-primary" type="button" onClick={() => { setWelcomeMode('join'); setShowWelcome(true); }}>Join the league →</button></div>
+                    </div>
+                  )}
+                  <div className="panel next-up">
+                    <span className="eyebrow dark">NEXT UP</span><h2>{nextGame?.away} <i>at</i> {nextGame?.home}</h2><p>{nextGame?.time}</p>
+                    <div className="matchup-teams"><span>{nextGame?.away}</span><b>VS</b><span>{nextGame?.home}</span></div>
+                  </div>
+                </section>
+              );
+            })()}
+
+            {/* Jack's approved weekly recap (only once the commissioner has signed it off) */}
+            {proofLeague.latestRecap?.adminApproval?.status === 'approved' && proofLeague.latestRecap?.finalText && (
+              <section className="panel">
+                <div className="panel-heading"><div><span className="eyebrow dark">JACK'S RECAP</span><h2>{weekLabel} in review</h2></div></div>
+                <p className="ai-copy">{proofLeague.latestRecap.finalText}</p>
+                <button className="text-button recap-show-btn" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading…' : '▶ Watch the recap show'}</button>
               </section>
             )}
+
           </div>
         )}
 
         {view === 'picks' && (
           <div className="page-grid">
             <section className="content-column">
-              <div className="page-title"><span className="eyebrow dark">{weekLabel.toUpperCase()}</span><h1>Build your sheet</h1><p>Pick one winner in every matchup. Your choices stay private on this device until you lock them in.</p>{currentByeTeams.length > 0 && <p className="bye-notice"><strong>Bye teams:</strong> {currentByeTeams.map(t => TEAMS[t]).join(', ')}</p>}</div>
+              <div className="page-title"><span className="eyebrow dark">{weekLabel.toUpperCase()}</span><h1>Make your picks</h1><p>Pick one winner in every matchup. Your choices stay private on this device until you lock them in.</p>{currentByeTeams.length > 0 && <p className="bye-notice"><strong>Bye teams:</strong> {currentByeTeams.map(t => TEAMS[t]).join(', ')}</p>}</div>
               <div className={`deadline-banner ${weekLocked ? 'locked' : ''}`}>
                 {weekLocked
-                  ? <><span className="deadline-icon">🔒</span><div><strong>Sheets are locked for {weekLabel}.</strong><p>Deadline passed — {DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff. See you next week.</p></div></>
-                  : <><span className="deadline-icon">⏱</span><div><strong>Sheets lock in {deadlineCountdown || 'less than a minute'}.</strong><p>Deadline: {weekDeadline ? weekDeadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + ` ET (${DEADLINE_HOURS_BEFORE_KICKOFF}h before kickoff)` : `${DEADLINE_HOURS_BEFORE_KICKOFF}h before first kickoff`}.</p></div></>}
+                  ? <><span className="deadline-icon">🔒</span><div><strong>Picks are locked for {weekLabel}.</strong><p>Deadline passed — {DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff. See you next week.</p></div></>
+                  : <><span className="deadline-icon">⏱</span><div><strong>Picks lock in {deadlineCountdown || 'less than a minute'}.</strong><p>Deadline: {weekDeadline ? weekDeadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + ` ET (${DEADLINE_HOURS_BEFORE_KICKOFF}h before kickoff)` : `${DEADLINE_HOURS_BEFORE_KICKOFF}h before first kickoff`}.</p></div></>}
               </div>
               <div className="games-list">
                 {currentGames.map((game, index) => (
@@ -1983,8 +2037,14 @@ function App() {
               </div>
             </section>
 
-            <aside className="slip-card">
-              <div className="slip-progress"><span>YOUR SHEET</span><strong>{Object.keys(picks).length}<small> / {currentGames.length}</small></strong></div>
+            <aside className="slip-card" ref={slipRef}>
+              {mySheet && (
+                <div className="slip-in-banner">
+                  <strong>✅ You're in for {weekLabel}</strong>
+                  <small>{weekLocked ? 'Locked — good luck.' : 'Change any pick below and tap Update anytime before lock.'}</small>
+                </div>
+              )}
+              <div className="slip-progress"><span>YOUR PICKS</span><strong>{Object.keys(picks).length}<small> / {currentGames.length}</small></strong></div>
               <div className="progress-track"><span style={{ width: `${(Object.keys(picks).length / currentGames.length) * 100}%` }} /></div>
               {playerSession.authenticated ? (
                 <div className="slip-identity"><PlayerAvatar player={currentPlayer} size={34} /><div><strong>Locking in as {playerSession.name}</strong><small>Pulled from your profile — just set your tiebreaker</small></div></div>
@@ -1995,11 +2055,10 @@ function App() {
                   <p className="slip-signin-hint">Already have a profile? <button type="button" className="link-button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button> and skip this.</p>
                 </>
               )}
-              <label>Tiebreaker total<input type="number" min="0" value={tiebreaker} onChange={(event) => setTiebreaker(event.target.value)} placeholder="48" /></label>
+              <label>Tiebreaker total<input ref={tiebreakerRef} type="number" min="0" value={tiebreaker} onChange={(event) => setTiebreaker(event.target.value)} placeholder="48" /></label>
               <p className="rule-note"><strong>Closest without going over wins.</strong> Going over means your tiebreaker is busted.</p>
               {!playerSession.authenticated && <label className="check-row"><input type="checkbox" checked={paid} onChange={(event) => setPaid(event.target.checked)} /><span>I confirm I sent ${ENTRY_FEE}</span></label>}
               {playerSession.authenticated && (() => {
-                const mySheet = weekSheets.find((s) => s.playerId === playerSession.playerId);
                 if (mySheet?.paid) return <div className="credit-paid-banner">✅ This week's entry is paid.</div>;
                 return (
                   <div className="credit-chip-row">
@@ -2020,7 +2079,7 @@ function App() {
                   </div>
                 );
               })()}
-              {serverLeague?.settings?.cashAppPool?.url && !weekSheets.find((s) => s.playerId === playerSession.playerId)?.paid && (
+              {serverLeague?.settings?.cashAppPool?.url && !mySheet?.paid && (
                 <div className="cashapp-steps">
                   <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
                     <span className="cashapp-icon">💵</span>
@@ -2030,11 +2089,19 @@ function App() {
                   <small className="muted">Opens Cash App to send your entry fee directly to the commissioner.</small>
                 </div>
               )}
-              <button className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Locking in…' : <>Lock in picks <span>→</span></>}</button>
-              <button className="ai-mini-button" type="button" onClick={analyzePicks} disabled={aiLoading === 'picks'}><span>✦</span>{aiLoading === 'picks' ? 'Reviewing…' : 'Ask Gemini to check my sheet'}</button>
+              <button className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Saving…' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
+              <button className="ai-mini-button" type="button" onClick={analyzePicks} disabled={aiLoading === 'picks'}><span>✦</span>{aiLoading === 'picks' ? 'Reviewing…' : 'Ask Jack to check my picks'}</button>
               {aiResult.picks && <div className="ai-slip-result">{aiResult.picks}</div>}
               {aiError && <p className="error-text">{aiError}</p>}
             </aside>
+
+            {/* Mobile sticky lock bar — progress + one button, always reachable */}
+            {!weekLocked && (
+              <div className="picks-sticky" role="region" aria-label="Lock in your picks">
+                <div className="picks-sticky-progress"><strong>{Object.keys(picks).length}/{currentGames.length}</strong> picked{tiebreaker ? ` · TB ${tiebreaker}` : ''}</div>
+                <button className="button button-primary" type="button" onClick={lockFromBar} disabled={serverBusy === 'entry'}>{serverBusy === 'entry' ? 'Saving…' : mySheet ? 'Update →' : 'Lock in →'}</button>
+              </div>
+            )}
           </div>
         )}
 
@@ -2071,7 +2138,7 @@ function App() {
                       </div>;
                     })}
                   </div>
-                  <p>Most total correct picks combined across all 18 weekly sheets sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three cash out.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
+                  <p>Most total correct picks combined across all 18 weeks sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three cash out.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
                 </div>
                 {isComm && <div className="season-pool-admin">
                   <small>SEASON ENTRIES PAID</small>
@@ -2129,13 +2196,13 @@ function App() {
                   ))}
                 </div>
               </section>
-            </> : <EmptyState icon="🏆" title="No season data yet" text="Standings build as sheets lock and results post each week." action="Make picks" onAction={() => setView('picks')} />}
+            </> : <EmptyState icon="🏆" title="No season data yet" text="Standings build as picks lock and results post each week." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}
 
         {view === 'survivor' && (
           <StandardPage eyebrow="SURVIVOR POOL" title="Last one standing" subtitle="Pick one team to win each week. Never reuse a team. One loss and you're out.">
-            <PlayerSessionPanel players={proofLeague.players} session={playerSession} login={playerLogin} setLogin={setPlayerLogin} onLogin={loginPlayer} onLogout={logoutPlayer} busy={serverBusy === 'player-login'} />
+            {!playerSession.authenticated && <div className="signin-nudge"><span>Sign in to play this one.</span><button type="button" className="button button-primary" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button></div>}
             {survivorPool.champion && <div className="survivor-champion">🏆 <strong>{survivorPool.champion.name}</strong> is the last one standing — survivor pool champion!</div>}
             {(() => {
               const myEntry = survivorPool.entries.find((e) => e.playerId === playerSession.playerId);
@@ -2178,7 +2245,7 @@ function App() {
 
         {view === 'props' && (
           <StandardPage eyebrow={weekLabel.toUpperCase()} title="Prop picks" subtitle="Side action on individual player performances. Bragging rights and bonus pots.">
-            <PlayerSessionPanel players={proofLeague.players} session={playerSession} login={playerLogin} setLogin={setPlayerLogin} onLogin={loginPlayer} onLogout={logoutPlayer} busy={serverBusy === 'player-login'} />
+            {!playerSession.authenticated && <div className="signin-nudge"><span>Sign in to play this one.</span><button type="button" className="button button-primary" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button></div>}
             {!playerSession.authenticated ? (
               <p className="muted">Sign in above to make your prop picks for {weekLabel}.</p>
             ) : (
@@ -2298,7 +2365,7 @@ function App() {
                     </div>
                   ))}
                 </div>
-              ) : <EmptyState icon="📋" title="No sheets in yet" text={`Standings appear once ${weekLabel} sheets are submitted.`} action="Make picks" onAction={() => setView('picks')} />}
+              ) : <EmptyState icon="📋" title="No picks in yet" text={`Standings appear once ${weekLabel} picks are in.`} action="Make picks" onAction={() => setView('picks')} />}
               <p className="muted">Locked = correct picks in final games. Leading = picks currently ahead in live games. Projections shift with every score.</p>
             </section>
             <section className="live-games">
@@ -2369,7 +2436,7 @@ function App() {
                   <p className="muted">Row vs column: weekly score wins–losses in weeks both played.</p>
                 </section>
               )}
-            </> : <EmptyState icon="📊" title="No stats yet" text="Stats build as sheets are submitted and weeks get scored." action="Make picks" onAction={() => setView('picks')} />}
+            </> : <EmptyState icon="📊" title="No stats yet" text="Stats build as picks come in and weeks get scored." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}
 
@@ -2381,21 +2448,53 @@ function App() {
               <p className="muted" style={{ textAlign: 'center', padding: '2rem 0' }}>Loading payment history…</p>
             ) : (
               <div className="payment-history-view">
+                {/* The one question this page must answer: do I owe anything right now? */}
+                {mySheet && !mySheet.paid ? (
+                  <section className="owe-card">
+                    <div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>You owe ${ENTRY_FEE} for {weekLabel}</h2><p>Your picks are in — pay the entry to be in the pot.</p></div>
+                    <div className="credit-chip-row">
+                      <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
+                      {myCredit >= ENTRY_FEE && (
+                        <button className="button button-primary" type="button" disabled={serverBusy === 'sheet-credit-pay'} onClick={() => paySheetWithCredit(mySheet.id)}>
+                          {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from my credit`}
+                        </button>
+                      )}
+                      {myCredit < ENTRY_FEE && (
+                        mySheet.paymentClaim
+                          ? <span className="claim-waiting">⏳ You said you sent it — the commissioner will confirm and you'll get a notification.</span>
+                          : <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'claim-sheet'} onClick={() => claimSheetPayment(mySheet.id)}>
+                              {serverBusy === 'claim-sheet' ? 'Sending…' : `✋ I sent my $${ENTRY_FEE}`}
+                            </button>
+                      )}
+                    </div>
+                    {serverLeague?.settings?.cashAppPool?.url && myCredit < ENTRY_FEE && !mySheet.paymentClaim && (
+                      <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
+                        <span className="cashapp-icon">💵</span>
+                        <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App'}</strong><small>{'1. Tap here → 2. Send $'}{ENTRY_FEE}{' → 3. Come back & tap "I sent it"'}</small></div>
+                        <span className="cashapp-arrow">↗</span>
+                      </a>
+                    )}
+                  </section>
+                ) : mySheet?.paid ? (
+                  <section className="owe-card paid"><div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>✅ You're paid up for {weekLabel}</h2><p>Nothing owed. Good luck.</p></div></section>
+                ) : (
+                  <section className="owe-card"><div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>No picks in for {weekLabel} yet</h2><p>Get your picks in, then pay the ${ENTRY_FEE} entry here.</p></div><button className="button button-primary" type="button" onClick={() => setView('picks')}>Make my picks →</button></section>
+                )}
                 <div className="payment-summary-cards">
                   <div className="payment-summary-card">
-                    <span className="payment-summary-label">Total Paid In</span>
-                    <span className="payment-summary-value negative">${paymentHistory.summary.totalPaid}</span>
+                    <span className="payment-summary-label">Paid in</span>
+                    <span className="payment-summary-value">${paymentHistory.summary.totalPaid}</span>
                   </div>
                   <div className="payment-summary-card">
-                    <span className="payment-summary-label">Total Won</span>
+                    <span className="payment-summary-label">Won</span>
                     <span className="payment-summary-value positive">${paymentHistory.summary.totalWon}</span>
                   </div>
                   <div className="payment-summary-card">
-                    <span className="payment-summary-label">Credit Balance</span>
+                    <span className="payment-summary-label">Credit</span>
                     <span className="payment-summary-value">${paymentHistory.summary.creditBalance}</span>
                   </div>
                   <div className="payment-summary-card accent">
-                    <span className="payment-summary-label">Net Position</span>
+                    <span className="payment-summary-label">Up / down</span>
                     <span className={`payment-summary-value ${paymentHistory.summary.netPosition >= 0 ? 'positive' : 'negative'}`}>
                       {paymentHistory.summary.netPosition >= 0 ? '+' : ''}${paymentHistory.summary.netPosition}
                     </span>
@@ -2407,7 +2506,7 @@ function App() {
                 </div>
                 <h3 className="payment-history-heading">Transaction History</h3>
                 {paymentHistory.history.length === 0 ? (
-                  <p className="muted" style={{ textAlign: 'center' }}>No transactions yet. Submit your first pick sheet to get started.</p>
+                  <p className="muted" style={{ textAlign: 'center' }}>No transactions yet. Get your first picks in to get started.</p>
                 ) : (
                   <div className="payment-history-list">
                     {paymentHistory.history.map((item) => (
@@ -2417,15 +2516,15 @@ function App() {
                         </span>
                         <div className="payment-history-detail">
                           <strong>
-                            {item.type === 'entry_fee' ? `Week ${item.week} Entry Fee` : item.type === 'payout' ? `Week ${item.week} Payout (${item.pool})` : item.reason}
+                            {item.type === 'entry_fee' ? `Week ${item.week} entry` : item.type === 'payout' ? `Week ${item.week} winnings${item.pool && item.pool !== 'weekly' ? ` (${item.pool})` : ''}` : item.reason}
                           </strong>
                           <small>
-                            {item.status === 'confirmed' ? '✅ Confirmed' : item.status === 'claimed' ? '⏳ Claimed — awaiting confirmation' : item.status === 'unpaid' ? '⚠️ Unpaid' : item.status === 'paid' ? '✅ Paid' : '✅ Completed'}
+                            {item.status === 'confirmed' ? (item.method === 'credit' ? '✅ Paid from credit' : '✅ Paid') : item.status === 'claimed' ? '⏳ You said you sent it — waiting on commissioner' : item.status === 'unpaid' ? 'Due — not paid yet' : item.status === 'paid' ? '✅ Paid to you' : '✅ Done'}
                             {item.at ? ` · ${new Date(item.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
                           </small>
                         </div>
-                        <span className={`payment-history-amount ${item.amount >= 0 ? 'positive' : 'negative'}`}>
-                          {item.amount >= 0 ? '+' : ''}${Math.abs(item.amount)}
+                        <span className={`payment-history-amount ${item.status === 'unpaid' ? 'due' : item.amount >= 0 ? 'positive' : 'negative'}`}>
+                          {item.status === 'unpaid' ? `$${Math.abs(item.amount)} due` : `${item.amount >= 0 ? '+' : '−'}$${Math.abs(item.amount)}`}
                         </span>
                       </div>
                     ))}
@@ -2440,11 +2539,11 @@ function App() {
           <StandardPage eyebrow="ACTIVITY" title="Notifications" subtitle="Deadline reminders, payouts, Jack messages, and other league events.">
             {!playerSession.authenticated ? (
               <EmptyState icon="🔐" title="Sign in to view" text="Your notification history is available after signing in." action="Sign in" onAction={() => setShowWelcome(true)} />
-            ) : notifications.length === 0 ? (
+            ) : notifications.filter((n) => n.kind !== 'payment_claimed').length === 0 ? (
               <EmptyState icon="🔔" title="All quiet" text="No notifications yet. As the season gets going, you'll see reminders, payouts, and messages from Jack here." />
             ) : (
               <div className="notification-history-list">
-                {notifications.map((n) => (
+                {notifications.filter((n) => n.kind !== 'payment_claimed').map((n) => (
                   <div className={`notification-history-row kind-${n.kind}`} key={n.id}>
                     <span className="notification-icon">
                       {n.kind === 'pick_reminder' ? '⏰' : n.kind === 'payout' ? '🏆' : n.kind === 'payment_claimed' ? '💸' : n.kind === 'payment_confirmed' ? '✅' : n.kind === 'jack_sms' ? '🎙️' : '🔔'}
@@ -2462,9 +2561,9 @@ function App() {
         )}
 
         {view === 'entries' && (
-          <StandardPage eyebrow={weekLabel.toUpperCase()} title="Locked entries" subtitle="Picks remain hidden here; the commissioner can score them after results arrive.">
+          <StandardPage eyebrow={weekLabel.toUpperCase()} title="Who's in" subtitle="Everyone with picks in for this week. Picks stay hidden until the week locks — then you can see them on the Board.">
             {weekSheets.length ? <div className="entry-list">{weekSheets.map((sheet, index) => (
-              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{Object.keys(sheet.picks).length} picks · TB {sheet.tiebreaker}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time>{sheet.paid && <b className="paid-pill">PAID</b>}{isComm && (
+              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{Object.keys(sheet.picks).length} picks · TB {sheet.tiebreaker}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b>{isComm && (
                 <button className="entry-remove" type="button" title="Remove sheet" disabled={serverBusy === `del-${sheet.id}`} onClick={async () => {
                   if (!window.confirm(`Remove ${sheet.name}'s ${weekLabel} sheet? This can't be undone.`)) return;
                   setServerBusy(`del-${sheet.id}`);
@@ -2476,7 +2575,7 @@ function App() {
                   finally { setServerBusy(''); }
                 }}>{serverBusy === `del-${sheet.id}` ? '…' : '✕'}</button>
               )}</article>
-            ))}</div> : <EmptyState icon="◎" title="The board is quiet" text="Be the first entry on the sheet this week." action="Make picks" onAction={() => setView('picks')} />}
+            ))}</div> : <EmptyState icon="◎" title="Nobody's in yet" text="Be the first to get your picks in this week." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}
 
@@ -2537,7 +2636,7 @@ function App() {
                 <div className="my-profile-stats">
                   <div><span>Credit balance</span><strong>${myCredit}</strong></div>
                   <div><span>Roast setting</span><strong>{({ none: 'Opted out', light: 'Light / PG-13', competitive: 'Maximum', maximum: 'Maximum' })[currentPlayer.trashTalk?.level] || 'Maximum'}</strong></div>
-                  <div><span>Results</span><strong>{(currentPlayer.messaging?.resultsChannel || 'sms_and_in_app').replaceAll('_', ' ')}</strong></div>
+                  <div><span>Results</span><strong>{({ sms_and_in_app: 'Text + app', sms: 'Text', in_app: 'In app' })[currentPlayer.messaging?.resultsChannel] || 'Text + app'}</strong></div>
                 </div>
                 <p className="my-profile-hint">Change your photo, team, or roast level below. Everything saves instantly and only you can edit your own settings.</p>
               </section>
@@ -2631,7 +2730,7 @@ function App() {
 
         {view === 'bets' && (
           <StandardPage eyebrow="SOCIAL STAKES · NO CASH" title="Side bets" subtitle="Private, mutually agreed challenges using virtual tokens, points, or bragging rights. The app never collects or enforces money.">
-            <PlayerSessionPanel players={proofLeague.players} session={playerSession} login={playerLogin} setLogin={setPlayerLogin} onLogin={loginPlayer} onLogout={logoutPlayer} busy={serverBusy === 'player-login'} />
+            {!playerSession.authenticated && <div className="signin-nudge"><span>Sign in to play this one.</span><button type="button" className="button button-primary" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button></div>}
             <div className="side-bet-layout">
               <form className="bet-composer" onSubmit={createBet}>
                 <span className="eyebrow dark">NEW PROPOSAL</span><h2>Challenge a player</h2>
@@ -2649,7 +2748,7 @@ function App() {
                   <h3>{demoPlayerName(bet.creatorId)} <i>vs</i> {demoPlayerName(bet.opponentId)}</h3><p>{bet.event}</p><strong>{bet.stake.label}</strong><small>{bet.terms}</small>
                   {bet.proposalStatus === 'pending' && playerSession.playerId === bet.opponentId && <div className="bet-actions"><button type="button" onClick={() => respondBet(bet, 'accept')}>Accept & lock</button><button type="button" onClick={() => respondBet(bet, 'decline')}>Decline</button></div>}
                   {bet.proposalStatus === 'pending' && playerSession.playerId !== bet.opponentId && <small className="awaiting-player">Awaiting {demoPlayerName(bet.opponentId)}</small>}
-                  {bet.proposalStatus === 'accepted' && bet.settlementStatus !== 'settled' && <button className="text-button" type="button" onClick={() => settleBet(bet.id)}>Settle from results ↗</button>}
+                  {isComm && bet.proposalStatus === 'accepted' && bet.settlementStatus !== 'settled' && <button className="text-button" type="button" onClick={() => settleBet(bet.id)}>Settle from results ↗</button>}
                   {bet.settlementStatus === 'settled' && <div className="settlement-box"><span>Verified settlement</span><b>{demoPlayerName(bet.winnerId)} wins · {bet.creatorScore}–{bet.opponentScore}</b></div>}
                   {bet.proposalStatus === 'declined' && <div className="settlement-box neutral"><span>No locked terms</span><b>Declined · no settlement</b></div>}
                 </article>)}</div>
@@ -2745,11 +2844,11 @@ function App() {
           <StandardPage eyebrow="POWERED BY GEMINI" title="Commissioner's room" subtitle="AI tools grounded in the league data already on this page. Nothing here fetches live sports news or odds.">
             <div className="ai-grid">
               <AiCard number="01" title="League recap" description="Summarize the current pot, entries, standings, and completed games into a shareable update." button={aiResult.recap ? 'Rewrite recap' : 'Write recap'} loading={aiLoading === 'recap'} disabled={!weekSheets.length} onClick={getRecap} result={aiResult.recap} />
-              <AiCard number="02" title="Sheet review" description="Check your current pick sheet for blanks, patterns, and tiebreaker readiness—without pretending to know the future." button={aiResult.picks ? 'Review again' : 'Review my sheet'} loading={aiLoading === 'picks'} onClick={analyzePicks} result={aiResult.picks} />
+              <AiCard number="02" title="Picks review" description="Jack checks your current picks for blanks, patterns, and tiebreaker readiness—without pretending to know the future." button={aiResult.picks ? 'Review again' : 'Review my picks'} loading={aiLoading === 'picks'} onClick={analyzePicks} result={aiResult.picks} />
               <AiCard number="03" title="Trash-talk assist" description="Draft friendly banter from the actual standings, then edit it before anything is posted." button="Open chat" onClick={() => setView('chat')} />
               <AiCard number="04" title="League assistant" description="Ask Jack about standings, rules, schedules, your entry credits, or where to find something in the app." button="Ask Jack" onClick={() => setAssistantOpen(true)} />
             </div>
-            <div className="ai-privacy"><span>✦</span><div><strong>{aiStatus.configured ? `Connected to ${aiStatus.model}` : 'Gemini API key required'}</strong><p>{aiStatus.configured ? 'Prompts are assembled on the server from league context. The API key never ships to the browser.' : 'Jack is running in fallback mode. Add a Gemini API key in the server settings to unlock his full commentary.'}</p></div></div>
+            <div className="ai-privacy"><span>✦</span><div><strong>{aiStatus.configured ? `Connected to ${aiStatus.model}` : 'Jack is in fallback mode'}</strong><p>{aiStatus.configured ? 'Prompts are assembled on the server from league context. The API key never ships to the browser.' : 'Jack is running in fallback mode. Add a Gemini API key in the server settings to unlock his full commentary.'}</p></div></div>
             {aiError && <p className="error-text standalone">{aiError}</p>}
           </StandardPage>
         )}
@@ -2759,19 +2858,28 @@ function App() {
             <div className="chat-layout">
               <section className="chat-panel">
                 <div className="messages">
-                  {chatMsgs.length ? chatMsgs.map((message) => <article className={message.name === chatName ? 'mine' : ''} key={message.id}><div><strong>{message.name}</strong><time>{new Date(message.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></div><p>{message.msg}</p></article>) : <div className="empty-chat"><span>"</span><p>No messages yet. The group chat is showing remarkable restraint.</p></div>}
+                  {chatMsgs.length ? chatMsgs.map((message) => {
+                    const isJack = message.playerId == null;
+                    const isMine = Boolean(playerSession.playerId) && message.playerId === playerSession.playerId;
+                    return <article className={`${isMine ? 'mine' : ''} ${isJack ? 'jack' : ''}`} key={message.id}><div><strong>{isJack ? 'Jack' : message.name}</strong>{isJack && <em className="jack-tag">AI commish</em>}<time>{new Date(message.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></div><p>{message.msg}</p></article>;
+                  }) : <div className="empty-chat"><span>💬</span><p>No messages yet. Be the first to talk some trash.</p></div>}
                   <div ref={chatEndRef} />
                 </div>
-                <div className="composer">
-                  <input className="name-input" value={chatName} onChange={(event) => setChatName(event.target.value)} placeholder="Your name" maxLength="40" readOnly={playerSession.authenticated && Boolean(playerSession.name)} style={playerSession.authenticated ? { opacity: 0.6, cursor: 'default' } : {}} />
-                  {showEmoji && <div className="emoji-row">{EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => setChatInput((current) => current + emoji)}>{emoji}</button>)}</div>}
-                  <div className="message-input"><button type="button" onClick={() => setShowEmoji((current) => !current)}>☺</button><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && sendChat()} placeholder="Write something you can defend later…" maxLength="400" /><button className="send" type="button" onClick={sendChat}>Send ↑</button></div>
-                </div>
+                {playerSession.authenticated ? (
+                  <div className="composer">
+                    {showEmoji && <div className="emoji-row">{EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => setChatInput((current) => current + emoji)}>{emoji}</button>)}</div>}
+                    <div className="message-input"><button type="button" onClick={() => setShowEmoji((current) => !current)} aria-label="Emoji">☺</button><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && sendChat()} placeholder="Write something you can defend later…" maxLength="400" /><button className="send" type="button" onClick={sendChat}>Send ↑</button></div>
+                  </div>
+                ) : (
+                  <div className="composer composer-signed-out">
+                    <button className="button button-primary full" type="button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in to chat</button>
+                  </div>
+                )}
               </section>
-              <aside className="trash-assist"><span className="eyebrow dark">GEMINI ASSIST</span><h2>Need a line?</h2><p>Choose a tone. Gemini uses only the standings above and any idea already in your draft.</p>
+              <aside className="trash-assist"><span className="eyebrow dark">JACK'S ASSIST</span><h2>Need a line?</h2><p>Pick a tone and Jack drafts a jab from the real standings. You decide what gets posted.</p>
                 <div className="tone-picker">{['playful', 'bold', 'deadpan'].map((tone) => <button className={trashTone === tone ? 'active' : ''} type="button" key={tone} onClick={() => setTrashTone(tone)}>{tone}</button>)}</div>
                 <button className="button button-primary full" type="button" onClick={draftTrashTalk} disabled={aiLoading === 'trashTalk'}>{aiLoading === 'trashTalk' ? 'Drafting…' : '✦ Draft trash talk'}</button>
-                <small>Gemini drafts; you decide what gets posted.</small>{aiError && <p className="error-text">{aiError}</p>}
+                {aiError && <p className="error-text">{aiError}</p>}
               </aside>
             </div>
           </StandardPage>
@@ -2932,8 +3040,7 @@ function App() {
                     </div>
                   ) : (
                     <div className="cfb-signin-nudge">
-                      <p className="muted">Sign in as a player to make your picks — it takes ten seconds.</p>
-                      <PlayerSessionPanel players={proofLeague.players} session={playerSession} login={playerLogin} setLogin={setPlayerLogin} onLogin={loginPlayer} onLogout={logoutPlayer} busy={serverBusy === 'player-login'} />
+                      {!playerSession.authenticated && <div className="signin-nudge"><span>Sign in to make your college picks.</span><button type="button" className="button button-primary" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button></div>}
                     </div>
                   )
                 )}
@@ -3080,11 +3187,11 @@ function App() {
         {view === 'rules' && (
           <StandardPage eyebrow="THE FINE PRINT" title="House rules" subtitle="Simple enough to explain before kickoff. Firm enough to settle Monday-night arguments.">
             <div className="rules-grid">
-              <Rule number="01" title="Entry" text={`Each weekly sheet costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE cash out (60/30/10 unless the commissioner changes the split).`} />
-              <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. A locked sheet cannot be edited in this demo.`} />
+              <Rule number="01" title="Entry" text={`Each weekly entry costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE cash out (60/30/10 unless the commissioner changes the split).`} />
+              <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. You can change your picks anytime until the week locks — after that they're final.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
               <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess takes it. Identical guesses split the pot." />
-              <Rule number="05" title="Deadline" text={`Sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the week's first kickoff. Late sheets are rejected — no exceptions. The countdown is always visible on the Picks page.`} />
+              <Rule number="05" title="Deadline" text={`Picks lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the week's first game (not at kickoff). Late picks are rejected — no exceptions. The exact time and a countdown are always on the Picks page.`} />
             </div>
           </StandardPage>
         )}
@@ -3347,11 +3454,14 @@ function App() {
         )}
       </main>
 
-      {/* ── Floating Ask Jack Button ── */}
-      <button className="jack-fab" type="button" onClick={() => setAssistantOpen(true)} aria-label="Ask Jack">
-        <span className="jack-fab-icon">✦</span>
-        <span className="jack-fab-label">Ask Jack</span>
-      </button>
+      {/* ── Floating Ask Jack Button — hidden on Chat (its own surface) and
+           behind overlays so it never covers a control the user is using ── */}
+      {view !== 'chat' && !assistantOpen && !showWelcome && !showMore && !showOnboarding && (
+        <button className={`jack-fab ${view === 'picks' && !weekLocked ? 'above-bar' : ''}`} type="button" onClick={() => setAssistantOpen(true)} aria-label="Ask Jack">
+          <span className="jack-fab-icon">✦</span>
+          <span className="jack-fab-label">Ask Jack</span>
+        </button>
+      )}
 
       {/* ── Jack Assistant Drawer ── */}
       {assistantOpen && (
@@ -3363,21 +3473,22 @@ function App() {
                 <div><strong>Jack</strong><small>League commissioner AI</small></div>
               </div>
               <div className="assistant-header-actions">
-                {assistantMessages.some((m) => m.role === 'assistant' && m.id !== 'assistant-welcome' && m.action !== 'auth') && (
-                  <button
-                    className={`assistant-voice-btn ${assistantSpeaking ? 'on' : ''}`}
-                    type="button"
-                    title={assistantSpeaking ? 'Stop Jack' : 'Hear Jack'}
-                    onClick={() => {
-                      if (assistantSpeaking) { stopSpeaking(); return; }
-                      if (!jackVoiceConsent) setJackVoiceConsent(true);
-                      const last = [...assistantMessages].reverse().find((m) => m.role === 'assistant' && m.id !== 'assistant-welcome' && m.action !== 'auth');
-                      if (last) readAssistantMessage(last.text);
-                    }}
-                  >
-                    {assistantSpeaking ? '■ Stop' : '🔊 Hear Jack'}
-                  </button>
-                )}
+                <button
+                  className={`assistant-voice-btn ${jackVoiceConsent ? 'on' : ''}`}
+                  type="button"
+                  aria-pressed={jackVoiceConsent}
+                  title={jackVoiceConsent ? 'Voice on — tap to mute Jack' : 'Voice off — tap to hear Jack'}
+                  onClick={() => {
+                    if (assistantSpeaking) { stopSpeaking(); return; } // stop this one, keep voice on
+                    if (jackVoiceConsent) { setJackVoiceConsent(false); return; }
+                    unlockAudio();
+                    setJackVoiceConsent(true);
+                    const last = [...assistantMessages].reverse().find((m) => m.role === 'assistant' && m.id !== 'assistant-welcome' && m.action !== 'auth');
+                    if (last) readAssistantMessage(last.text);
+                  }}
+                >
+                  {assistantSpeaking ? '■ Stop' : jackVoiceConsent ? '🔊 Voice on' : '🔇 Voice off'}
+                </button>
                 <button className="assistant-close" type="button" onClick={() => { setAssistantOpen(false); stopSpeaking(); setJackAvatarState('idle'); }}>×</button>
               </div>
             </div>

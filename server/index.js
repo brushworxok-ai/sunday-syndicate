@@ -464,6 +464,11 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   const submittedWeek = Number(input.week) || getCurrentWeek();
   const weekGames = getGames(submittedWeek);
   if (!weekGames.length) return response.status(422).json({ error: `No games found for Week ${submittedWeek}.` });
+  // Picks can only be filed for the CURRENT week — stops a browsed-ahead week
+  // selector from quietly filing a Week 5 sheet while everyone else is on Week 1.
+  if (submittedWeek !== getCurrentWeek()) {
+    return response.status(422).json({ error: `Picks are only open for Week ${getCurrentWeek()} right now. Switch back to the current week to lock in.` });
+  }
   if (isWeekLocked(submittedWeek)) {
     const deadline = getWeekDeadline(submittedWeek);
     return response.status(422).json({ error: `Week ${submittedWeek} is locked. Sheets were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff${deadline ? ` (${deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET)` : ''}. See you next week.` });
@@ -2248,6 +2253,7 @@ app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyn
       type: 'entry_fee',
       week: sheet.week,
       amount: -entryFee,
+      method: sheet.paidVia ?? null,
       status: sheet.paid ? 'confirmed' : sheet.paymentClaim ? 'claimed' : 'unpaid',
       claimedAt: sheet.paymentClaim?.claimedAt ?? null,
       submittedAt: sheet.submittedAt,
@@ -2269,8 +2275,13 @@ app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyn
     });
   }
 
-  // Credit transactions
+  // Credit transactions — but NOT the mirror entries of an entry fee paid from
+  // credit or a pot paid into credit; those are already shown as the entry_fee /
+  // payout rows above, and listing both reads as a double charge / double win.
   for (const credit of myCredits) {
+    const reason = String(credit.reason ?? '');
+    if (credit.amount < 0 && /entry/i.test(reason)) continue;
+    if (credit.amount > 0 && /winnings|pot\b/i.test(reason)) continue;
     history.push({
       id: `credit-${credit.id}`,
       type: 'credit',
