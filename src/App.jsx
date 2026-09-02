@@ -1552,7 +1552,7 @@ function App() {
 
   // SMS is only "live" when a real provider is wired; otherwise codes never
   // actually send, so we must not force a verification step.
-  const smsLive = () => aiStatus.smsProvider === 'twilio' || aiStatus.smsProvider === 'textbelt';
+  const smsLive = () => ['telnyx', 'twilio', 'textbelt'].includes(aiStatus.smsProvider);
 
   // Shared registration: create the account, sign in, greet. otpVerified marks
   // whether the phone was confirmed (drives SMS-consent status server-side).

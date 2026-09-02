@@ -227,10 +227,13 @@ app.post('/api/otp/send', asyncRoute(async (request, response) => {
   const code = String(randomInt(100000, 999999));
   await otpPut(phoneE164, { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0, sentAt: Date.now() });
 
-  // Send via TextBelt (or skip in demo mode)
-  if (process.env.SMS_PROVIDER === 'textbelt' && process.env.TEXTBELT_API_KEY) {
+  // Send through whichever real provider is configured (Telnyx / Twilio /
+  // TextBelt) — the same path Jack's texts use. No provider = demo: log it.
+  const liveSms = ['telnyx', 'twilio', 'textbelt'].includes(process.env.SMS_PROVIDER);
+  if (liveSms) {
     try {
-      await sendTextBeltRaw({ phone: phoneE164, text: `405 BadGuys Parlay: Your verification code is ${code}. Expires in 5 min.`, apiKey: process.env.TEXTBELT_API_KEY });
+      const provider = createSmsProvider(process.env);
+      await provider.send({ player: { id: `otp-${digits}`, phoneE164 }, text: `405 BadGuys Parlay: Your verification code is ${code}. Expires in 5 min.` });
     } catch (error) {
       console.error('OTP send error:', error.message);
       await otpClear(phoneE164);
