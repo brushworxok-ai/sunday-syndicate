@@ -209,6 +209,17 @@ export class PostgresLeagueStore {
     return credential ? clone(credential) : null;
   }
 
+  /* Reset a player's PIN (phone-verified self-reset or commissioner reset). */
+  async setPlayerPin(playerId, pinHash) {
+    const state = await this.findStateContaining('players', playerId);
+    if (!state) return false;
+    await this.mutateLeague(state.id, (draft) => {
+      draft.playerCredentials ??= {};
+      draft.playerCredentials[playerId] = { playerId, pinHash, updatedAt: new Date().toISOString() };
+    });
+    return true;
+  }
+
   async findPlayerByPhoneE164(phoneE164) {
     const states = await this.readAllStates();
     for (const state of states) {

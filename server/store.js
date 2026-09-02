@@ -287,6 +287,15 @@ export class LeagueStore {
     return row ? { playerId: row.player_id, pinHash: row.pin_hash } : null;
   }
 
+  /* Reset a player's PIN (used by the phone-verified self-reset and the
+     commissioner reset). */
+  setPlayerPin(playerId, pinHash) {
+    this.db.prepare(`INSERT INTO player_credentials (player_id, pin_hash, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(player_id) DO UPDATE SET pin_hash = excluded.pin_hash, updated_at = excluded.updated_at`)
+      .run(playerId, pinHash, new Date().toISOString());
+    return true;
+  }
+
   findPlayerByPhoneE164(phoneE164) {
     const row = this.db.prepare('SELECT id FROM players WHERE phone_e164 = ?').get(phoneE164);
     return row ? this.getPlayer(row.id) : null;

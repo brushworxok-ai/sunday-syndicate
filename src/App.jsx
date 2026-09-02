@@ -95,6 +95,10 @@ function App() {
   const [signupOtp, setSignupOtp] = useState('');
   const [otpSending, setOtpSending] = useState(false);
   const [otpVerified, setOtpVerified] = useState(false);
+  const [resetPhone, setResetPhone] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [resetPin, setResetPin] = useState('');
+  const [resetSent, setResetSent] = useState(false);
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [picks, setPicks] = useState({});
@@ -1497,40 +1501,18 @@ function App() {
     return false;
   };
 
-  const handleSignup = async (event) => {
-    event.preventDefault();
-    // Step 1 validation
-    if (signupStep === 1) {
-      if (!signupName.trim()) return notify('Enter your name.');
-      if (signupPhone.replace(/\D/g, '').length < 10) return notify('Enter your 10-digit phone number.');
-      if (signupPin.length < 4) return notify('Create a 4-digit PIN.');
-      return setSignupStep(2);
-    }
-    // Step 2 validation → advance to OTP step
-    if (signupStep === 2) {
-      if (!signupTeam) return notify('Pick your favorite team — Jack needs to know who to roast.');
-      if (!signupAvatar && !signupAvatarFile) return notify('Choose an avatar or upload a pic.');
-      setSignupStep(3);
-      // Auto-send OTP when entering step 3
-      setOtpSending(true);
-      try {
-        await apiRequest('/api/otp/send', { method: 'POST', body: JSON.stringify({ phone: signupPhone }) });
-        notify('Verification code sent! Check your texts.');
-      } catch (error) { notify(error.message); }
-      setOtpSending(false);
-      return;
-    }
-    // Step 3: verify OTP then register
-    if (!signupOtp || signupOtp.length < 6) return notify('Enter the 6-digit code from your text.');
+  // SMS is only "live" when a real provider is wired; otherwise codes never
+  // actually send, so we must not force a verification step.
+  const smsLive = () => aiStatus.smsProvider === 'twilio' || aiStatus.smsProvider === 'textbelt';
+
+  // Shared registration: create the account, sign in, greet. otpVerified marks
+  // whether the phone was confirmed (drives SMS-consent status server-side).
+  const finishRegistration = async (otpVerified) => {
     setServerBusy('register');
     try {
-      // Verify OTP first
-      const otpResult = await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: signupPhone, code: signupOtp }) });
-      if (!otpResult.verified) { setServerBusy(null); return notify('Verification failed. Try again.'); }
-      // Now register with verified phone
       const registered = await apiRequest(`/api/leagues/${LEAGUE_ID}/players/register`, {
         method: 'POST',
-        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified: true }),
+        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified }),
       });
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify({ playerId: registered.playerId, pin: signupPin }) });
       setPlayerSession(session);
@@ -1539,7 +1521,7 @@ function App() {
       setChatName(registered.name);
       setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam(''); setSignupAvatar(''); setSignupAvatarFile(null); setSignupStep(1); setSignupOtp(''); setOtpVerified(false);
       setShowWelcome(false);
-      notify(`Welcome to the 405 BadGuys Parlay, ${registered.name}! You're signed in and opted in to Jack's texts (reply STOP anytime).`);
+      notify(`Welcome to the 405 BadGuys Parlay, ${registered.name}! You're in.`);
       // Jack greets the new player with the house rules
       setAssistantMessages((prev) => [...prev, {
         id: `jack-onboard-${Date.now()}`,
@@ -1550,6 +1532,84 @@ function App() {
       // Auto-speak the welcome message
       const welcomeText = `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses.`;
       setTimeout(() => readAssistantMessage(welcomeText), 500);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const handleSignup = async (event) => {
+    event.preventDefault();
+    if (signupStep === 1) {
+      if (!signupName.trim()) return notify('Enter your name.');
+      if (signupPhone.replace(/\D/g, '').length < 10) return notify('Enter your 10-digit phone number.');
+      if (signupPin.length < 4) return notify('Create a 4-digit PIN.');
+      return setSignupStep(2);
+    }
+    if (signupStep === 2) {
+      if (!signupTeam) return notify('Pick your favorite team — Jack needs to know who to roast.');
+      if (!signupAvatar && !signupAvatarFile) return notify('Choose an avatar or upload a pic.');
+      // No SMS provider wired → skip the code step entirely and just register.
+      if (!smsLive()) return finishRegistration(false);
+      setSignupStep(3);
+      setOtpSending(true);
+      try {
+        await apiRequest('/api/otp/send', { method: 'POST', body: JSON.stringify({ phone: signupPhone }) });
+        notify('Verification code sent! Check your texts.');
+      } catch (error) { notify(error.message); }
+      setOtpSending(false);
+      return;
+    }
+    // Step 3: if they entered a code, verify it and register; a wrong code just
+    // lets them retry or use "Join without a code" — nobody gets walled here.
+    if (signupOtp && signupOtp.length === 6) {
+      try {
+        const otpResult = await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: signupPhone, code: signupOtp }) });
+        return finishRegistration(Boolean(otpResult.verified));
+      } catch (error) { return notify(error.message); }
+    }
+    return notify('Enter the 6-digit code, or tap “Join without a code”.');
+  };
+
+  // Escape hatch so a missing/late text never blocks joining.
+  const joinWithoutCode = () => finishRegistration(false);
+
+  // Commissioner sets a new PIN for a player who's locked out.
+  const commissionerResetPin = async (player) => {
+    if (!(await ensureAdmin())) return;
+    const pin = window.prompt(`Set a new 4-digit PIN for ${player.name} (tell them what it is):`);
+    if (pin == null) return;
+    if (!/^\d{4}$/.test(pin.trim())) return notify('PIN must be exactly 4 digits.');
+    setServerBusy(`reset-${player.id}`);
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/players/${player.id}/reset-pin`, { method: 'POST', body: JSON.stringify({ pin: pin.trim() }) });
+      notify(`${player.name}'s PIN was reset — share the new one with them.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  // Forgot PIN: text a code to the number on file, then set a new PIN.
+  const sendResetCode = async () => {
+    if (resetPhone.replace(/\D/g, '').length < 10) return notify('Enter your 10-digit phone number.');
+    setServerBusy('reset-send');
+    try {
+      await apiRequest('/api/otp/send', { method: 'POST', body: JSON.stringify({ phone: resetPhone }) });
+      setResetSent(true);
+      notify('Code sent — enter it below with your new PIN.');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+  const submitPinReset = async (event) => {
+    event.preventDefault();
+    if (resetCode.length !== 6) return notify('Enter the 6-digit code from your text.');
+    if (resetPin.length !== 4) return notify('Choose a new 4-digit PIN.');
+    setServerBusy('reset-pin');
+    try {
+      const v = await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: resetPhone, code: resetCode }) });
+      if (!v.verified) { return notify('That code didn’t match. Try again or resend.'); }
+      const r = await apiRequest('/api/players/reset-pin', { method: 'POST', body: JSON.stringify({ phone: resetPhone, pin: resetPin }) });
+      setPlayerLogin({ playerId: r.playerId, pin: resetPin });
+      setResetPhone(''); setResetCode(''); setResetPin(''); setResetSent(false);
+      setWelcomeMode('signin');
+      notify(`PIN reset for ${r.name}. Sign in with your new PIN.`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -1565,7 +1625,7 @@ function App() {
           <span><strong>405 BADGUYS</strong><small>PARLAY</small></span>
         </button>
         <div className="header-week">
-          <select value={selectedWeek} onChange={(e) => { setSelectedWeek(Number(e.target.value)); setPicks({}); }} aria-label="Select week">
+          <select value={selectedWeek} onChange={(e) => { const w = Number(e.target.value); if (Object.keys(picks).length > 0 && !window.confirm('Switch weeks? Your in-progress picks for this week will clear.')) { e.target.value = String(selectedWeek); return; } setSelectedWeek(w); setPicks({}); }} aria-label="Select week">
             {SCHEDULE.map((w) => <option key={w.week} value={w.week}>{w.label}</option>)}
           </select>
           <strong>{SEASON}</strong>
@@ -1601,7 +1661,7 @@ function App() {
               <button className="more-menu-close" type="button" onClick={() => setShowMore(false)}>×</button>
             </div>
             <div className="more-menu-items">
-              {MORE_ITEMS.map(([id, label, icon, desc]) => (
+              {MORE_ITEMS.filter(([id]) => isComm || !['demo', 'ai'].includes(id)).map(([id, label, icon, desc]) => (
                 <button className="more-menu-item" type="button" key={id} onClick={() => { setView(id); setShowMore(false); }}>
                   <span className="menu-icon">{icon}</span>
                   {label}
@@ -1646,7 +1706,7 @@ function App() {
         <div className="more-menu-overlay" onClick={(e) => e.target === e.currentTarget && setShowWelcome(false)}>
           <div className="more-menu" style={{ maxHeight: '85vh' }}>
             <div className="more-menu-header">
-              <h3>{welcomeMode === 'join' ? 'Join the League' : 'Sign In'}</h3>
+              <h3>{welcomeMode === 'join' ? 'Join the League' : welcomeMode === 'reset' ? 'Reset your PIN' : 'Sign In'}</h3>
               <button className="more-menu-close" type="button" onClick={() => setShowWelcome(false)}>×</button>
             </div>
             <div className="welcome-form" style={{ border: 0, background: 'transparent', padding: '0 4px' }}>
@@ -1661,8 +1721,7 @@ function App() {
                     <span className={`signup-step ${signupStep >= 1 ? 'active' : ''}`}>1 · Info</span>
                     <span className="signup-step-line" />
                     <span className={`signup-step ${signupStep >= 2 ? 'active' : ''}`}>2 · Identity</span>
-                    <span className="signup-step-line" />
-                    <span className={`signup-step ${signupStep >= 3 ? 'active' : ''}`}>3 · Verify</span>
+                    {smsLive() && (<><span className="signup-step-line" /><span className={`signup-step ${signupStep >= 3 ? 'active' : ''}`}>3 · Verify</span></>)}
                   </div>
 
                   {signupStep === 1 && (<>
@@ -1728,15 +1787,33 @@ function App() {
                     </div>
                     <div className="signup-btn-row">
                       <button type="button" className="button button-ghost" onClick={() => { setSignupStep(2); setSignupOtp(''); }}>← Back</button>
-                      <button className="button button-primary" disabled={serverBusy === 'register' || signupOtp.length < 6}>{serverBusy === 'register' ? 'Verifying…' : 'Join the league →'}</button>
+                      <button className="button button-primary" disabled={serverBusy === 'register' || signupOtp.length !== 6}>{serverBusy === 'register' ? 'Joining…' : 'Join the league →'}</button>
                     </div>
+                    <button type="button" className="link-button otp-skip" onClick={joinWithoutCode} disabled={serverBusy === 'register'}>Didn’t get a text? Join without a code →</button>
                   </>)}
+                </form>
+              ) : welcomeMode === 'reset' ? (
+                <form onSubmit={submitPinReset}>
+                  {smsLive() ? (<>
+                    <p className="reset-intro">Enter the phone number on your account and we’ll text a code to reset your PIN.</p>
+                    <label>Phone<input value={resetPhone} onChange={(e) => setResetPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
+                    <button type="button" className="button button-ghost-dark full" onClick={sendResetCode} disabled={serverBusy === 'reset-send'} style={{ marginTop: 8 }}>{serverBusy === 'reset-send' ? 'Sending…' : resetSent ? 'Resend code' : 'Send code'}</button>
+                    {resetSent && (<>
+                      <label style={{ marginTop: 12 }}>Code<input value={resetCode} onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ''))} placeholder="6-digit code" maxLength="6" inputMode="numeric" autoComplete="one-time-code" /></label>
+                      <label>New PIN<input type="password" inputMode="numeric" maxLength="4" value={resetPin} onChange={(e) => setResetPin(e.target.value.replace(/\D/g, ''))} placeholder="New 4-digit PIN" /></label>
+                      <button className="button button-primary full" disabled={serverBusy === 'reset-pin'} style={{ marginTop: 14 }}>{serverBusy === 'reset-pin' ? 'Resetting…' : 'Reset PIN'}</button>
+                    </>)}
+                  </>) : (
+                    <p className="reset-intro">Text verification is off for this league, so ask the commissioner to reset your PIN for you (they can do it in seconds from the Commissioner tab).</p>
+                  )}
+                  <button type="button" className="link-button" onClick={() => setWelcomeMode('signin')} style={{ marginTop: 14 }}>← Back to sign in</button>
                 </form>
               ) : (
                 <form onSubmit={loginPlayer}>
                   <label>Player<select aria-label="Player identity" value={playerLogin.playerId} onChange={(event) => setPlayerLogin((current) => ({ ...current, playerId: event.target.value }))}>{proofLeague.players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label>
                   <label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="4" value={playerLogin.pin} onChange={(event) => setPlayerLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} placeholder="4-digit PIN" /></label>
                   <button className="button button-primary full" disabled={serverBusy === 'player-login' || playerLogin.pin.length !== 4} style={{ marginTop: 16 }}>{serverBusy === 'player-login' ? 'Signing in…' : 'Sign In'}</button>
+                  <button type="button" className="link-button" onClick={() => setWelcomeMode('reset')} style={{ marginTop: 12, display: 'block' }}>Forgot your PIN?</button>
                 </form>
               )}
             </div>
@@ -2500,6 +2577,7 @@ function App() {
                         <small>{player.trashTalk?.jackPolicy?.favoriteTeam ? TEAMS[player.trashTalk.jackPolicy.favoriteTeam] : 'No team set'}</small>
                       </div>
                       {player.trashTalk?.jackPolicy?.favoriteTeam && <img className="crew-card-team" src={getTeamLogoUrl(player.trashTalk.jackPolicy.favoriteTeam)} alt="" />}
+                      {isComm && <button type="button" className="crew-reset-pin" disabled={serverBusy === `reset-${player.id}`} onClick={() => commissionerResetPin(player)} title={`Reset ${player.name}'s PIN`}>🔑</button>}
                     </article>
                   ))}
                 </div>
@@ -2507,34 +2585,37 @@ function App() {
             </section>
 
             <h3 className="section-divider-label">Your settings</h3>
-            <PlayerSessionPanel players={proofLeague.players} session={playerSession} login={playerLogin} setLogin={setPlayerLogin} onLogin={loginPlayer} onLogout={logoutPlayer} busy={serverBusy === 'player-login'} />
-            <div className="player-settings-grid">
-              {proofLeague.players.map((player) => <article className={`player-settings-card ${playerSession.playerId === player.id ? 'current' : ''}`} key={player.id}>
-                <div className="player-card-head"><span>{player.name.split(' ').map((word) => word[0]).join('')}</span><div><h2>{player.name}</h2><p>{player.phone} · {player.phoneVerifiedAt ? 'verified' : 'unverified'}</p></div><StatusPill state={player.messaging.smsConsent === 'opted_in' ? 'pass' : 'neutral'}>{player.messaging.smsConsent.replace('_', ' ')}</StatusPill></div>
-                <label>Weekly results
-                  <select value={player.messaging.resultsChannel} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { resultsChannel: event.target.value })}>
-                    <option value="sms_and_in_app">SMS + in-app</option><option value="sms">SMS only</option><option value="in_app">In-app only</option>
-                  </select>
-                </label>
-                <label>SMS consent
-                  <select value={player.messaging.smsConsent} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { smsConsent: event.target.value })}>
-                    <option value="opted_in">Opted in</option><option value="opted_out">STOP / opted out</option>
-                  </select>
-                </label>
-                <label>Trash-talk level <small>Maximum / unfiltered is ON by default — switch to "No trash talk" anytime to opt out</small>
-                  <select value={player.trashTalk?.level === 'maximum' ? 'competitive' : (player.trashTalk?.level || 'competitive')} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { trashTalkLevel: event.target.value })}>
-                    <option value="none">No trash talk (opted out)</option><option value="light">Light / PG-13</option><option value="competitive">Maximum / unfiltered (default)</option>
-                  </select>
-                </label>
-                <label>Favorite team <small>Jack tracks rivalry bragging rights</small>
-                  <select value={player.trashTalk?.jackPolicy?.favoriteTeam ?? ''} disabled={serverBusy === `player-${player.id}` || playerSession.playerId !== player.id} onChange={(event) => updatePreferences(player.id, { favoriteTeam: event.target.value })}>
-                    <option value="">No favorite team</option>
-                    {Object.entries(TEAMS).map(([abbr, full]) => <option key={abbr} value={abbr}>{full}</option>)}
-                  </select>
-                </label>
-                <small>{serverBusy === `player-${player.id}` ? 'Saving…' : `Last tone update ${new Date(player.trashTalk.updatedAt).toLocaleString()}`}</small>
-              </article>)}
-            </div>
+            {currentPlayer ? (
+              <div className="player-settings-grid">
+                <article className="player-settings-card current">
+                  <div className="player-card-head"><span>{currentPlayer.name.split(' ').map((word) => word[0]).join('')}</span><div><h2>{currentPlayer.name}</h2><p>{currentPlayer.phone} · {currentPlayer.phoneVerifiedAt ? 'verified' : 'unverified'}</p></div><StatusPill state={currentPlayer.messaging?.smsConsent === 'opted_in' ? 'pass' : 'neutral'}>{(currentPlayer.messaging?.smsConsent || 'pending').replace('_', ' ')}</StatusPill></div>
+                  <label>Weekly results
+                    <select value={currentPlayer.messaging?.resultsChannel || 'sms_and_in_app'} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { resultsChannel: event.target.value })}>
+                      <option value="sms_and_in_app">SMS + in-app</option><option value="sms">SMS only</option><option value="in_app">In-app only</option>
+                    </select>
+                  </label>
+                  <label>SMS consent
+                    <select value={currentPlayer.messaging?.smsConsent || 'pending'} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { smsConsent: event.target.value })}>
+                      <option value="opted_in">Opted in</option><option value="opted_out">STOP / opted out</option>
+                    </select>
+                  </label>
+                  <label>Trash-talk level <small>Maximum / unfiltered is ON by default — switch to "No trash talk" anytime to opt out</small>
+                    <select value={currentPlayer.trashTalk?.level === 'maximum' ? 'competitive' : (currentPlayer.trashTalk?.level || 'competitive')} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { trashTalkLevel: event.target.value })}>
+                      <option value="none">No trash talk (opted out)</option><option value="light">Light / PG-13</option><option value="competitive">Maximum / unfiltered (default)</option>
+                    </select>
+                  </label>
+                  <label>Favorite team <small>Jack tracks rivalry bragging rights</small>
+                    <select value={currentPlayer.trashTalk?.jackPolicy?.favoriteTeam ?? ''} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { favoriteTeam: event.target.value })}>
+                      <option value="">No favorite team</option>
+                      {Object.entries(TEAMS).map(([abbr, full]) => <option key={abbr} value={abbr}>{full}</option>)}
+                    </select>
+                  </label>
+                  <small>{serverBusy === `player-${currentPlayer.id}` ? 'Saving…' : currentPlayer.trashTalk?.updatedAt ? `Last update ${new Date(currentPlayer.trashTalk.updatedAt).toLocaleString()}` : ''}</small>
+                </article>
+              </div>
+            ) : (
+              <p className="muted" style={{ textAlign: 'center', padding: '8px 0 4px' }}>Sign in above to manage your results, roast level, and team.</p>
+            )}
             {pushSupported && playerSession.authenticated && (
               <section className="push-toggle-section">
                 <div className="panel">
@@ -2545,10 +2626,6 @@ function App() {
                 </div>
               </section>
             )}
-            <section className="consent-history">
-              <div className="proof-heading"><div><span className="proof-step">LOG</span><h2>Immutable consent history</h2></div><StatusPill state="pass">{proofLeague.consentRecords?.length ?? 0} records</StatusPill></div>
-              <div>{(proofLeague.consentRecords ?? []).slice(0, 12).map((record) => <article key={record.id}><time>{new Date(record.recordedAt).toLocaleString()}</time><strong>{demoPlayerName(record.playerId)}</strong><span>{record.channel.replaceAll('_', ' ')}</span><StatusPill state={record.status === 'opted_out' || record.status === 'none' ? 'neutral' : 'pass'}>{record.status.replaceAll('_', ' ')}</StatusPill><small>{record.source.replaceAll('_', ' ')}</small></article>)}</div>
-            </section>
           </StandardPage>
         )}
 
@@ -2672,7 +2749,7 @@ function App() {
               <AiCard number="03" title="Trash-talk assist" description="Draft friendly banter from the actual standings, then edit it before anything is posted." button="Open chat" onClick={() => setView('chat')} />
               <AiCard number="04" title="League assistant" description="Ask Jack about standings, rules, schedules, your entry credits, or where to find something in the app." button="Ask Jack" onClick={() => setAssistantOpen(true)} />
             </div>
-            <div className="ai-privacy"><span>✦</span><div><strong>{aiStatus.configured ? `Connected to ${aiStatus.model}` : 'Gemini API key required'}</strong><p>{aiStatus.configured ? 'Prompts are assembled on the server from league context. The API key never ships to the browser.' : 'Copy .env.example to .env, add GEMINI_API_KEY, and restart the development server.'}</p></div></div>
+            <div className="ai-privacy"><span>✦</span><div><strong>{aiStatus.configured ? `Connected to ${aiStatus.model}` : 'Gemini API key required'}</strong><p>{aiStatus.configured ? 'Prompts are assembled on the server from league context. The API key never ships to the browser.' : 'Jack is running in fallback mode. Add a Gemini API key in the server settings to unlock his full commentary.'}</p></div></div>
             {aiError && <p className="error-text standalone">{aiError}</p>}
           </StandardPage>
         )}
@@ -3015,7 +3092,7 @@ function App() {
         {view === 'admin' && !isComm && (
           <StandardPage eyebrow="RESTRICTED AREA" title="Commissioner sign-in" subtitle="Result verification, recap approval, broadcasts, and settlements require a server-verified admin session.">
             <form className="admin-login-card" onSubmit={loginAdmin}>
-              <span>BT</span><h2>Open league operations</h2><p>The local demo password is documented in the README. Set a unique ADMIN_PASSWORD before deployment.</p>
+              <span>BT</span><h2>Open league operations</h2><p>Enter the commissioner password to manage results, payments, and broadcasts.</p>
               <label>Password<input type="password" autoComplete="current-password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="Commissioner password" /></label>
               <button className="button button-primary full" disabled={!adminPassword || serverBusy === 'admin-login'}>{serverBusy === 'admin-login' ? 'Signing in…' : 'Sign in securely →'}</button>
             </form>
@@ -3414,7 +3491,7 @@ function PlayerAvatar({ player, size = 44 }) {
 
 function PlayerSessionPanel({ players, session, login, setLogin, onLogin, onLogout, busy }) {
   if (session.authenticated) return <div className="player-session active"><div><span>{session.name.split(' ').map((word) => word[0]).join('')}</span><p><strong>Signed in as {session.name}</strong><small>Player-owned controls are unlocked only for this identity.</small></p></div><button type="button" onClick={onLogout}>Switch player</button></div>;
-  return <form className="player-session" onSubmit={onLogin}><div><span>◎</span><p><strong>Player sign-in</strong><small>Demo PIN is the last four visible phone digits. Production should replace this with OTP verification.</small></p></div><label>Player<select aria-label="Player identity" value={login.playerId} onChange={(event) => setLogin((current) => ({ ...current, playerId: event.target.value }))}>{players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label><label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="4" value={login.pin} onChange={(event) => setLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} /></label><button type="submit" disabled={busy || login.pin.length !== 4}>{busy ? 'Signing in…' : 'Sign in'}</button></form>;
+  return <form className="player-session" onSubmit={onLogin}><div><span>◎</span><p><strong>Player sign-in</strong><small>Enter the 4-digit PIN you created when you joined. Forgot it? Reset it from the Sign In screen.</small></p></div><label>Player<select aria-label="Player identity" value={login.playerId} onChange={(event) => setLogin((current) => ({ ...current, playerId: event.target.value }))}>{players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label><label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="4" value={login.pin} onChange={(event) => setLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} /></label><button type="submit" disabled={busy || login.pin.length !== 4}>{busy ? 'Signing in…' : 'Sign in'}</button></form>;
 }
 
 function RecapShow({ data, slideIndex, onSlideChange, onClose }) {

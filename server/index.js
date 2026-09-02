@@ -272,6 +272,35 @@ app.post('/api/otp/verify', asyncRoute(async (request, response) => {
   return response.json({ verified: true, phoneE164 });
 }));
 
+/* Player self-service PIN reset — proves the phone via the same OTP flow used
+   at signup, then sets a new PIN. Consumes the one-time verification record. */
+app.post('/api/players/reset-pin', asyncRoute(async (request, response) => {
+  let digits = String(request.body?.phone ?? '').replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  if (digits.length !== 10) return response.status(422).json({ error: 'Invalid phone number.' });
+  const pin = String(request.body?.pin ?? '').replace(/\D/g, '');
+  if (pin.length !== 4) return response.status(422).json({ error: 'Your new PIN must be 4 digits.' });
+  const phoneE164 = `+1${digits}`;
+  const verified = await consumePhoneVerified(phoneE164);
+  if (!verified) return response.status(401).json({ error: 'Verify your phone with a code first, then set a new PIN.' });
+  const player = await store.findPlayerByPhoneE164(phoneE164);
+  if (!player) return response.status(404).json({ error: 'No player is registered with that number.' });
+  await store.setPlayerPin(player.id, hashPin(pin));
+  return response.json({ ok: true, playerId: player.id, name: player.name });
+}));
+
+/* Commissioner PIN reset — for when a player changes numbers or can't get a code. */
+app.post('/api/leagues/:leagueId/players/:playerId/reset-pin', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const player = (league.players ?? []).find((p) => p.id === request.params.playerId);
+  if (!player) return response.status(404).json({ error: 'Player not found.' });
+  const pin = String(request.body?.pin ?? '').replace(/\D/g, '');
+  if (pin.length !== 4) return response.status(422).json({ error: 'PIN must be 4 digits.' });
+  await store.setPlayerPin(player.id, hashPin(pin));
+  return response.json({ ok: true, playerId: player.id, name: player.name });
+}));
+
 app.post('/api/auth/admin', (request, response) => auth.login(request, response));
 app.delete('/api/auth/admin', (request, response) => auth.logout(request, response));
 app.get('/api/auth/status', (request, response) => auth.status(request, response));
