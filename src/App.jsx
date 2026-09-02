@@ -870,7 +870,9 @@ function App() {
 
   const submit = async () => {
     if (weekLocked) return notify(`${weekLabel} is locked — sheets were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff.`);
-    if (!name.trim()) return notify('Add your name before locking in.');
+    // Signed-in players are identified by their session — the server uses that,
+    // not this field — so only guests need to type a name.
+    if (!playerSession.authenticated && !name.trim()) return notify('Add your name before locking in.');
     if (Object.keys(picks).length !== currentGames.length) return notify(`Finish all ${currentGames.length} picks first.`);
     if (!tiebreaker || Number(tiebreaker) < 0) return notify('Add a valid tiebreaker total.');
     if (!paid && !playerSession.authenticated) return notify('Confirm your payment first.');
@@ -1907,11 +1909,18 @@ function App() {
             <aside className="slip-card">
               <div className="slip-progress"><span>YOUR SHEET</span><strong>{Object.keys(picks).length}<small> / {currentGames.length}</small></strong></div>
               <div className="progress-track"><span style={{ width: `${(Object.keys(picks).length / currentGames.length) * 100}%` }} /></div>
-              <label>Full name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" maxLength="50" /></label>
-              <label>Payment handle <small>optional</small><input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="@handle" maxLength="50" /></label>
+              {playerSession.authenticated ? (
+                <div className="slip-identity"><PlayerAvatar player={currentPlayer} size={34} /><div><strong>Locking in as {playerSession.name}</strong><small>Pulled from your profile — just set your tiebreaker</small></div></div>
+              ) : (
+                <>
+                  <label>Full name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" maxLength="50" /></label>
+                  <label>Payment handle <small>optional</small><input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="@handle" maxLength="50" /></label>
+                  <p className="slip-signin-hint">Already have a profile? <button type="button" className="link-button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button> and skip this.</p>
+                </>
+              )}
               <label>Tiebreaker total<input type="number" min="0" value={tiebreaker} onChange={(event) => setTiebreaker(event.target.value)} placeholder="48" /></label>
               <p className="rule-note"><strong>Closest without going over wins.</strong> Going over means your tiebreaker is busted.</p>
-              <label className="check-row"><input type="checkbox" checked={paid} onChange={(event) => setPaid(event.target.checked)} /><span>I confirm I sent ${ENTRY_FEE}</span></label>
+              {!playerSession.authenticated && <label className="check-row"><input type="checkbox" checked={paid} onChange={(event) => setPaid(event.target.checked)} /><span>I confirm I sent ${ENTRY_FEE}</span></label>}
               {playerSession.authenticated && (() => {
                 const mySheet = weekSheets.find((s) => s.playerId === playerSession.playerId);
                 if (mySheet?.paid) return <div className="credit-paid-banner">✅ This week's entry is paid.</div>;
