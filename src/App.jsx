@@ -57,13 +57,26 @@ const PRESET_AVATARS = ['🏈', '🔥', '💰', '👑', '🦅', '🐻', '🐅', 
 const LEAGUE_ID = 'league-sunday-syndicate-demo';
 
 async function apiRequest(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...options,
-    headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      credentials: 'same-origin',
+      ...options,
+      headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
+    });
+  } catch {
+    // fetch only rejects on a network-level failure (offline, DNS, CORS).
+    throw new Error('Can’t reach the server — check your connection and try again.');
+  }
   const data = response.status === 204 ? null : await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error || `Request failed (${response.status}).`);
+  if (!response.ok) {
+    // Prefer the server's own message; otherwise a friendly, human default per status.
+    if (data?.error) throw new Error(data.error);
+    if (response.status === 429) throw new Error('Slow down a sec — too many requests. Try again in a moment.');
+    if (response.status === 401 || response.status === 403) throw new Error('You need to sign in again to do that.');
+    if (response.status >= 500) throw new Error('The server hit a snag. Give it a moment and try again.');
+    throw new Error(`Something went wrong (${response.status}).`);
+  }
   return data;
 }
 
