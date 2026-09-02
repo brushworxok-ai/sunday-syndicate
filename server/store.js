@@ -173,6 +173,14 @@ export class LeagueStore {
     if (!sheetCols.some((col) => col.name === 'claim_json')) {
       this.db.exec('ALTER TABLE sheets ADD COLUMN claim_json TEXT');
     }
+    // Player payment handles (Cash App / Venmo / PayPal) live in payment_json.
+    const playerCols = this.db.prepare('PRAGMA table_info(players)').all();
+    if (!playerCols.some((col) => col.name === 'payment_json')) {
+      this.db.exec('ALTER TABLE players ADD COLUMN payment_json TEXT');
+    }
+    if (!playerCols.some((col) => col.name === 'avatar')) {
+      this.db.exec('ALTER TABLE players ADD COLUMN avatar TEXT');
+    }
     // Legacy databases created broadcasts.recap_id as NOT NULL with an FK,
     // which blocks standalone Jack broadcasts. Rebuild the table if needed.
     const recapCol = this.db.prepare('PRAGMA table_info(broadcasts)').all().find((col) => col.name === 'recap_id');
@@ -258,6 +266,8 @@ export class LeagueStore {
       phoneVerifiedAt: row.phone_verified_at,
       messaging: parse(row.messaging_json, {}),
       trashTalk: parse(row.trash_talk_json, {}),
+      payment: parse(row.payment_json, null),
+      avatar: row.avatar ?? null,
     }));
     const sheets = this.db.prepare('SELECT * FROM sheets WHERE league_id = ? ORDER BY submitted_at').all(leagueId).map((row) => ({
       id: row.id, playerId: row.player_id, name: row.name, handle: row.handle, picks: parse(row.picks_json, {}), tiebreaker: row.tiebreaker, paid: Boolean(row.paid), week: row.week, submittedAt: row.submitted_at, paymentClaim: parse(row.claim_json, null),
@@ -279,7 +289,7 @@ export class LeagueStore {
   getPlayer(playerId) {
     const row = this.db.prepare('SELECT * FROM players WHERE id = ?').get(playerId);
     if (!row) return null;
-    return { id: row.id, leagueId: row.league_id, name: row.name, phone: row.phone_masked, phoneE164: row.phone_e164, phoneVerifiedAt: row.phone_verified_at, messaging: parse(row.messaging_json, {}), trashTalk: parse(row.trash_talk_json, {}) };
+    return { id: row.id, leagueId: row.league_id, name: row.name, phone: row.phone_masked, phoneE164: row.phone_e164, phoneVerifiedAt: row.phone_verified_at, messaging: parse(row.messaging_json, {}), trashTalk: parse(row.trash_talk_json, {}), payment: parse(row.payment_json, null), avatar: row.avatar ?? null };
   }
 
   getPlayerCredential(playerId) {
@@ -316,9 +326,11 @@ export class LeagueStore {
     if (preferences.trashTalkLevel) { trashTalk.level = preferences.trashTalkLevel; trashTalk.updatedAt = at; }
     if (preferences.trashTalk) Object.assign(trashTalk, preferences.trashTalk);
     if (preferences.favoriteTeam !== undefined) trashTalk.jackPolicy = { ...(trashTalk.jackPolicy ?? {}), favoriteTeam: preferences.favoriteTeam || null, updatedAt: at, updatedBy: actor };
+    const payment = preferences.payment !== undefined ? preferences.payment : player.payment;
+    const avatar = preferences.avatar !== undefined ? preferences.avatar : player.avatar;
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      this.db.prepare('UPDATE players SET messaging_json = ?, trash_talk_json = ?, updated_at = ? WHERE id = ?').run(stringify(messaging), stringify(trashTalk), at, playerId);
+      this.db.prepare('UPDATE players SET messaging_json = ?, trash_talk_json = ?, payment_json = ?, avatar = ?, updated_at = ? WHERE id = ?').run(stringify(messaging), stringify(trashTalk), payment ? stringify(payment) : null, avatar ?? null, at, playerId);
       if (preferences.smsConsent) this.db.prepare('INSERT INTO consent_records (id, league_id, player_id, channel, status, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), player.leagueId, playerId, 'sms_results', preferences.smsConsent, actor === 'twilio_webhook' ? 'sms_keyword' : 'player_settings', at);
       if (preferences.trashTalkLevel) this.db.prepare('INSERT INTO consent_records (id, league_id, player_id, channel, status, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), player.leagueId, playerId, 'trash_talk', preferences.trashTalkLevel, 'player_settings', at);
       this.writeAudit(player.leagueId, 'player.preferences_updated', `${player.name} updated communication preferences`, actor, { playerId, changes: preferences }, at, { inTransaction: true });
@@ -458,9 +470,9 @@ export class LeagueStore {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare(`INSERT INTO players
-        (id, league_id, name, previous_rank, phone_masked, phone_e164, phone_verified_at, messaging_json, trash_talk_json, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(player.id, leagueId, player.name, null, player.phone, player.phoneE164, player.phoneVerifiedAt ?? null, stringify(player.messaging), stringify(player.trashTalk), at);
+        (id, league_id, name, previous_rank, phone_masked, phone_e164, phone_verified_at, messaging_json, trash_talk_json, payment_json, avatar, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(player.id, leagueId, player.name, null, player.phone, player.phoneE164, player.phoneVerifiedAt ?? null, stringify(player.messaging), stringify(player.trashTalk), player.payment ? stringify(player.payment) : null, player.avatar ?? null, at);
       this.db.prepare('INSERT INTO player_credentials (player_id, pin_hash, updated_at) VALUES (?, ?, ?)').run(player.id, pinHash, at);
       if (player.messaging?.smsConsent) {
         this.db.prepare('INSERT INTO consent_records (id, league_id, player_id, channel, status, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)')

@@ -1710,7 +1710,7 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 
 /* Crew roster */
 .crew-roster { margin-bottom: 22px; }
-.crew-roster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+.crew-roster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 12px; }
 .crew-card { display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; position: relative; }
 .crew-card.me { border-color: rgba(57,255,20,.45); box-shadow: 0 0 0 1px rgba(57,255,20,.2); }
 .crew-card-info { min-width: 0; flex: 1; }
@@ -1892,4 +1892,39 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
   .season-head, .season-row { grid-template-columns: minmax(0, 1fr) 44px 64px 52px 64px; gap: 6px; padding: 10px 12px; font-size: 12px; }
   .season-head { font-size: 11px; }
   .season-row > *:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* ── Pay handles (Cash App / Venmo / PayPal on the profile) ── */
+.pay-handle { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; text-decoration: none; letter-spacing: 0.01em; border: 1px solid var(--line); color: var(--ink); background: var(--glass); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pay-handle.cashapp { color: #00d54b; border-color: rgba(0, 213, 75, 0.35); background: rgba(0, 213, 75, 0.08); }
+.pay-handle.venmo { color: #3d95ce; border-color: rgba(61, 149, 206, 0.4); background: rgba(61, 149, 206, 0.1); }
+.pay-handle.paypal { color: #ffc439; border-color: rgba(255, 196, 57, 0.4); background: rgba(255, 196, 57, 0.08); }
+.pay-handle.missing { color: var(--muted); font-weight: 600; border-style: dashed; }
+.crew-card-info .pay-handle { margin-top: 4px; display: inline-block; max-width: 100%; font-size: 11px; padding: 2px 7px; vertical-align: top; }
+.crew-card .crew-card-team { flex-shrink: 0; }
+.payment-name { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.ledger-pay-to { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 6px 0 0; font-size: 12px; color: var(--muted); align-items: center; }
+.ledger-pay-to span { display: inline-flex; align-items: center; gap: 6px; }
+
+.pay-card.todo { border-color: rgba(255, 196, 57, 0.35); }
+.pay-card-intro { margin: -4px 0 12px; font-size: 13px; }
+.pay-fields { display: grid; gap: 10px; }
+.pay-field { display: grid; grid-template-columns: 84px 1fr auto; align-items: center; gap: 8px; margin: 0; }
+.pay-field-label { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.pay-field input { min-width: 0; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 11px 12px; color: var(--ink); font: inherit; font-size: 15px; }
+.pay-field input:focus { outline: none; border-color: var(--neon); box-shadow: var(--glow-green); }
+.pay-field input::placeholder { color: var(--muted); }
+.pay-field.preferred .pay-field-label { color: var(--neon); }
+.pay-pref { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 700; min-height: 36px; white-space: nowrap; }
+.pay-pref.on { color: #0a0a0a; background: var(--gold); border-color: var(--gold); }
+.pay-pref:disabled { opacity: 0.4; }
+.pay-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.pay-actions small { font-size: 12px; }
+.avatar-card .panel-heading { align-items: center; }
+.avatar-card .signup-avatar-grid { margin-bottom: 12px; }
+.you-row-button { width: 100%; text-align: left; background: transparent; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.you-row-button strong { color: var(--gold); }
+@media (max-width: 480px) {
+  .pay-field { grid-template-columns: 1fr auto; }
+  .pay-field-label { grid-column: 1 / -1; }
 }

@@ -68,6 +68,8 @@ function publicPlayer(player) {
     phoneVerifiedAt: player.phoneVerifiedAt,
     messaging: clone(player.messaging),
     trashTalk: clone(player.trashTalk),
+    payment: player.payment ? clone(player.payment) : null,
+    avatar: player.avatar ?? null,
   };
 }
 
@@ -81,6 +83,8 @@ function authenticatedPlayer(player) {
     phoneVerifiedAt: player.phoneVerifiedAt,
     messaging: clone(player.messaging),
     trashTalk: clone(player.trashTalk),
+    payment: player.payment ? clone(player.payment) : null,
+    avatar: player.avatar ?? null,
   };
 }
 
@@ -245,6 +249,8 @@ export class PostgresLeagueStore {
         draft.consentRecords.push({ id: randomUUID(), playerId, channel: 'sms_results', status: preferences.smsConsent, source: actor === 'twilio_webhook' ? 'sms_keyword' : 'player_settings', recordedAt: at });
       }
       if (preferences.resultsChannel) player.messaging.resultsChannel = preferences.resultsChannel;
+      if (preferences.payment !== undefined) player.payment = preferences.payment ? clone(preferences.payment) : null;
+      if (preferences.avatar !== undefined) player.avatar = preferences.avatar ?? null;
       if (preferences.trashTalk) player.trashTalk = { ...(player.trashTalk ?? {}), ...clone(preferences.trashTalk) };
       if (preferences.favoriteTeam !== undefined) {
         player.trashTalk = player.trashTalk ?? {};

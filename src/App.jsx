@@ -24,6 +24,7 @@ import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
 import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebreaker.js';
 import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
+import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle } from './payment.js';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
@@ -91,6 +92,9 @@ function App() {
   const [signupTeam, setSignupTeam] = useState('');
   const [signupAvatar, setSignupAvatar] = useState('');
   const [signupAvatarFile, setSignupAvatarFile] = useState(null);
+  const [signupPay, setSignupPay] = useState('');
+  const [payDraft, setPayDraft] = useState({ cashApp: '', venmo: '', paypal: '', preferred: 'cashapp' });
+  const [payDraftFor, setPayDraftFor] = useState(null);
   const [signupStep, setSignupStep] = useState(1); // 1: info, 2: team+avatar, 3: OTP verify
   const [signupOtp, setSignupOtp] = useState('');
   const [otpSending, setOtpSending] = useState(false);
@@ -801,6 +805,15 @@ function App() {
     [proofLeague, playerSession],
   );
 
+  // Keep the pay-handle form in sync with the saved profile (per player, per save).
+  useEffect(() => {
+    const key = currentPlayer ? `${currentPlayer.id}:${currentPlayer.payment?.updatedAt ?? ''}` : null;
+    if (key === payDraftFor) return;
+    setPayDraftFor(key);
+    const pay = currentPlayer?.payment ?? {};
+    setPayDraft({ cashApp: pay.cashApp ?? '', venmo: pay.venmo ?? '', paypal: pay.paypal ?? '', preferred: pay.preferred ?? 'cashapp' });
+  }, [currentPlayer, payDraftFor]);
+
   const payCfbWithCredit = async () => {
     if (!cfbPool) return;
     setServerBusy('cfb-credit-pay');
@@ -1385,7 +1398,9 @@ function App() {
     if (!(await ensureAdmin())) return;
     setServerBusy(`payout-${weekSummary.week}`);
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/payouts`, { method: 'POST', body: JSON.stringify({ week: weekSummary.week, amount: weekSummary.pot, winnerNames: weekSummary.winners, method: 'cashapp_venmo' }) });
+      const winners = weekSummary.winners.map((name) => (serverLeague?.players ?? []).find((p) => p.name === name)).filter(Boolean);
+      const methods = [...new Set(winners.map((p) => preferredHandle(p)?.key).filter(Boolean))];
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/payouts`, { method: 'POST', body: JSON.stringify({ week: weekSummary.week, amount: weekSummary.pot, winnerNames: weekSummary.winners, winnerPlayerIds: winners.map((p) => p.id), method: methods.join('+') || 'cashapp_venmo' }) });
       await loadLeague();
       notify(`Week ${weekSummary.week} pot marked paid to ${weekSummary.winners.join(' & ')}.`);
     } catch (error) { notify(error.message); }
@@ -1523,10 +1538,22 @@ function App() {
   const handleAvatarUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) return notify('Image must be under 2 MB.');
-    const reader = new FileReader();
-    reader.onload = () => { setSignupAvatarFile(reader.result); setSignupAvatar(''); };
-    reader.readAsDataURL(file);
+    if (file.size > 8 * 1024 * 1024) return notify('Image must be under 8 MB.');
+    shrinkImage(file).then((dataUrl) => { setSignupAvatarFile(dataUrl); setSignupAvatar(''); }).catch(() => notify('Could not read that image. Try another one.'));
+  };
+
+  /* Profile-pic change from My Profile: same shrink, saved straight to the account. */
+  const changeMyAvatar = async (value) => {
+    if (!currentPlayer) return;
+    try {
+      const avatar = value instanceof File ? await shrinkImage(value) : value;
+      await updatePreferences(currentPlayer.id, { avatar });
+    } catch { notify('Could not read that image. Try another one.'); }
+  };
+
+  const savePaymentHandles = async () => {
+    if (!currentPlayer) return;
+    await updatePreferences(currentPlayer.id, { payment: payDraft });
   };
 
   const sendOtpCode = async () => {
@@ -1561,7 +1588,7 @@ function App() {
     try {
       const registered = await apiRequest(`/api/leagues/${LEAGUE_ID}/players/register`, {
         method: 'POST',
-        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified }),
+        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified, payment: parseQuickPay(signupPay) }),
       });
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify({ playerId: registered.playerId, pin: signupPin }) });
       setPlayerSession(session);
@@ -1789,6 +1816,7 @@ function App() {
                       </select>
                     </label>
                     {signupTeam && <div className="signup-team-preview"><img src={getTeamLogoUrl(signupTeam)} alt="" /><strong>{TEAMS[signupTeam]}</strong></div>}
+                    <label>How you get paid <small style={{ float: 'right', fontWeight: 400 }}>optional · add later in your profile</small><input value={signupPay} onChange={(e) => setSignupPay(e.target.value)} placeholder="$Cashtag or @venmo" maxLength="42" autoCapitalize="none" autoCorrect="off" /></label>
 
                     <div className="signup-avatar-section">
                       <p className="signup-avatar-label">Profile pic</p>
@@ -1980,6 +2008,7 @@ function App() {
                         <div className={`you-row ${mySheet ? 'ok' : 'todo'}`}><span>{mySheet ? '✅' : '○'}</span><div><strong>Picks</strong><small>{mySheet ? `${Object.keys(mySheet.picks ?? {}).length}/${currentGames.length} in · TB ${mySheet.tiebreaker}` : weekLocked ? 'Locked' : `Lock in before ${deadlineCountdown ? `${deadlineCountdown} from now` : 'the deadline'}`}</small></div></div>
                         <div className={`you-row ${mySheet?.paid ? 'ok' : mySheet ? 'todo' : ''}`}><span>{mySheet?.paid ? '✅' : mySheet ? '⚠️' : '○'}</span><div><strong>Entry</strong><small>{mySheet?.paid ? `$${ENTRY_FEE} paid` : mySheet ? (mySheet.paymentClaim ? 'You said you sent it — waiting on commissioner' : `$${ENTRY_FEE} due`) : 'Pay after your picks are in'}</small></div></div>
                         {myRank > 0 && <div className="you-row ok"><span>🏆</span><div><strong>Rank</strong><small>#{myRank} of {leaderboard.length} · {leaderboard[myRank - 1]?.score ?? 0} correct so far</small></div></div>}
+                        {currentPlayer && !hasPaymentHandle(currentPlayer) && <button type="button" className="you-row todo you-row-button" onClick={() => setView('players')}><span>💸</span><div><strong>Where do we send your winnings?</strong><small>Add your Cash App or Venmo to your profile →</small></div></button>}
                       </div>
                       <div className="you-week-actions">
                         {!weekLocked && <button className="button button-primary" type="button" onClick={() => setView('picks')}>{mySheet ? 'Update picks' : 'Make my picks'} →</button>}
@@ -2186,7 +2215,7 @@ function App() {
                   {seasonStats.weeks.map((w) => (
                     <article key={w.week} className={w.paid ? 'paid' : ''}>
                       <span className="ledger-week">W{w.week}</span>
-                      <div><strong>${w.pot.toLocaleString()} · {w.entries} entries</strong><p>{w.complete ? (w.winners.length ? `Winner: ${w.winners.join(' & ')} (${w.topScore} correct)` : 'Complete — no winner determined') : 'In progress'}</p></div>
+                      <div><strong>${w.pot.toLocaleString()} · {w.entries} entries</strong><p>{w.complete ? (w.winners.length ? `Winner: ${w.winners.join(' & ')} (${w.topScore} correct)` : 'Complete — no winner determined') : 'In progress'}</p>{isComm && w.complete && !w.paid && w.winners.length > 0 && <p className="ledger-pay-to">Pay to: {w.winners.map((name) => { const pl = (serverLeague?.players ?? []).find((p) => p.name === name); return <span key={name}>{name.split(' ')[0]} → <PayHandle player={pl} /></span>; })}</p>}</div>
                       {w.paid
                         ? <StatusPill state="pass">Paid {w.payout?.paidAt ? new Date(w.payout.paidAt).toLocaleDateString() : ''}</StatusPill>
                         : w.complete && w.winners.length
@@ -2636,9 +2665,9 @@ function App() {
                 <div className="my-profile-stats">
                   <div><span>Credit balance</span><strong>${myCredit}</strong></div>
                   <div><span>Roast setting</span><strong>{({ none: 'Opted out', light: 'Light / PG-13', competitive: 'Maximum', maximum: 'Maximum' })[currentPlayer.trashTalk?.level] || 'Maximum'}</strong></div>
-                  <div><span>Results</span><strong>{({ sms_and_in_app: 'Text + app', sms: 'Text', in_app: 'In app' })[currentPlayer.messaging?.resultsChannel] || 'Text + app'}</strong></div>
+                  <div><span>Get paid at</span><strong>{preferredHandle(currentPlayer)?.display ?? <em className="muted">Not set</em>}</strong></div>
                 </div>
-                <p className="my-profile-hint">Change your photo, team, or roast level below. Everything saves instantly and only you can edit your own settings.</p>
+                <p className="my-profile-hint">Change your photo, pay handle, team, or roast level below. Only you can edit your own settings.</p>
               </section>
             ) : (
               <section className="my-profile-card signed-out">
@@ -2664,6 +2693,42 @@ function App() {
               </button>
             </section>
 
+            {currentPlayer && (
+              <section className={`panel pay-card ${hasPaymentHandle(currentPlayer) ? '' : 'todo'}`}>
+                <div className="panel-heading"><div><span className="eyebrow dark">HOW YOU GET PAID</span><h2>{hasPaymentHandle(currentPlayer) ? 'Your pay handles' : 'Add where to send your winnings'}</h2></div>{hasPaymentHandle(currentPlayer) ? <StatusPill state="pass">Set</StatusPill> : <StatusPill state="warn">Missing</StatusPill>}</div>
+                <p className="muted pay-card-intro">The commissioner pays pots to the handle you mark as preferred. Your crew can also use it to settle side bets.</p>
+                <div className="pay-fields">
+                  {PAY_ORDER.map((key) => {
+                    const method = PAY_METHODS[key];
+                    const value = payDraft[method.field] ?? '';
+                    return (
+                      <label key={key} className={`pay-field ${payDraft.preferred === key && value ? 'preferred' : ''}`}>
+                        <span className="pay-field-label">{method.label}</span>
+                        <input value={value} placeholder={method.placeholder} maxLength="42" autoCapitalize="none" autoCorrect="off" onChange={(e) => setPayDraft((d) => ({ ...d, [method.field]: e.target.value }))} />
+                        <button type="button" className={`pay-pref ${payDraft.preferred === key ? 'on' : ''}`} disabled={!value.trim()} onClick={() => setPayDraft((d) => ({ ...d, preferred: key }))} aria-pressed={payDraft.preferred === key}>{payDraft.preferred === key && value ? '★ Preferred' : 'Prefer'}</button>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="pay-actions">
+                  <button type="button" className="button button-primary" disabled={serverBusy === `player-${currentPlayer.id}`} onClick={savePaymentHandles}>{serverBusy === `player-${currentPlayer.id}` ? 'Saving…' : 'Save pay handles'}</button>
+                  <small className="muted">Zelle? The commissioner already has your phone number on file.</small>
+                </div>
+              </section>
+            )}
+
+            {currentPlayer && (
+              <section className="panel avatar-card">
+                <div className="panel-heading"><div><span className="eyebrow dark">PROFILE PIC</span><h2>Change your picture</h2></div><PlayerAvatar player={currentPlayer} size={44} /></div>
+                <div className="signup-avatar-grid">
+                  {PRESET_AVATARS.map((emoji) => (
+                    <button type="button" key={emoji} className={`avatar-pick ${currentPlayer.avatar === emoji ? 'selected' : ''}`} disabled={serverBusy === `player-${currentPlayer.id}`} onClick={() => changeMyAvatar(emoji)}>{emoji}</button>
+                  ))}
+                </div>
+                <label className="upload-btn">📷 Upload a photo<input type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) changeMyAvatar(f); e.target.value = ''; }} /></label>
+              </section>
+            )}
+
             <section className="crew-roster">
               <div className="proof-heading"><div><span className="proof-step">THE CREW</span><h2>Everyone in the league</h2></div><StatusPill state="pass">{(proofLeague.players ?? []).length} players</StatusPill></div>
               {(proofLeague.players ?? []).length > 0 ? (
@@ -2674,6 +2739,7 @@ function App() {
                       <div className="crew-card-info">
                         <strong>{player.name}{player.id === playerSession.playerId ? ' (you)' : ''}</strong>
                         <small>{player.trashTalk?.jackPolicy?.favoriteTeam ? TEAMS[player.trashTalk.jackPolicy.favoriteTeam] : 'No team set'}</small>
+                        {playerSession.authenticated && <PayHandle player={player} compact />}
                       </div>
                       {player.trashTalk?.jackPolicy?.favoriteTeam && <img className="crew-card-team" src={getTeamLogoUrl(player.trashTalk.jackPolicy.favoriteTeam)} alt="" />}
                       {isComm && <button type="button" className="crew-reset-pin" disabled={serverBusy === `reset-${player.id}`} onClick={() => commissionerResetPin(player)} title={`Reset ${player.name}'s PIN`}>🔑</button>}
@@ -3390,9 +3456,9 @@ function App() {
                     {unpaidSheets.length === 0 && <p className="muted">✅ Every submitted sheet is paid.</p>}
                     {unpaidSheets.map((s) => (
                       <div className={`payment-row ${s.paymentClaim ? 'claimed' : ''}`} key={s.id}>
-                        <span className="payment-name">{s.name}</span>
+                        <span className="payment-name">{s.name}<PayHandle player={(serverLeague?.players ?? []).find((p) => p.id === s.playerId)} compact /></span>
                         <span className="payment-week">Wk {s.week}</span>
-                        <span className="payment-status">{s.paymentClaim ? `⏳ says paid ${new Date(s.paymentClaim.claimedAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : 'no payment yet'}</span>
+                        <span className="payment-status">{s.paymentClaim ? `⏳ says paid${s.paymentClaim.method && PAY_METHODS[s.paymentClaim.method] ? ` via ${PAY_METHODS[s.paymentClaim.method].label}` : ''} ${new Date(s.paymentClaim.claimedAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : 'no payment yet'}</span>
                         <button className="button button-primary" type="button" disabled={serverBusy === `sheet-paid-${s.id}`} onClick={() => confirmSheetPaid(s.id, true)}>
                           {serverBusy === `sheet-paid-${s.id}` ? '…' : '✓ Confirm paid'}
                         </button>
@@ -3584,6 +3650,45 @@ function StatusPill({ state = 'neutral', children }) {
 }
 
 /* Renders a player's chosen identity: uploaded photo, preset emoji, or initials. */
+/* Downscale a picked photo to a 192px JPEG data URL (~12 KB) so profile pics
+   stay small in every league fetch and never hit the server size cap. */
+function shrinkImage(file, size = 192) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        canvas.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL('image/jpeg', 0.84));
+      } catch (error) { reject(error); }
+      finally { URL.revokeObjectURL(url); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+    img.src = url;
+  });
+}
+
+/* "$Tique" → Cash App, "@tique" → Venmo, anything else → Cash App. */
+function parseQuickPay(text) {
+  const value = String(text ?? '').trim();
+  if (!value) return undefined;
+  if (value.startsWith('@') || /venmo/i.test(value)) return { venmo: value, preferred: 'venmo' };
+  if (/paypal/i.test(value)) return { paypal: value, preferred: 'paypal' };
+  return { cashApp: value, preferred: 'cashapp' };
+}
+
+/* Small pill showing where a player gets paid, linking out to the app. */
+function PayHandle({ player, compact = false }) {
+  const pay = preferredHandle(player);
+  if (!pay) return compact ? null : <span className="pay-handle missing">No pay handle</span>;
+  return <a className={`pay-handle ${pay.key}`} href={pay.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title={`Pay ${player.name} on ${pay.label}`}>{compact ? pay.display : `${pay.label} ${pay.display}`}</a>;
+}
+
 function PlayerAvatar({ player, size = 44 }) {
   const avatar = player?.avatar;
   const isImage = typeof avatar === 'string' && (avatar.startsWith('data:') || avatar.startsWith('http') || avatar.startsWith('/'));

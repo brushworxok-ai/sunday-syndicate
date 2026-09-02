@@ -14,6 +14,24 @@ async function getTwilioModule() {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { normalizePayment, preferredHandle } from '../src/payment.js';
+
+/* Profile pictures: a short emoji or a small data-URL image (the client
+   downsizes to 256px JPEG, ~30 KB). Never silently truncate a data URL —
+   that produces a broken image. */
+const AVATAR_MAX_CHARS = 160_000;
+function validateAvatar(value) {
+  if (typeof value !== 'string') return { error: 'Invalid profile picture.' };
+  const text = value.trim();
+  if (!text) return { avatar: null };
+  if (text.startsWith('data:image/')) {
+    if (text.length > AVATAR_MAX_CHARS) return { error: 'That photo is too large. Try a smaller image.' };
+    if (!/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(text)) return { error: 'Unsupported image format.' };
+    return { avatar: text };
+  }
+  if (text.length <= 8 && !/[<>"'&]/.test(text)) return { avatar: text };
+  return { error: 'Invalid profile picture.' };
+}
 import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
 import { ModerationError } from './moderation.js';
@@ -84,8 +102,8 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"], // React inline style attributes
-      fontSrc: ["'self'", 'data:'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'], // React inline styles + Google Fonts
+      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
       imgSrc: ["'self'", 'data:', 'blob:', 'https://a.espncdn.com'], // team logos + uploaded avatars
       connectSrc: ["'self'"],
       mediaSrc: ["'self'", 'blob:'], // Jack TTS audio playback
@@ -97,7 +115,7 @@ app.use(helmet({
     },
   },
 }));
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({ limit: '256kb' })); // profile photos ride along as small data URLs
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
 
@@ -376,6 +394,19 @@ app.patch('/api/players/:playerId/preferences', playerAuth.requirePlayer, asyncR
   if (input.resultsChannel && !allowedChannels.includes(input.resultsChannel)) return response.status(422).json({ error: 'Invalid results channel.' });
   if (input.trashTalkLevel && !allowedTones.includes(input.trashTalkLevel)) return response.status(422).json({ error: 'Invalid trash-talk level.' });
   if (input.favoriteTeam !== undefined && input.favoriteTeam !== '' && input.favoriteTeam !== null && !TEAMS[input.favoriteTeam]) return response.status(422).json({ error: 'Invalid favorite team.' });
+  if (input.avatar !== undefined && input.avatar !== null) {
+    const check = validateAvatar(input.avatar);
+    if (check.error) return response.status(422).json({ error: check.error });
+    input.avatar = check.avatar;
+  }
+  if (input.payment !== undefined) {
+    if (input.payment === null) input.payment = null;
+    else {
+      const { payment, error } = normalizePayment(input.payment);
+      if (error) return response.status(422).json({ error });
+      input.payment = payment.preferred ? payment : null;
+    }
+  }
   const player = await store.updatePlayerPreferences(request.params.playerId, input, 'player');
   if (!player) return response.status(404).json({ error: 'Player not found.' });
   return response.json(player);
@@ -419,8 +450,19 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
       updatedAt: at,
       ...(TEAMS[request.body?.favoriteTeam] ? { jackPolicy: { favoriteTeam: request.body.favoriteTeam, updatedAt: at, updatedBy: 'player' } } : {}),
     },
-    avatar: typeof request.body?.avatar === 'string' ? request.body.avatar.slice(0, 200_000) : null,
+    avatar: null,
+    payment: null,
   };
+  if (request.body?.avatar) {
+    const check = validateAvatar(request.body.avatar);
+    if (check.error) return response.status(422).json({ error: check.error });
+    player.avatar = check.avatar;
+  }
+  if (request.body?.payment && typeof request.body.payment === 'object') {
+    const { payment, error } = normalizePayment(request.body.payment);
+    if (error) return response.status(422).json({ error });
+    if (payment.preferred) player.payment = payment;
+  }
   await store.createPlayer(request.params.leagueId, player, hashPin(pin));
 
   // Jack welcomes the new player with a chat message and notification
@@ -2170,7 +2212,7 @@ app.post('/api/leagues/:leagueId/sheets/:sheetId/claim-payment', playerAuth.requ
   if (!sheet) return response.status(404).json({ error: 'Sheet not found.' });
   if (sheet.playerId !== request.player.id) return response.status(403).json({ error: 'You can only claim payment for your own sheet.' });
   if (sheet.paid) return response.status(422).json({ error: 'This sheet is already marked paid.' });
-  const paymentClaim = { claimedAt: new Date().toISOString(), method: 'cashapp', amount: Number(league.settings?.entryFee) || 20 };
+  const paymentClaim = { claimedAt: new Date().toISOString(), method: preferredHandle(request.player)?.key ?? 'cashapp', amount: Number(league.settings?.entryFee) || 20 };
   const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paymentClaim });
   await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${paymentClaim.amount} for Week ${sheet.week}`, request.player.id, { sheetId: sheet.id });
   await saveNotification(request.params.leagueId, { playerId: request.player.id, kind: 'payment_claimed', title: `Payment claimed — Week ${sheet.week}`, body: `You claimed $${paymentClaim.amount} sent for Week ${sheet.week}. Waiting for commissioner to confirm.`, metadata: { week: sheet.week, amount: paymentClaim.amount } });
@@ -2183,7 +2225,7 @@ app.post('/api/leagues/:leagueId/cfb-pool/:poolId/claim-payment', playerAuth.req
   const entry = pool.entries?.[request.player.id];
   if (!entry) return response.status(422).json({ error: 'Submit your picks first, then claim your payment.' });
   if (entry.paid) return response.status(422).json({ error: 'This entry is already marked paid.' });
-  entry.paymentClaim = { claimedAt: new Date().toISOString(), method: 'cashapp', amount: Number(pool.entryFee) || 0 };
+  entry.paymentClaim = { claimedAt: new Date().toISOString(), method: preferredHandle(request.player)?.key ?? 'cashapp', amount: Number(pool.entryFee) || 0 };
   await store.saveCfbPoolEntry(request.params.leagueId, request.params.poolId, entry);
   await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${entry.paymentClaim.amount} for CFB Week ${pool.week}`, request.player.id, { poolId: pool.id });
   return response.json({ entry });
