@@ -1933,3 +1933,5 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
   .pay-field { grid-template-columns: 1fr auto; }
   .pay-field-label { grid-column: 1 / -1; }
 }
+
+.otp-error { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 77, 77, 0.1); border: 1px solid rgba(255, 77, 77, 0.35); color: #ff8a8a; font-size: 13px; line-height: 1.45; text-align: left; }

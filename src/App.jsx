@@ -98,6 +98,7 @@ function App() {
   const [signupStep, setSignupStep] = useState(1); // 1: info, 2: team+avatar, 3: OTP verify
   const [signupOtp, setSignupOtp] = useState('');
   const [otpSending, setOtpSending] = useState(false);
+  const [otpError, setOtpError] = useState('');
   const [otpVerified, setOtpVerified] = useState(false);
   const [resetPhone, setResetPhone] = useState('');
   const [resetCode, setResetCode] = useState('');
@@ -1575,10 +1576,11 @@ function App() {
 
   const sendOtpCode = async () => {
     setOtpSending(true);
+    setOtpError('');
     try {
       await apiRequest('/api/otp/send', { method: 'POST', body: JSON.stringify({ phone: signupPhone }) });
       notify('Verification code sent! Check your texts.');
-    } catch (error) { notify(error.message); }
+    } catch (error) { setOtpError(error.message); notify(error.message); }
     setOtpSending(false);
   };
 
@@ -1658,10 +1660,11 @@ function App() {
       if (!smsLive()) return finishRegistration(false);
       setSignupStep(3);
       setOtpSending(true);
+      setOtpError('');
       try {
         await apiRequest('/api/otp/send', { method: 'POST', body: JSON.stringify({ phone: signupPhone }) });
         notify('Verification code sent! Check your texts.');
-      } catch (error) { notify(error.message); }
+      } catch (error) { setOtpError(error.message); notify(error.message); }
       setOtpSending(false);
       return;
     }
@@ -1875,7 +1878,8 @@ function App() {
                     <div className="otp-verify-section">
                       <div className="otp-icon">📱</div>
                       <p className="otp-heading">Verify your number</p>
-                      <p className="otp-subtext">We sent a 6-digit code to <strong>{signupPhone}</strong></p>
+                      <p className="otp-subtext">{otpError ? <>We couldn't text <strong>{signupPhone}</strong></> : <>We sent a 6-digit code to <strong>{signupPhone}</strong></>}</p>
+                      {otpError && <p className="otp-error">{otpError}</p>}
                       <label>Verification code
                         <input
                           value={signupOtp}

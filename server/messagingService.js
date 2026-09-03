@@ -51,7 +51,8 @@ export class TelnyxSmsProvider {
   constructor({ apiKey, fromNumber }) {
     this.name = 'Telnyx Messaging';
     this.apiKey = apiKey;
-    this.fromNumber = fromNumber;
+    // Telnyx wants E.164. Forgive "4055551234" / "(405) 555-1234" in the env.
+    this.fromNumber = normalizeE164(fromNumber);
   }
   async send({ player, text }) {
     if (!player.phoneE164) {
@@ -64,10 +65,48 @@ export class TelnyxSmsProvider {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
       body: JSON.stringify({ from: this.fromNumber, to: player.phoneE164, text }),
     });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result?.errors?.[0]?.detail ?? 'Telnyx send failed');
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const first = result?.errors?.[0];
+      const error = new Error(first ? `Telnyx ${first.code ?? response.status}: ${first.title ?? ''}${first.detail ? ` — ${first.detail}` : ''}`.trim() : `Telnyx send failed (HTTP ${response.status})`);
+      error.code = first?.code ?? String(response.status);
+      error.provider = 'telnyx';
+      throw error;
+    }
     return { status: result.data?.to?.[0]?.status ?? 'queued', id: result.data?.id ?? randomUUID() };
   }
+
+  /* Commissioner diagnostic: is the API key valid, and is the FROM number
+     actually on this account with messaging enabled? */
+  async diagnose() {
+    const headers = { Authorization: `Bearer ${this.apiKey}` };
+    const out = { provider: 'telnyx', fromNumber: this.fromNumber };
+    const numRes = await fetch(`https://api.telnyx.com/v2/phone_numbers?filter[phone_number]=${encodeURIComponent(this.fromNumber)}`, { headers });
+    const numJson = await numRes.json().catch(() => ({}));
+    out.apiKeyValid = numRes.status !== 401 && numRes.status !== 403;
+    const num = numJson?.data?.[0];
+    out.numberOnAccount = Boolean(num);
+    if (num) {
+      out.numberStatus = num.status;
+      out.messagingProfileId = num.messaging_profile_id ?? null;
+      out.messagingEnabled = Boolean(num.messaging_profile_id);
+      const msgRes = await fetch(`https://api.telnyx.com/v2/messaging_phone_numbers/${encodeURIComponent(this.fromNumber)}`, { headers });
+      const msgJson = await msgRes.json().catch(() => ({}));
+      out.messagingNumber = msgJson?.data ? { type: msgJson.data.type, features: msgJson.data.features?.sms ?? null, health: msgJson.data.health ?? null } : (msgJson?.errors?.[0]?.detail ?? 'not a messaging number');
+    } else if (!out.apiKeyValid) {
+      out.error = numJson?.errors?.[0]?.detail ?? 'API key rejected';
+    }
+    return out;
+  }
+}
+
+export function normalizeE164(value) {
+  const raw = String(value ?? '').trim();
+  if (raw.startsWith('+')) return raw.replace(/[^\d+]/g, '');
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return raw;
 }
 
 export class TextBeltSmsProvider {

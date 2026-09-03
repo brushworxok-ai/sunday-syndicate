@@ -119,6 +119,25 @@ app.use(express.json({ limit: '256kb' })); // profile photos ride along as small
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
 
+/* Commissioner-only: live check of the SMS sending number (Telnyx). */
+app.get('/api/sms/diagnose', auth.requireAdmin, asyncRoute(async (_request, response) => {
+  try {
+    const provider = createSmsProvider(process.env);
+    if (typeof provider.diagnose !== 'function') return response.json({ provider: provider.name, note: 'No diagnostics for this provider.' });
+    const report = await provider.diagnose();
+    let testSend = null;
+    if (process.env.ADMIN_PHONE_E164) {
+      try {
+        const r = await provider.send({ player: { id: 'diag', phoneE164: process.env.ADMIN_PHONE_E164 }, text: '405 BadGuys Parlay: SMS test from the commissioner tools. If you got this, texts work.' });
+        testSend = { ok: true, ...r };
+      } catch (error) { testSend = { ok: false, error: error.message, code: error.code ?? null }; }
+    }
+    return response.json({ ...report, testSend });
+  } catch (error) {
+    return response.status(500).json({ error: error.message });
+  }
+}));
+
 app.get('/api/health', asyncRoute(async (_request, response) => {
   const geminiKey = await getGeminiKey().catch(() => ({ value: null, source: 'none' }));
   response.json({
@@ -255,7 +274,9 @@ app.post('/api/otp/send', asyncRoute(async (request, response) => {
     } catch (error) {
       console.error('OTP send error:', error.message);
       await otpClear(phoneE164);
-      return response.status(502).json({ error: 'Failed to send verification code. Try again.' });
+      // Tell the person WHY (the provider's own reason) — a silent "try again"
+      // hid a mis-configured sending number for days.
+      return response.status(502).json({ error: `Couldn't send the text: ${error.message}. You can still join without a code.`, detail: error.message, code: error.code ?? null });
     }
   } else {
     // Demo mode — log the code for testing
