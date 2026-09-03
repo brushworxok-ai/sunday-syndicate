@@ -54,6 +54,7 @@ export class LeagueStore {
       CREATE TABLE IF NOT EXISTS player_credentials (
         player_id TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
         pin_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
         updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS sheets (
@@ -181,6 +182,12 @@ export class LeagueStore {
     if (!playerCols.some((col) => col.name === 'avatar')) {
       this.db.exec('ALTER TABLE players ADD COLUMN avatar TEXT');
     }
+    const credentialCols = this.db.prepare('PRAGMA table_info(player_credentials)').all();
+    if (!credentialCols.some((col) => col.name === 'status')) {
+      this.db.exec("ALTER TABLE player_credentials ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+    }
+    const markDemoCredential = this.db.prepare("UPDATE player_credentials SET status = 'demo' WHERE player_id = ? AND updated_at = ?");
+    for (const player of DEMO_LEAGUE.players) markDemoCredential.run(player.id, '2025-11-18T18:00:00.000Z');
     // Legacy databases created broadcasts.recap_id as NOT NULL with an FK,
     // which blocks standalone Jack broadcasts. Rebuild the table if needed.
     const recapCol = this.db.prepare('PRAGMA table_info(broadcasts)').all().find((col) => col.name === 'recap_id');
@@ -225,7 +232,7 @@ export class LeagueStore {
         insertConsent.run(`consent-${player.id}-sms`, DEMO_LEAGUE.id, player.id, 'sms_results', player.messaging.smsConsent, player.messaging.optedOutAt ? 'sms_stop' : 'player_settings', player.messaging.optedOutAt ?? player.messaging.consentedAt);
         insertConsent.run(`consent-${player.id}-roast`, DEMO_LEAGUE.id, player.id, 'trash_talk', player.trashTalk.level, 'player_settings', player.trashTalk.updatedAt);
         const demoPin = player.phone.replace(/\D/g, '').slice(-4).padStart(4, '0');
-        this.db.prepare('INSERT INTO player_credentials (player_id, pin_hash, updated_at) VALUES (?, ?, ?)').run(player.id, hashPin(demoPin), now);
+        this.db.prepare('INSERT INTO player_credentials (player_id, pin_hash, status, updated_at) VALUES (?, ?, ?, ?)').run(player.id, hashPin(demoPin), 'demo', now);
       }
 
       const insertSheet = this.db.prepare(`INSERT INTO sheets
@@ -293,15 +300,15 @@ export class LeagueStore {
   }
 
   getPlayerCredential(playerId) {
-    const row = this.db.prepare('SELECT player_id, pin_hash FROM player_credentials WHERE player_id = ?').get(playerId);
-    return row ? { playerId: row.player_id, pinHash: row.pin_hash } : null;
+    const row = this.db.prepare('SELECT player_id, pin_hash, status, updated_at FROM player_credentials WHERE player_id = ?').get(playerId);
+    return row ? { playerId: row.player_id, pinHash: row.pin_hash, status: row.status, updatedAt: row.updated_at } : null;
   }
 
   /* Reset a player's PIN (used by the phone-verified self-reset and the
      commissioner reset). */
   setPlayerPin(playerId, pinHash) {
-    this.db.prepare(`INSERT INTO player_credentials (player_id, pin_hash, updated_at) VALUES (?, ?, ?)
-      ON CONFLICT(player_id) DO UPDATE SET pin_hash = excluded.pin_hash, updated_at = excluded.updated_at`)
+    this.db.prepare(`INSERT INTO player_credentials (player_id, pin_hash, status, updated_at) VALUES (?, ?, 'active', ?)
+      ON CONFLICT(player_id) DO UPDATE SET pin_hash = excluded.pin_hash, status = 'active', updated_at = excluded.updated_at`)
       .run(playerId, pinHash, new Date().toISOString());
     return true;
   }
@@ -473,7 +480,7 @@ export class LeagueStore {
         (id, league_id, name, previous_rank, phone_masked, phone_e164, phone_verified_at, messaging_json, trash_talk_json, payment_json, avatar, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(player.id, leagueId, player.name, null, player.phone, player.phoneE164, player.phoneVerifiedAt ?? null, stringify(player.messaging), stringify(player.trashTalk), player.payment ? stringify(player.payment) : null, player.avatar ?? null, at);
-      this.db.prepare('INSERT INTO player_credentials (player_id, pin_hash, updated_at) VALUES (?, ?, ?)').run(player.id, pinHash, at);
+      this.db.prepare("INSERT INTO player_credentials (player_id, pin_hash, status, updated_at) VALUES (?, ?, 'active', ?)").run(player.id, pinHash, at);
       if (player.messaging?.smsConsent) {
         this.db.prepare('INSERT INTO consent_records (id, league_id, player_id, channel, status, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(randomUUID(), leagueId, player.id, 'sms_results', player.messaging.smsConsent, 'registration', at);
@@ -550,6 +557,75 @@ export class LeagueStore {
       .run(entry.id, leagueId, entry.playerId, entry.amount, entry.reason, entry.by, entry.at);
     this.writeAudit(leagueId, 'credit.entry', `${entry.amount > 0 ? '+' : ''}$${Math.abs(entry.amount)} ${entry.amount > 0 ? 'credited to' : 'debited from'} player for: ${entry.reason}`, entry.by, { playerId: entry.playerId, amount: entry.amount });
     return entry;
+  }
+
+  /* Credit every winner and record the payout in one SQLite transaction. */
+  commitWeeklyPayout(leagueId, { payout, credits }) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const existing = this.db.prepare('SELECT data_json FROM payouts WHERE league_id = ?').all(leagueId)
+        .map((row) => parse(row.data_json, {}))
+        .find((item) => item.pool === payout.pool && item.week === payout.week);
+      if (existing) {
+        this.db.exec('ROLLBACK');
+        return { payout: existing, alreadyRecorded: true, credited: 0 };
+      }
+      let credited = 0;
+      for (const entry of credits) {
+        const result = this.db.prepare(`INSERT INTO credit_ledger (id, league_id, player_id, amount, reason, created_by, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
+          .run(entry.id, leagueId, entry.playerId, entry.amount, entry.reason, entry.by, entry.at);
+        if (result.changes) {
+          credited += 1;
+          this.writeAudit(leagueId, 'credit.entry', `+$${Math.abs(entry.amount)} credited to player for: ${entry.reason}`, entry.by, { playerId: entry.playerId, amount: entry.amount });
+        }
+      }
+      this.db.prepare('INSERT INTO payouts (id, league_id, data_json, created_at) VALUES (?, ?, ?, ?)')
+        .run(payout.id, leagueId, stringify(payout), payout.paidAt);
+      this.writeAudit(leagueId, 'payout.recorded', `Week ${payout.week} pot of $${payout.amount} recorded`, payout.paidBy, { payoutId: payout.id, week: payout.week, amount: payout.amount });
+      this.db.exec('COMMIT');
+      return { payout, alreadyRecorded: false, credited };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /* Credit every CFB winner and mark the pool paid in one transaction. */
+  commitCfbPayout(leagueId, { poolId, credits, at, actor }) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.db.prepare('SELECT data_json FROM cfb_pools WHERE league_id = ? AND id = ?').get(leagueId, poolId);
+      if (!row) {
+        this.db.exec('ROLLBACK');
+        return null;
+      }
+      const pool = parse(row.data_json, {});
+      if (pool.potCredited) {
+        this.db.exec('ROLLBACK');
+        return { pool, alreadyRecorded: true, credited: 0 };
+      }
+      let credited = 0;
+      for (const entry of credits) {
+        const result = this.db.prepare(`INSERT INTO credit_ledger (id, league_id, player_id, amount, reason, created_by, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`)
+          .run(entry.id, leagueId, entry.playerId, entry.amount, entry.reason, entry.by, entry.at);
+        if (result.changes) {
+          credited += 1;
+          this.writeAudit(leagueId, 'credit.entry', `+$${Math.abs(entry.amount)} credited to player for: ${entry.reason}`, entry.by, { playerId: entry.playerId, amount: entry.amount }, entry.at, { inTransaction: true });
+        }
+      }
+      pool.potCredited = true;
+      pool.updatedAt = at;
+      this.db.prepare('UPDATE cfb_pools SET data_json = ?, updated_at = ? WHERE league_id = ? AND id = ?')
+        .run(stringify(pool), at, leagueId, poolId);
+      this.writeAudit(leagueId, 'cfb_payout.recorded', `CFB Week ${pool.week} pot credited to ${credits.length} winner(s)`, actor, { poolId, credited }, at, { inTransaction: true });
+      this.db.exec('COMMIT');
+      return { pool, alreadyRecorded: false, credited };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   // Atomically deduct entry fee from credit and mark the CFB pool entry paid.

@@ -16,7 +16,7 @@ function createDemoState() {
   const players = DEMO_LEAGUE.players.map((player) => ({ ...clone(player), leagueId: DEMO_LEAGUE.id, phoneE164: null }));
   const playerCredentials = Object.fromEntries(players.map((player) => {
     const demoPin = player.phone.replace(/\D/g, '').slice(-4).padStart(4, '0');
-    return [player.id, { playerId: player.id, pinHash: hashPin(demoPin), updatedAt: now }];
+    return [player.id, { playerId: player.id, pinHash: hashPin(demoPin), status: 'demo', updatedAt: now }];
   }));
   const consentRecords = players.flatMap((player) => [
     {
@@ -210,7 +210,10 @@ export class PostgresLeagueStore {
   async getPlayerCredential(playerId) {
     const states = await this.readAllStates();
     const credential = states.map((state) => state.playerCredentials?.[playerId]).find(Boolean);
-    return credential ? clone(credential) : null;
+    if (!credential) return null;
+    const legacyDemo = DEMO_LEAGUE.players.some((player) => player.id === playerId)
+      && credential.updatedAt === '2025-11-18T18:00:00.000Z';
+    return { ...clone(credential), status: credential.status ?? (legacyDemo ? 'demo' : 'active') };
   }
 
   /* Reset a player's PIN (phone-verified self-reset or commissioner reset). */
@@ -219,7 +222,7 @@ export class PostgresLeagueStore {
     if (!state) return false;
     await this.mutateLeague(state.id, (draft) => {
       draft.playerCredentials ??= {};
-      draft.playerCredentials[playerId] = { playerId, pinHash, updatedAt: new Date().toISOString() };
+      draft.playerCredentials[playerId] = { playerId, pinHash, status: 'active', updatedAt: new Date().toISOString() };
     });
     return true;
   }
@@ -403,7 +406,7 @@ export class PostgresLeagueStore {
     return this.mutateLeague(leagueId, (draft) => {
       draft.players.push({ ...clone(player), leagueId });
       draft.playerCredentials ??= {};
-      draft.playerCredentials[player.id] = { playerId: player.id, pinHash, updatedAt: at };
+      draft.playerCredentials[player.id] = { playerId: player.id, pinHash, status: 'active', updatedAt: at };
       if (player.messaging?.smsConsent) {
         draft.consentRecords.push({ id: randomUUID(), playerId: player.id, channel: 'sms_results', status: player.messaging.smsConsent, source: 'registration', recordedAt: at });
       }
@@ -488,6 +491,49 @@ export class PostgresLeagueStore {
       draft.creditLedger.push(clone(entry));
       draft.auditLog.push(auditEntry('credit.entry', `${entry.amount > 0 ? '+' : ''}$${Math.abs(entry.amount)} ${entry.amount > 0 ? 'credited to' : 'debited from'} player for: ${entry.reason}`, entry.by, { playerId: entry.playerId, amount: entry.amount }, entry.at));
       return entry;
+    });
+  }
+
+  /* The JSON state, credits, payout, and audits commit under one versioned write. */
+  async commitWeeklyPayout(leagueId, { payout, credits }) {
+    return this.mutateLeague(leagueId, (draft) => {
+      draft.payouts ??= [];
+      draft.creditLedger ??= [];
+      const existing = draft.payouts.find((item) => item.pool === payout.pool && item.week === payout.week);
+      if (existing) return { payout: existing, alreadyRecorded: true, credited: 0 };
+      const existingIds = new Set(draft.creditLedger.map((entry) => entry.id));
+      let credited = 0;
+      for (const entry of credits) {
+        if (existingIds.has(entry.id)) continue;
+        draft.creditLedger.push(clone(entry));
+        draft.auditLog.push(auditEntry('credit.entry', `+$${Math.abs(entry.amount)} credited to player for: ${entry.reason}`, entry.by, { playerId: entry.playerId, amount: entry.amount }, entry.at));
+        credited += 1;
+      }
+      draft.payouts.push(clone(payout));
+      draft.auditLog.push(auditEntry('payout.recorded', `Week ${payout.week} pot of $${payout.amount} recorded`, payout.paidBy, { payoutId: payout.id, week: payout.week, amount: payout.amount }, payout.paidAt));
+      return { payout, alreadyRecorded: false, credited };
+    });
+  }
+
+  /* Credits and the CFB pool's paid marker share one versioned state write. */
+  async commitCfbPayout(leagueId, { poolId, credits, at, actor }) {
+    return this.mutateLeague(leagueId, (draft) => {
+      const pool = (draft.cfbPools ?? []).find((item) => item.id === poolId);
+      if (!pool) return null;
+      if (pool.potCredited) return { pool: clone(pool), alreadyRecorded: true, credited: 0 };
+      draft.creditLedger ??= [];
+      const existingIds = new Set(draft.creditLedger.map((entry) => entry.id));
+      let credited = 0;
+      for (const entry of credits) {
+        if (existingIds.has(entry.id)) continue;
+        draft.creditLedger.push(clone(entry));
+        draft.auditLog.push(auditEntry('credit.entry', `+$${Math.abs(entry.amount)} credited to player for: ${entry.reason}`, entry.by, { playerId: entry.playerId, amount: entry.amount }, entry.at));
+        credited += 1;
+      }
+      pool.potCredited = true;
+      pool.updatedAt = at;
+      draft.auditLog.push(auditEntry('cfb_payout.recorded', `CFB Week ${pool.week} pot credited to ${credits.length} winner(s)`, actor, { poolId, credited }, at));
+      return { pool: clone(pool), alreadyRecorded: false, credited };
     });
   }
 

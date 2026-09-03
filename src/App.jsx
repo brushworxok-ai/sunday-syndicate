@@ -8,7 +8,7 @@ class ErrorBoundary extends Component {
     if (this.state.error) return (
       <div style={{ padding: '2rem', textAlign: 'center', color: '#fff', background: '#111', minHeight: '100dvh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
         <h1 style={{ fontSize: '1.5rem' }}>Something went wrong</h1>
-        <p style={{ color: '#aaa', maxWidth: '24rem' }}>{this.state.error?.message || 'An unexpected error occurred.'}</p>
+        <p style={{ color: '#aaa', maxWidth: '24rem' }}>The app hit an unexpected error. Reload to return to a clean state.</p>
         <button type="button" onClick={() => { this.setState({ error: null }); window.location.reload(); }} style={{ padding: '0.75rem 1.5rem', background: '#00ff87', color: '#000', border: 'none', borderRadius: '8px', fontWeight: 600, cursor: 'pointer' }}>Reload App</button>
       </div>
     );
@@ -25,32 +25,40 @@ import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebrea
 import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
 import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle } from './payment.js';
+import AppIcon from './AppIcon.jsx';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
-  ['home',    'Home',    '🏠'],
-  ['picks',   'Picks',   '🏈'],
-  ['results', 'Board',   '📊'],
-  ['chat',    'Chat',    '💬'],
-  ['more',    'More',    '☰'],
+  ['home',    'Home',    'home'],
+  ['picks',   'Picks',   'picks'],
+  ['results', 'Board',   'results'],
+  ['chat',    'Chat',    'chat'],
+  ['more',    'More',    'more'],
 ];
 
 const MORE_ITEMS = [
-  ['live',     'Game Day Live',    '🔴', 'Live scores, picks & projected standings'],
-  ['stats',    'Player Stats',     '📊', 'Tendencies, streaks & head-to-head'],
-  ['season',   'Season',           '🏆', 'Full-season standings & payouts'],
-  ['survivor', 'Survivor',         '🛡️', "One team a week. Lose once, you're out."],
-  ['props',    'Prop Picks',       '🎯', 'Passing, rushing, first TD & more'],
-  ['cfb',      'College FB',       '🏟️', 'CFB rankings, games & pick-em pools'],
-  ['payments', 'My Payments',      '💰', 'Payment history & balance'],
-  ['notifs',   'Notifications',    '🔔', 'Reminders, payouts & messages'],
-  ['entries',  "Who's In",         '📋', 'Who has picks in & who paid'],
-  ['players',  'My Profile',       '👤', 'Your pic, the crew & settings'],
-  ['bets',     'Side Bets',        '🎲', 'Challenge your crew'],
-  ['ai',       'AI Tools',         '✦',  'Jack-powered insights'],
-  ['rules',    'House Rules',      '📖', 'The fine print'],
-  ['demo',     'Demo Proof',       '🔍', 'Acceptance scenario'],
-  ['admin',    'Commissioner',     '🔒', 'Admin controls'],
+  ['live',     'Game Day Live',    'live', 'Live scores, picks & projected standings'],
+  ['stats',    'Player Stats',     'stats', 'Tendencies, streaks & head-to-head'],
+  ['season',   'Season',           'season', 'Full-season standings & payouts'],
+  ['survivor', 'Survivor',         'survivor', "One team a week. Lose once, you're out."],
+  ['props',    'Prop Picks',       'props', 'Passing, rushing, first TD & more'],
+  ['cfb',      'College FB',       'cfb', 'CFB rankings, games & pick-em pools'],
+  ['payments', 'My Payments',      'payments', 'Payment history & balance'],
+  ['notifs',   'Notifications',    'notifs', 'Reminders, payouts & messages'],
+  ['entries',  "Who's In",         'entries', 'Who has picks in & who paid'],
+  ['players',  'My Profile',       'players', 'Your pic, the crew & settings'],
+  ['bets',     'Side Bets',        'bets', 'Challenge your crew'],
+  ['ai',       'AI Tools',         'ai',  'Jack-powered insights'],
+  ['rules',    'House Rules',      'rules', 'The fine print'],
+  ['demo',     'Demo Proof',       'demo', 'Acceptance scenario'],
+  ['admin',    'Commissioner',     'admin', 'Admin controls'],
+];
+
+const MORE_GROUPS = [
+  ['Play', ['live', 'survivor', 'props', 'cfb', 'bets']],
+  ['League', ['stats', 'season', 'entries', 'rules']],
+  ['Account', ['payments', 'notifs', 'players']],
+  ['Tools', ['ai', 'demo', 'admin']],
 ];
 
 const PRESET_AVATARS = ['🏈', '🔥', '💰', '👑', '🦅', '🐻', '🐅', '🐬', '🐎', '🐺', '🦁', '⚡'];
@@ -98,8 +106,11 @@ function App() {
   const [signupStep, setSignupStep] = useState(1); // 1: info, 2: team+avatar, 3: OTP verify
   const [signupOtp, setSignupOtp] = useState('');
   const [otpSending, setOtpSending] = useState(false);
+<<<<<<< Updated upstream
   const [otpError, setOtpError] = useState('');
   const [otpVerified, setOtpVerified] = useState(false);
+=======
+>>>>>>> Stashed changes
   const [resetPhone, setResetPhone] = useState('');
   const [resetCode, setResetCode] = useState('');
   const [resetPin, setResetPin] = useState('');
@@ -108,7 +119,6 @@ function App() {
   const [handle, setHandle] = useState('');
   const [picks, setPicks] = useState({});
   const [tiebreaker, setTiebreaker] = useState('');
-  const [paid, setPaid] = useState(false);
   const [sheets, setSheets] = useState(DEMO_LEAGUE.sheets);
   const [results, setResults] = useState(DEMO_LEAGUE.results);
   const [chatMsgs, setChatMsgs] = useState(DEMO_CHAT);
@@ -159,9 +169,11 @@ function App() {
     text: "Hey, I'm Jack — your league assistant. Ask me about standings, rules, your picks, or anything else about the league.",
   }]);
   const assistantEndRef = useRef(null);
+  const mainRef = useRef(null);
   const [jackAvatarState, setJackAvatarState] = useState('idle');
   const [jackVoiceConsent, setJackVoiceConsent] = useState(false);
   const [selectedWeek, setSelectedWeek] = useState(() => getCurrentWeek() || WEEK);
+  const entryFee = Number.isFinite(Number(serverLeague?.settings?.entryFee)) ? Number(serverLeague.settings.entryFee) : ENTRY_FEE;
   const [liveScores, setLiveScores] = useState({ week: null, anyLive: false, scores: [] });
   const [nflNews, setNflNews] = useState({ items: [] });
   const [nflInjuries, setNflInjuries] = useState({ teams: [] });
@@ -351,9 +363,13 @@ function App() {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/payment-history`);
       setPaymentHistory(data);
     } catch { /* non-fatal */ }
-  }, [playerSession.authenticated]);
+  }, [playerSession.authenticated, playerSession.playerId]);
 
-  const [notifsSeenAt, setNotifsSeenAt] = useState(() => { try { return localStorage.getItem('notifs-seen-at') || ''; } catch { return ''; } });
+  const notificationStorageKey = `notifs-seen-at:${playerSession.playerId ?? 'signed-out'}`;
+  const [notifsSeenAt, setNotifsSeenAt] = useState('');
+  useEffect(() => {
+    try { setNotifsSeenAt(localStorage.getItem(notificationStorageKey) || ''); } catch { setNotifsSeenAt(''); }
+  }, [notificationStorageKey]);
   const unreadNotifs = useMemo(
     () => notifications.filter((n) => n.kind !== 'payment_claimed' && (!notifsSeenAt || String(n.at) > notifsSeenAt)).length,
     [notifications, notifsSeenAt],
@@ -364,7 +380,7 @@ function App() {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/notifications`);
       setNotifications(data.notifications ?? []);
     } catch { /* non-fatal */ }
-  }, [playerSession.authenticated]);
+  }, [playerSession.authenticated, playerSession.playerId]);
 
   // Load payment & notification data when switching to those views
   useEffect(() => {
@@ -374,9 +390,9 @@ function App() {
       loadNotifications();
       const stamp = new Date().toISOString();
       setNotifsSeenAt(stamp);
-      try { localStorage.setItem('notifs-seen-at', stamp); } catch { /* private mode */ }
+      try { localStorage.setItem(notificationStorageKey, stamp); } catch { /* private mode */ }
     }
-  }, [view, loadPaymentHistory, loadNotifications, playerSession.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, loadPaymentHistory, loadNotifications, playerSession.authenticated, notificationStorageKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Deep-link: open the view specified in ?view= (e.g. invite links)
   useEffect(() => {
@@ -387,12 +403,20 @@ function App() {
       if (valid.includes(v)) setView(v);
       else if (v === 'join') setShowWelcome(true);
     }
+    if (params.get('assistant') === '1') setAssistantOpen(true);
+    const onPopState = () => {
+      const next = new URLSearchParams(window.location.search).get('view') || 'home';
+      const valid = [...MAIN_NAV.map(([id]) => id), ...MORE_ITEMS.map(([id]) => id)];
+      setView(valid.includes(next) && next !== 'more' ? next : 'home');
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   useEffect(() => {
     apiRequest('/api/health')
-      .then((data) => setAiStatus({ checked: true, configured: data.geminiConfigured, model: data.model, database: data.database, smsProvider: data.smsProvider, twilioConfigured: data.twilioConfigured }))
-      .catch(() => setAiStatus({ checked: true, configured: false, model: '', database: '', smsProvider: 'offline', twilioConfigured: false }));
+      .then((data) => setAiStatus({ checked: true, configured: data.geminiConfigured, model: data.model, database: data.database, smsProvider: data.smsProvider, twilioConfigured: data.twilioConfigured, registrationRequiresOtp: data.registrationRequiresOtp }))
+      .catch(() => setAiStatus({ checked: true, configured: false, model: '', database: '', smsProvider: 'offline', twilioConfigured: false, registrationRequiresOtp: true }));
     apiRequest('/api/auth/status').then((status) => setIsComm(status.authenticated)).catch(() => {});
     apiRequest('/api/auth/player/status').then(setPlayerSession).catch(() => {});
     loadLeague();
@@ -504,7 +528,7 @@ function App() {
   // Count only finals for the games actually on this week's slate — results from
   // other weeks (e.g. leftover demo data) must not inflate the "X of Y final" label.
   const completedGames = currentGames.filter((game) => results[game.id]?.winner).length;
-  const pot = weekSheets.filter((sheet) => sheet.paid).length * ENTRY_FEE;
+  const pot = weekSheets.filter((sheet) => sheet.paid).length * entryFee;
   const totalPot = pot + Number(rolloverPot || 0);
 
   const calcScore = (sheet) => Object.entries(sheet.picks).reduce(
@@ -550,7 +574,7 @@ function App() {
       const winners = complete && top
         ? scored.filter((s) => s.score === top.score && tiebreakerRank(s.tiebreaker, tbTotal) === tiebreakerRank(top.tiebreaker, tbTotal))
         : [];
-      const weekPot = ws.filter((s) => s.paid).length * ENTRY_FEE;
+      const weekPot = ws.filter((s) => s.paid).length * entryFee;
       const payout = (serverLeague?.payouts ?? []).find((p) => p.week === week && (p.pool ?? 'weekly') === 'weekly');
       weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
       for (const s of scored) {
@@ -599,7 +623,7 @@ function App() {
 
   const ensureAdmin = async () => {
     if (isComm) return true;
-    setView('admin');
+    navigate('admin');
     notify('Sign in as commissioner to complete that action.');
     return false;
   };
@@ -611,6 +635,7 @@ function App() {
       await apiRequest('/api/auth/admin', { method: 'POST', body: JSON.stringify({ password: adminPassword }) });
       setIsComm(true);
       setAdminPassword('');
+      await loadLeague();
       notify('Signed in as commissioner.');
     } catch (error) {
       notify(error.message);
@@ -818,10 +843,41 @@ function App() {
   // the app underneath (iOS otherwise scrolls the background and the sheet's
   // buttons look "frozen" below the fold).
   useEffect(() => {
-    const open = showWelcome || showMore || showOnboarding;
+    const open = showWelcome || showMore || showOnboarding || assistantOpen || Boolean(recapShow);
     document.body.classList.toggle('modal-open', open);
-    return () => document.body.classList.remove('modal-open');
-  }, [showWelcome, showMore, showOnboarding]);
+    if (!open) return () => document.body.classList.remove('modal-open');
+
+    const previouslyFocused = document.activeElement;
+    const background = [...document.querySelectorAll('.site-header, #main-content, .nav-tabs, footer, .jack-fab')];
+    background.forEach((element) => { element.inert = true; });
+    const dialog = document.querySelector('[role="dialog"][aria-modal="true"]');
+    const focusableSelector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusable = dialog ? [...dialog.querySelectorAll(focusableSelector)] : [];
+    requestAnimationFrame(() => (focusable[0] ?? dialog)?.focus());
+
+    const closeTopDialog = () => {
+      if (recapShow) setRecapShow(null);
+      else if (assistantOpen) { setAssistantOpen(false); stopSpeaking(); }
+      else if (showWelcome) setShowWelcome(false);
+      else if (showOnboarding) dismissOnboarding();
+      else if (showMore) setShowMore(false);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); closeTopDialog(); return; }
+      if (event.key !== 'Tab' || !focusable.length) return;
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.classList.remove('modal-open');
+      document.removeEventListener('keydown', onKeyDown);
+      background.forEach((element) => { element.inert = false; });
+      if (previouslyFocused?.isConnected) previouslyFocused.focus();
+    };
+  }, [showWelcome, showMore, showOnboarding, assistantOpen, recapShow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep the pay-handle form in sync with the saved profile (per player, per save).
   useEffect(() => {
@@ -933,21 +989,22 @@ function App() {
   const submit = async () => {
     if (weekLocked) return notify(`${weekLabel} is locked — picks were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first game.`);
     if (selectedWeek !== getCurrentWeek()) return notify(`Picks are only open for Week ${getCurrentWeek()} right now — switch the week at the top to lock in.`);
-    // Signed-in players are identified by their session — the server uses that,
-    // not this field — so only guests need to type a name.
-    if (!playerSession.authenticated && !name.trim()) return notify('Add your name before locking in.');
+    if (!playerSession.authenticated) {
+      setWelcomeMode('signin');
+      setShowWelcome(true);
+      return notify('Sign in before locking in your picks.');
+    }
     if (Object.keys(picks).length !== currentGames.length) return notify(`Finish all ${currentGames.length} picks first.`);
     if (!tiebreaker || Number(tiebreaker) < 0) return notify('Add a valid tiebreaker total.');
-    if (!paid && !playerSession.authenticated) return notify('Confirm your payment first.');
 
     setServerBusy('entry');
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/entries`, { method: 'POST', body: JSON.stringify({ name: name.trim(), handle: handle.trim(), picks, tiebreaker: Number(tiebreaker), paid, week: selectedWeek, playerId: playerSession.playerId ?? undefined }) });
+       await apiRequest(`/api/leagues/${LEAGUE_ID}/entries`, { method: 'POST', body: JSON.stringify({ name: playerSession.name, picks, tiebreaker: Number(tiebreaker), paid: false, week: selectedWeek }) });
       await loadLeague();
       // Stay on the sheet in a confirmed state (picks + tiebreaker kept), and
       // bring the pay block into view if they still owe the entry.
-      const wasPaid = paid || Boolean(mySheet?.paid);
-      notify(wasPaid ? `You're in for ${weekLabel}. Good luck.` : `You're in for ${weekLabel} — now pay your $${ENTRY_FEE} entry below.`);
+       const wasPaid = Boolean(mySheet?.paid);
+       notify(wasPaid ? `You're in for ${weekLabel}. Good luck.` : `You're in for ${weekLabel} — now pay your $${entryFee} entry below.`);
       setTimeout(() => slipRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
@@ -966,6 +1023,8 @@ function App() {
   };
 
   const chatEndRef = useRef(null);
+  const chatMessagesRef = useRef(null);
+  const chatShouldStickRef = useRef(true);
 
   // Keep the chat live: refresh every 12s while the Chat tab is open.
   useEffect(() => {
@@ -976,8 +1035,9 @@ function App() {
 
   // Auto-scroll chat to bottom when messages change
   useEffect(() => {
-    if (view === 'chat' && chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (view === 'chat' && chatEndRef.current && chatShouldStickRef.current) {
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      chatEndRef.current.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth' });
     }
   }, [chatMsgs, view]);
 
@@ -1269,7 +1329,12 @@ function App() {
       return;
     }
     setShowMore(false);
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', target);
+    url.searchParams.delete('assistant');
+    window.history.pushState({ view: target }, '', url);
     setView(target);
+    requestAnimationFrame(() => mainRef.current?.focus({ preventScroll: true }));
   };
 
   const updatePreferences = async (playerId, changes) => {
@@ -1288,6 +1353,9 @@ function App() {
     setServerBusy('player-login');
     try {
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify(playerLogin) });
+      setPaymentHistory(null);
+      setNotifications([]);
+      setAssistantMessages((messages) => messages.slice(0, 1));
       setPlayerSession(session);
       if (session.name) setChatName(session.name);
       setBetForm((current) => ({ ...current, creatorId: session.playerId, opponentId: current.opponentId === session.playerId ? proofLeague.players.find((player) => player.id !== session.playerId)?.id ?? '' : current.opponentId }));
@@ -1302,6 +1370,12 @@ function App() {
   const logoutPlayer = async () => {
     await apiRequest('/api/auth/player', { method: 'DELETE' });
     setPlayerSession({ authenticated: false, playerId: null, name: null });
+    setPaymentHistory(null);
+    setNotifications([]);
+    setChatName('');
+    setPropPicks({});
+    setCfbMyPicks({});
+    setAssistantMessages((messages) => messages.slice(0, 1));
     notify('Signed out.');
   };
 
@@ -1442,7 +1516,7 @@ function App() {
     const url = `${window.location.origin}/?view=join`;
     const shareData = {
       title: '405 BAD GUYS PARLAYS',
-      text: `Join our NFL pick'em league — $${ENTRY_FEE}/week, winner takes the pot. Tap to join:`,
+      text: `Join our NFL pick'em league — $${entryFee}/week, winner takes the pot. Tap to join:`,
       url,
     };
     try {
@@ -1482,6 +1556,7 @@ function App() {
       const reg = await navigator.serviceWorker.ready;
       if (pushEnabled) {
         const sub = await reg.pushManager.getSubscription();
+        await apiRequest(`/api/leagues/${LEAGUE_ID}/push/subscribe`, { method: 'DELETE' });
         if (sub) await sub.unsubscribe();
         setPushEnabled(false);
         notify('Push notifications disabled.');
@@ -1584,51 +1659,39 @@ function App() {
     setOtpSending(false);
   };
 
-  const verifyOtpCode = async () => {
-    try {
-      const result = await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: signupPhone, code: signupOtp }) });
-      if (result.verified) {
-        setOtpVerified(true);
-        notify('Phone verified!');
-        return true;
-      }
-    } catch (error) { notify(error.message); }
-    return false;
-  };
-
   // SMS is only "live" when a real provider is wired; otherwise codes never
   // actually send, so we must not force a verification step.
   const smsLive = () => ['telnyx', 'twilio', 'textbelt'].includes(aiStatus.smsProvider);
 
-  // Shared registration: create the account, sign in, greet. otpVerified marks
-  // whether the phone was confirmed (drives SMS-consent status server-side).
-  const finishRegistration = async (otpVerified) => {
+  // Shared registration: the server consumes the short-lived verification
+  // record instead of trusting any client-side "verified" flag.
+  const finishRegistration = async () => {
     setServerBusy('register');
     try {
       const registered = await apiRequest(`/api/leagues/${LEAGUE_ID}/players/register`, {
         method: 'POST',
-        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified, payment: parseQuickPay(signupPay) }),
+        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, payment: parseQuickPay(signupPay) }),
       });
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify({ playerId: registered.playerId, pin: signupPin }) });
       setPlayerSession(session);
       await loadLeague();
       setName(registered.name);
       setChatName(registered.name);
-      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam(''); setSignupAvatar(''); setSignupAvatarFile(null); setSignupStep(1); setSignupOtp(''); setOtpVerified(false);
+      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam(''); setSignupAvatar(''); setSignupAvatarFile(null); setSignupStep(1); setSignupOtp('');
       setShowWelcome(false);
       notify(`Welcome to the 405 BadGuys Parlay, ${registered.name}! You're in.`);
       // Jack greets the new player with the house rules
       setAssistantMessages((prev) => [...prev, {
         id: `jack-onboard-${Date.now()}`,
         role: 'assistant',
-        text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Picks lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours BEFORE the week's first game — the exact time is on the Picks page — so don't be that guy texting me at kickoff. Ask me anything — rules, standings, your picks. I got you.`,
+        text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${entryFee} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Picks lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours BEFORE the week's first game — the exact time is on the Picks page — so don't be that guy texting me at kickoff. Ask me anything — rules, standings, your picks. I got you.`,
       }]);
       // Don't slam a full-screen Jack drawer over the app the second someone
       // joins — on a phone it hides the tab bar and reads as a freeze. Jack's
       // welcome is waiting in Chat and in the Ask Jack drawer; land on Home.
       setAssistantOpen(false);
       setShowMore(false);
-      setView('home');
+      navigate('home');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (error) {
       if (/already registered/i.test(error.message)) {
@@ -1650,14 +1713,17 @@ function App() {
     if (signupStep === 1) {
       if (!signupName.trim()) return notify('Enter your name.');
       if (signupPhone.replace(/\D/g, '').length < 10) return notify('Enter your 10-digit phone number.');
-      if (signupPin.length < 4) return notify('Create a 4-digit PIN.');
+      if (signupPin.length !== 6) return notify('Create a 6-digit PIN.');
       return setSignupStep(2);
     }
     if (signupStep === 2) {
       if (!signupTeam) return notify('Pick your favorite team — Jack needs to know who to roast.');
       if (!signupAvatar && !signupAvatarFile) return notify('Choose an avatar or upload a pic.');
       // No SMS provider wired → skip the code step entirely and just register.
-      if (!smsLive()) return finishRegistration(false);
+      if (!smsLive()) {
+        if (aiStatus.registrationRequiresOtp) return notify('Joining is temporarily unavailable until SMS verification is configured.');
+        return finishRegistration();
+      }
       setSignupStep(3);
       setOtpSending(true);
       setOtpError('');
@@ -1668,26 +1734,26 @@ function App() {
       setOtpSending(false);
       return;
     }
-    // Step 3: if they entered a code, verify it and register; a wrong code just
-    // lets them retry or use "Join without a code" — nobody gets walled here.
+    // Step 3: verify on the server, then registration consumes that one-time
+    // proof. Local development alone exposes the no-code escape hatch.
     if (signupOtp && signupOtp.length === 6) {
       try {
-        const otpResult = await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: signupPhone, code: signupOtp }) });
-        return finishRegistration(Boolean(otpResult.verified));
+        await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: signupPhone, code: signupOtp }) });
+        return finishRegistration();
       } catch (error) { return notify(error.message); }
     }
-    return notify('Enter the 6-digit code, or tap “Join without a code”.');
+    return notify(aiStatus.registrationRequiresOtp ? 'Enter the 6-digit code.' : 'Enter the 6-digit code, or use the development-mode no-code option.');
   };
 
-  // Escape hatch so a missing/late text never blocks joining.
-  const joinWithoutCode = () => finishRegistration(false);
+  // Local-only escape hatch. Deployed registration always requires OTP.
+  const joinWithoutCode = () => finishRegistration();
 
   // Commissioner sets a new PIN for a player who's locked out.
   const commissionerResetPin = async (player) => {
     if (!(await ensureAdmin())) return;
-    const pin = window.prompt(`Set a new 4-digit PIN for ${player.name} (tell them what it is):`);
+    const pin = window.prompt(`Set a new 6-digit PIN for ${player.name} (tell them what it is):`);
     if (pin == null) return;
-    if (!/^\d{4}$/.test(pin.trim())) return notify('PIN must be exactly 4 digits.');
+    if (!/^\d{6}$/.test(pin.trim())) return notify('PIN must be exactly 6 digits.');
     setServerBusy(`reset-${player.id}`);
     try {
       await apiRequest(`/api/leagues/${LEAGUE_ID}/players/${player.id}/reset-pin`, { method: 'POST', body: JSON.stringify({ pin: pin.trim() }) });
@@ -1710,7 +1776,7 @@ function App() {
   const submitPinReset = async (event) => {
     event.preventDefault();
     if (resetCode.length !== 6) return notify('Enter the 6-digit code from your text.');
-    if (resetPin.length !== 4) return notify('Choose a new 4-digit PIN.');
+    if (resetPin.length !== 6) return notify('Choose a new 6-digit PIN.');
     setServerBusy('reset-pin');
     try {
       const v = await apiRequest('/api/otp/verify', { method: 'POST', body: JSON.stringify({ phone: resetPhone, code: resetCode }) });
@@ -1726,11 +1792,13 @@ function App() {
 
   // Determine active tab (map sub-views to parent)
   const activeTab = ['live', 'stats', 'season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin', 'payments', 'notifs'].includes(view) ? 'more' : view;
+  const visibleMoreItems = MORE_ITEMS.filter(([id]) => isComm || !['demo', 'ai'].includes(id));
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">Skip to main content</a>
       <header className="site-header">
-        <button className="brand" type="button" onClick={() => setView('home')} aria-label="Go home">
+        <button className="brand" type="button" onClick={() => navigate('home')} aria-label="Go home">
           <span className="brand-mark">405</span>
           <span><strong>405 BADGUYS</strong><small>PARLAY</small></span>
         </button>
@@ -1748,15 +1816,15 @@ function App() {
           ) : (
             <button className="header-signin" type="button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button>
           )}
-          <button className={`header-admin ${isComm ? 'active' : ''}`} type="button" onClick={() => navigate('admin')} title={isComm ? 'Commissioner tools' : 'Commissioner login'} aria-label={isComm ? 'Commissioner tools' : 'Commissioner login'}>🔒</button>
+          <button className={`header-admin ${isComm ? 'active' : ''}`} type="button" onClick={() => navigate('admin')} title={isComm ? 'Commissioner tools' : 'Commissioner login'} aria-label={isComm ? 'Commissioner tools' : 'Commissioner login'}><AppIcon name="admin" size={18} /></button>
         </div>
       </header>
 
       {/* ── Bottom Navigation ── */}
       <nav className="nav-tabs" aria-label="Main navigation">
         {MAIN_NAV.map(([id, label, icon]) => (
-          <button className={activeTab === id ? 'active' : ''} type="button" key={id} onClick={() => navigate(id)}>
-            <span className="nav-icon">{icon}{id === 'more' && unreadNotifs > 0 && <i className="nav-badge" aria-label={`${unreadNotifs} new`}>{unreadNotifs > 9 ? '9+' : unreadNotifs}</i>}</span>
+          <button className={activeTab === id ? 'active' : ''} type="button" key={id} onClick={() => navigate(id)} aria-current={activeTab === id ? 'page' : undefined} aria-expanded={id === 'more' ? showMore : undefined}>
+            <span className="nav-icon"><AppIcon name={icon} />{id === 'more' && unreadNotifs > 0 && <i className="nav-badge" aria-label={`${unreadNotifs} new`}>{unreadNotifs > 9 ? '9+' : unreadNotifs}</i>}</span>
             {label}
           </button>
         ))}
@@ -1765,19 +1833,23 @@ function App() {
       {/* ── More Menu Overlay ── */}
       {showMore && (
         <div className="more-menu-overlay" onClick={(e) => e.target === e.currentTarget && setShowMore(false)}>
-          <div className="more-menu">
+          <div className="more-menu" role="dialog" aria-modal="true" aria-labelledby="more-menu-title">
             <div className="more-menu-header">
-              <h3>More</h3>
-              <button className="more-menu-close" type="button" onClick={() => setShowMore(false)}>×</button>
+              <h3 id="more-menu-title">More</h3>
+              <button className="more-menu-close" type="button" onClick={() => setShowMore(false)} aria-label="Close menu">×</button>
             </div>
             <div className="more-menu-items">
-              {MORE_ITEMS.filter(([id]) => isComm || !['demo', 'ai'].includes(id)).map(([id, label, icon, desc]) => (
-                <button className="more-menu-item" type="button" key={id} onClick={() => { setView(id); setShowMore(false); }}>
-                  <span className="menu-icon">{icon}</span>
-                  {label}{id === 'notifs' && unreadNotifs > 0 && <i className="menu-badge">{unreadNotifs > 9 ? '9+' : unreadNotifs}</i>}
-                  <span>{desc}</span>
-                </button>
-              ))}
+              {MORE_GROUPS.map(([group, ids]) => {
+                const items = visibleMoreItems.filter(([id]) => ids.includes(id));
+                if (!items.length) return null;
+                return <section className="more-menu-group" key={group}><h4>{group}</h4>{items.map(([id, label, icon, desc]) => (
+                  <button className="more-menu-item" type="button" key={id} onClick={() => navigate(id)}>
+                    <span className="menu-icon"><AppIcon name={icon} /></span>
+                    {label}{id === 'notifs' && unreadNotifs > 0 && <i className="menu-badge" aria-label={`${unreadNotifs} unread notifications`}>{unreadNotifs > 9 ? '9+' : unreadNotifs}</i>}
+                    <span>{desc}</span>
+                  </button>
+                ))}</section>;
+              })}
             </div>
           </div>
         </div>
@@ -1794,12 +1866,13 @@ function App() {
         const s = slides[onboardStep];
         return (
           <div className="onboard-overlay" onClick={(e) => e.target === e.currentTarget && dismissOnboarding()}>
-            <div className="onboard-card">
+            <div className="onboard-card" role="dialog" aria-modal="true" aria-labelledby="onboard-title" tabIndex="-1">
               <button className="onboard-skip" type="button" onClick={dismissOnboarding}>Skip</button>
               <div className="onboard-icon" aria-hidden="true">{s.icon}</div>
-              <h2>{s.title}</h2>
+              <h2 id="onboard-title">{s.title}</h2>
               <p>{s.body}</p>
               <div className="onboard-dots" aria-hidden="true">{slides.map((_, i) => <i key={i} className={i === onboardStep ? 'on' : ''} />)}</div>
+              <p className="sr-only" aria-live="polite">Step {onboardStep + 1} of {slides.length}</p>
               <div className="onboard-actions">
                 {onboardStep > 0 && <button type="button" className="button button-ghost" onClick={() => setOnboardStep((n) => n - 1)}>← Back</button>}
                 {!last
@@ -1814,10 +1887,10 @@ function App() {
       {/* ── Welcome / Account Creation Screen ── */}
       {showWelcome && (
         <div className="more-menu-overlay" onClick={(e) => e.target === e.currentTarget && setShowWelcome(false)}>
-          <div className="more-menu tall">
+          <div className="more-menu tall" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title" tabIndex="-1">
             <div className="more-menu-header">
-              <h3>{welcomeMode === 'join' ? 'Join the League' : welcomeMode === 'reset' ? 'Reset your PIN' : 'Sign In'}</h3>
-              <button className="more-menu-close" type="button" onClick={() => setShowWelcome(false)}>×</button>
+              <h3 id="account-dialog-title">{welcomeMode === 'join' ? 'Join the League' : welcomeMode === 'reset' ? 'Reset your PIN' : 'Sign In'}</h3>
+              <button className="more-menu-close" type="button" onClick={() => setShowWelcome(false)} aria-label="Close account dialog">×</button>
             </div>
             <div className="welcome-form" style={{ border: 0, background: 'transparent', padding: '0 4px' }}>
               <div className="welcome-tabs">
@@ -1835,9 +1908,9 @@ function App() {
                   </div>
 
                   {signupStep === 1 && (<>
-                    <label>Your name<input value={signupName} onChange={(e) => setSignupName(e.target.value)} placeholder="First and last" maxLength="50" autoFocus /></label>
-                    <label>Phone <small style={{ float: 'right', fontWeight: 400 }}>for SMS updates</small><input value={signupPhone} onChange={(e) => setSignupPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
-                    <label>Create a PIN<input value={signupPin} onChange={(e) => setSignupPin(e.target.value.replace(/\D/g, ''))} placeholder="4 digits" maxLength="4" type="password" inputMode="numeric" /></label>
+                    <label>Your name<input value={signupName} onChange={(e) => setSignupName(e.target.value)} placeholder="First and last" maxLength="50" autoComplete="name" autoFocus /></label>
+                    <label>Phone <small style={{ float: 'right', fontWeight: 400 }}>for SMS updates</small><input value={signupPhone} onChange={(e) => setSignupPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" autoComplete="tel" /></label>
+                    <label>Create a PIN<input value={signupPin} onChange={(e) => setSignupPin(e.target.value.replace(/\D/g, ''))} placeholder="6 digits" maxLength="6" type="password" inputMode="numeric" autoComplete="new-password" /></label>
                     <button className="button button-primary full" style={{ marginTop: 16 }}>Next · Pick your team →</button>
                     <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.45)', marginTop: 10 }}>Your number is used for game results, reminders, and Jack's weekly texts. Reply STOP to any message to opt out.</p>
                   </>)}
@@ -1856,12 +1929,12 @@ function App() {
                       <p className="signup-avatar-label">Profile pic</p>
                       <div className="signup-avatar-grid">
                         {PRESET_AVATARS.map((emoji) => (
-                          <button type="button" key={emoji} className={`avatar-pick ${signupAvatar === emoji ? 'selected' : ''}`} onClick={() => { setSignupAvatar(emoji); setSignupAvatarFile(null); }}>{emoji}</button>
+                          <button type="button" key={emoji} className={`avatar-pick ${signupAvatar === emoji ? 'selected' : ''}`} aria-label={`Use ${emoji} as profile picture`} aria-pressed={signupAvatar === emoji} onClick={() => { setSignupAvatar(emoji); setSignupAvatarFile(null); }}>{emoji}</button>
                         ))}
                       </div>
                       <div className="signup-avatar-upload">
                         <label className="upload-btn">
-                          📷 Upload photo
+                          <AppIcon name="camera" size={18} /> Upload photo
                           <input type="file" accept="image/*" onChange={handleAvatarUpload} hidden />
                         </label>
                         {signupAvatarFile && <div className="avatar-preview-img"><img src={signupAvatarFile} alt="Your avatar" /><span>✓</span></div>}
@@ -1870,7 +1943,7 @@ function App() {
 
                     <div className="signup-btn-row">
                       <button type="button" className="button button-ghost" onClick={() => setSignupStep(1)}>← Back</button>
-                      <button className="button button-primary">{smsLive() ? 'Next · Verify phone →' : 'Join the league →'}</button>
+                      <button className="button button-primary" disabled={!smsLive() && aiStatus.registrationRequiresOtp}>{smsLive() ? 'Next · Verify phone →' : aiStatus.registrationRequiresOtp ? 'SMS setup required' : 'Join the league →'}</button>
                     </div>
                   </>)}
 
@@ -1901,18 +1974,18 @@ function App() {
                       <button type="button" className="button button-ghost" onClick={() => { setSignupStep(2); setSignupOtp(''); }}>← Back</button>
                       <button className="button button-primary" disabled={serverBusy === 'register' || signupOtp.length !== 6}>{serverBusy === 'register' ? 'Joining…' : 'Join the league →'}</button>
                     </div>
-                    <button type="button" className="link-button otp-skip" onClick={joinWithoutCode} disabled={serverBusy === 'register'}>Didn’t get a text? Join without a code →</button>
+                    {!aiStatus.registrationRequiresOtp && <button type="button" className="link-button otp-skip" onClick={joinWithoutCode} disabled={serverBusy === 'register'}>Development mode: join without a code →</button>}
                   </>)}
                 </form>
               ) : welcomeMode === 'reset' ? (
                 <form onSubmit={submitPinReset}>
                   {smsLive() ? (<>
                     <p className="reset-intro">Enter the phone number on your account and we’ll text a code to reset your PIN.</p>
-                    <label>Phone<input value={resetPhone} onChange={(e) => setResetPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
+                    <label>Phone<input value={resetPhone} onChange={(e) => setResetPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" autoComplete="tel" /></label>
                     <button type="button" className="button button-ghost-dark full" onClick={sendResetCode} disabled={serverBusy === 'reset-send'} style={{ marginTop: 8 }}>{serverBusy === 'reset-send' ? 'Sending…' : resetSent ? 'Resend code' : 'Send code'}</button>
                     {resetSent && (<>
                       <label style={{ marginTop: 12 }}>Code<input value={resetCode} onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ''))} placeholder="6-digit code" maxLength="6" inputMode="numeric" autoComplete="one-time-code" /></label>
-                      <label>New PIN<input type="password" inputMode="numeric" maxLength="4" value={resetPin} onChange={(e) => setResetPin(e.target.value.replace(/\D/g, ''))} placeholder="New 4-digit PIN" /></label>
+                      <label>New PIN<input type="password" inputMode="numeric" maxLength="6" value={resetPin} onChange={(e) => setResetPin(e.target.value.replace(/\D/g, ''))} placeholder="New 6-digit PIN" autoComplete="new-password" /></label>
                       <button className="button button-primary full" disabled={serverBusy === 'reset-pin'} style={{ marginTop: 14 }}>{serverBusy === 'reset-pin' ? 'Resetting…' : 'Reset PIN'}</button>
                     </>)}
                   </>) : (
@@ -1923,8 +1996,8 @@ function App() {
               ) : (
                 <form onSubmit={loginPlayer}>
                   <label>Player<select aria-label="Player identity" value={playerLogin.playerId} onChange={(event) => setPlayerLogin((current) => ({ ...current, playerId: event.target.value }))}>{proofLeague.players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label>
-                  <label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="4" value={playerLogin.pin} onChange={(event) => setPlayerLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} placeholder="4-digit PIN" /></label>
-                  <button className="button button-primary full" disabled={serverBusy === 'player-login' || playerLogin.pin.length !== 4} style={{ marginTop: 16 }}>{serverBusy === 'player-login' ? 'Signing in…' : 'Sign In'}</button>
+                  <label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="6" value={playerLogin.pin} onChange={(event) => setPlayerLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} placeholder="4–6 digit PIN" autoComplete="current-password" /></label>
+                  <button className="button button-primary full" disabled={serverBusy === 'player-login' || playerLogin.pin.length < 4} style={{ marginTop: 16 }}>{serverBusy === 'player-login' ? 'Signing in…' : 'Sign In'}</button>
                   <button type="button" className="link-button" onClick={() => setWelcomeMode('reset')} style={{ marginTop: 12, display: 'block' }}>Forgot your PIN?</button>
                 </form>
               )}
@@ -1933,7 +2006,7 @@ function App() {
         </div>
       )}
 
-      <main>
+      <main id="main-content" ref={mainRef} tabIndex="-1">
         {serverError && <div className="server-banner"><strong>Server connection unavailable.</strong><span>{serverError} The seeded read-only fixture remains visible.</span><button type="button" onClick={loadLeague}>Retry</button></div>}
 
         {view === 'home' && (
@@ -1944,19 +2017,19 @@ function App() {
                 <h1>{currentGames.length} games.<br /><em>One clean sheet.</em></h1>
                 <p>{weekLocked ? 'Picks are in — watch the board and talk your trash.' : 'Call every winner, survive the tiebreaker, and earn the right to be unbearable until next week.'}</p>
                 <div className="hero-actions">
-                  <button className="button button-light" type="button" onClick={() => setView('picks')}>Make my picks <span>→</span></button>
+                  <button className="button button-light" type="button" onClick={() => navigate('picks')}>Make my picks <span>→</span></button>
                   {!playerSession.authenticated && (
                     <button className="button button-ghost" type="button" onClick={() => setShowWelcome(true)}>Join the league</button>
                   )}
                   {playerSession.authenticated && (
-                    <button className="button button-ghost" type="button" onClick={() => setView('results')}>View standings</button>
+                    <button className="button button-ghost" type="button" onClick={() => navigate('results')}>View standings</button>
                   )}
-                  <button className="button button-invite" type="button" onClick={shareInviteLink}>{shareCopied ? '✓ Copied!' : '📤 Invite friends'}</button>
+                  <button className="button button-invite" type="button" onClick={shareInviteLink}>{shareCopied ? '✓ Copied!' : <><AppIcon name="share" size={18} /> Invite friends</>}</button>
                 </div>
               </div>
               <div className="hero-scorecard">
                 <span className="scorecard-label">This week's pot</span>
-                <strong>${totalPot.toLocaleString()}</strong>
+                <strong>{playerSession.authenticated ? `$${totalPot.toLocaleString()}` : 'Members only'}</strong>
                 <div><span>{weekSheets.length} entries</span><span>{completedGames}/{currentGames.length} final</span></div>
                 {rolloverPot > 0 && <p>Includes ${Number(rolloverPot).toLocaleString()} rollover</p>}
               </div>
@@ -2041,14 +2114,14 @@ function App() {
                       <div className="panel-heading"><div><span className="eyebrow dark">YOU · {weekLabel.toUpperCase()}</span><h2>{mySheet ? (mySheet.paid ? "You're in and paid" : 'Picks in — entry not paid') : weekLocked ? 'You sat this week out' : 'No picks in yet'}</h2></div></div>
                       <div className="you-week-rows">
                         <div className={`you-row ${mySheet ? 'ok' : 'todo'}`}><span>{mySheet ? '✅' : '○'}</span><div><strong>Picks</strong><small>{mySheet ? `${Object.keys(mySheet.picks ?? {}).length}/${currentGames.length} in · TB ${mySheet.tiebreaker}` : weekLocked ? 'Locked' : `Lock in before ${deadlineCountdown ? `${deadlineCountdown} from now` : 'the deadline'}`}</small></div></div>
-                        <div className={`you-row ${mySheet?.paid ? 'ok' : mySheet ? 'todo' : ''}`}><span>{mySheet?.paid ? '✅' : mySheet ? '⚠️' : '○'}</span><div><strong>Entry</strong><small>{mySheet?.paid ? `$${ENTRY_FEE} paid` : mySheet ? (mySheet.paymentClaim ? 'You said you sent it — waiting on commissioner' : `$${ENTRY_FEE} due`) : 'Pay after your picks are in'}</small></div></div>
+                        <div className={`you-row ${mySheet?.paid ? 'ok' : mySheet ? 'todo' : ''}`}><span>{mySheet?.paid ? '✅' : mySheet ? '⚠️' : '○'}</span><div><strong>Entry</strong><small>{mySheet?.paid ? `$${entryFee} paid` : mySheet ? (mySheet.paymentClaim ? 'You said you sent it — waiting on commissioner' : `$${entryFee} due`) : 'Pay after your picks are in'}</small></div></div>
                         {myRank > 0 && <div className="you-row ok"><span>🏆</span><div><strong>Rank</strong><small>#{myRank} of {leaderboard.length} · {leaderboard[myRank - 1]?.score ?? 0} correct so far</small></div></div>}
-                        {currentPlayer && !hasPaymentHandle(currentPlayer) && <button type="button" className="you-row todo you-row-button" onClick={() => setView('players')}><span>💸</span><div><strong>Where do we send your winnings?</strong><small>Add your Cash App or Venmo to your profile →</small></div></button>}
+                        {currentPlayer && !hasPaymentHandle(currentPlayer) && <button type="button" className="you-row todo you-row-button" onClick={() => navigate('players')}><span>💸</span><div><strong>Where do we send your winnings?</strong><small>Add your Cash App or Venmo to your profile →</small></div></button>}
                       </div>
                       <div className="you-week-actions">
-                        {!weekLocked && <button className="button button-primary" type="button" onClick={() => setView('picks')}>{mySheet ? 'Update picks' : 'Make my picks'} →</button>}
-                        {mySheet && !mySheet.paid && <button className="button button-ghost-dark" type="button" onClick={() => setView('payments')}>Pay entry</button>}
-                        {weekLocked && <button className="button button-ghost-dark" type="button" onClick={() => setView('results')}>See the board</button>}
+                        {!weekLocked && <button className="button button-primary" type="button" onClick={() => navigate('picks')}>{mySheet ? 'Update picks' : 'Make my picks'} →</button>}
+                        {mySheet && !mySheet.paid && <button className="button button-ghost-dark" type="button" onClick={() => navigate('payments')}>Pay entry</button>}
+                        {weekLocked && <button className="button button-ghost-dark" type="button" onClick={() => navigate('results')}>See the board</button>}
                       </div>
                     </div>
                   ) : (
@@ -2121,23 +2194,22 @@ function App() {
               )}
               <label>Tiebreaker total<input ref={tiebreakerRef} type="number" min="0" value={tiebreaker} onChange={(event) => setTiebreaker(event.target.value)} placeholder="48" /></label>
               <p className="rule-note"><strong>Closest without going over wins.</strong> Going over means your tiebreaker is busted.</p>
-              {!playerSession.authenticated && <label className="check-row"><input type="checkbox" checked={paid} onChange={(event) => setPaid(event.target.checked)} /><span>I confirm I sent ${ENTRY_FEE}</span></label>}
               {playerSession.authenticated && (() => {
                 if (mySheet?.paid) return <div className="credit-paid-banner">✅ This week's entry is paid.</div>;
                 return (
                   <div className="credit-chip-row">
                     <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
-                    {mySheet && myCredit >= ENTRY_FEE && (
+                    {mySheet && myCredit >= entryFee && (
                       <button className="button button-primary" type="button" disabled={serverBusy === 'sheet-credit-pay'} onClick={() => paySheetWithCredit(mySheet.id)}>
-                        {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from my credit`}
+                        {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${entryFee} from my credit`}
                       </button>
                     )}
-                    {!mySheet && myCredit >= ENTRY_FEE && <small className="muted">Lock in your sheet, then pay from credit in one tap.</small>}
-                    {mySheet && myCredit < ENTRY_FEE && (
+                    {!mySheet && myCredit >= entryFee && <small className="muted">Lock in your sheet, then pay from credit in one tap.</small>}
+                    {mySheet && myCredit < entryFee && (
                       mySheet.paymentClaim
                         ? <span className="claim-waiting">⏳ Payment claim sent {new Date(mySheet.paymentClaim.claimedAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} — waiting for commissioner</span>
                         : <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'claim-sheet'} onClick={() => claimSheetPayment(mySheet.id)}>
-                            {serverBusy === 'claim-sheet' ? 'Sending…' : `✋ I sent my $${ENTRY_FEE}`}
+                            {serverBusy === 'claim-sheet' ? 'Sending…' : `✋ I sent my $${entryFee}`}
                           </button>
                     )}
                   </div>
@@ -2147,13 +2219,13 @@ function App() {
                 <div className="cashapp-steps">
                   <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
                     <span className="cashapp-icon">💵</span>
-                    <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App'}</strong><small>{'1. Tap here → 2. Send $'}{ENTRY_FEE}{' → 3. Come back & tap "I sent it"'}</small></div>
+                    <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App'}</strong><small>{'1. Tap here → 2. Send $'}{entryFee}{' → 3. Come back & tap "I sent it"'}</small></div>
                     <span className="cashapp-arrow">↗</span>
                   </a>
                   <small className="muted">Opens Cash App to send your entry fee directly to the commissioner.</small>
                 </div>
               )}
-              <button className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Saving…' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
+              <button className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? <><AppIcon name="lock" size={18} /> Week locked</> : serverBusy === 'entry' ? 'Saving…' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
               <button className="ai-mini-button" type="button" onClick={analyzePicks} disabled={aiLoading === 'picks'}><span>✦</span>{aiLoading === 'picks' ? 'Reviewing…' : 'Ask Jack to check my picks'}</button>
               {aiResult.picks && <div className="ai-slip-result">{aiResult.picks}</div>}
               {aiError && <p className="error-text">{aiError}</p>}
@@ -2188,7 +2260,7 @@ function App() {
                 <div className="season-pool-main">
                   <span className="eyebrow dark">SEASON POOL · ${pool.entryFee ?? 25}/PLAYER · PAYS THREE PLACES</span>
                   <div className="season-pool-figures">
-                    <div><small>Season pot</small><strong>${seasonPot.toLocaleString()}</strong></div>
+                    <div><small>Season pot</small><strong>{playerSession.authenticated ? `$${seasonPot.toLocaleString()}` : 'Members only'}</strong></div>
                     <div><small>Paid in</small><strong>{paidSet.size}<i>/{proofLeague.players.length}</i></strong></div>
                   </div>
                   <div className="season-podium">
@@ -2233,18 +2305,18 @@ function App() {
             })()}
             {seasonStats.table.length ? <>
               <div className="season-table">
-                <div className="season-head"><span>Player</span><span>Wins</span><span>Correct</span><span>Acc %</span><span>Earnings</span></div>
+                <div className="season-head"><span>Player</span><span>Wins</span><span>Correct</span><span>Acc %</span><span>{playerSession.authenticated ? 'Earnings' : 'Member only'}</span></div>
                 {seasonStats.table.map((row, index) => (
                   <div className={`season-row ${index === 0 && row.totalCorrect > 0 ? 'leader' : ''}`} key={row.key}>
                     <strong>{row.name}{row.weeklyWins > 0 && ' ' + '👑'.repeat(Math.min(row.weeklyWins, 5))}</strong>
                     <span>{row.weeklyWins}</span>
                     <span>{row.totalCorrect}<small>/{row.totalPicks}</small></span>
                     <span>{row.winPct}%</span>
-                    <b>${Math.round(row.earnings).toLocaleString()}</b>
+                    <b>{playerSession.authenticated ? `$${Math.round(row.earnings).toLocaleString()}` : '—'}</b>
                   </div>
                 ))}
               </div>
-              <section className="week-ledger">
+              {playerSession.authenticated ? <section className="week-ledger">
                 <div className="proof-heading"><div><span className="proof-step">LEDGER</span><h2>Week-by-week pots</h2></div><StatusPill state="pass">{seasonStats.weeks.filter((w) => w.paid).length}/{seasonStats.weeks.length} paid</StatusPill></div>
                 <div className="week-ledger-list">
                   {seasonStats.weeks.map((w) => (
@@ -2259,8 +2331,8 @@ function App() {
                     </article>
                   ))}
                 </div>
-              </section>
-            </> : <EmptyState icon="🏆" title="No season data yet" text="Standings build as picks lock and results post each week." action="Make picks" onAction={() => setView('picks')} />}
+              </section> : <div className="signin-nudge"><span>Sign in to view weekly pots and payout history.</span><button type="button" className="button button-primary" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button></div>}
+            </> : <EmptyState icon="🏆" title="No season data yet" text="Standings build as picks lock and results post each week." action="Make picks" onAction={() => navigate('picks')} />}
           </StandardPage>
         )}
 
@@ -2286,7 +2358,7 @@ function App() {
                     </button>;
                   })}
                 </div>
-                <button className="button button-primary full" type="button" onClick={submitSurvivorPick} disabled={!survivorTeam || weekLocked || serverBusy === 'survivor-pick'}>{serverBusy === 'survivor-pick' ? 'Locking…' : weekLocked ? '🔒 Week locked' : myPickThisWeek ? 'Change my pick →' : 'Lock survivor pick →'}</button>
+                <button className="button button-primary full" type="button" onClick={submitSurvivorPick} disabled={!survivorTeam || weekLocked || serverBusy === 'survivor-pick'}>{serverBusy === 'survivor-pick' ? 'Locking…' : weekLocked ? <><AppIcon name="lock" size={18} /> Week locked</> : myPickThisWeek ? 'Change my pick →' : 'Lock survivor pick →'}</button>
               </section>;
             })()}
             <section className="survivor-board">
@@ -2342,7 +2414,7 @@ function App() {
                     {propPicks[cat.id] && <span className="prop-locked-badge">Your pick: {propPicks[cat.id]}</span>}
                   </section>
                 ))}
-                <button className="button button-primary full" type="button" disabled={weekLocked || serverBusy === 'prop-save' || !Object.keys(propPicks).filter((k) => propPicks[k]).length} onClick={savePropPicks}>{weekLocked ? '🔒 Week locked' : serverBusy === 'prop-save' ? 'Saving…' : 'Save prop picks →'}</button>
+                <button className="button button-primary full" type="button" disabled={weekLocked || serverBusy === 'prop-save' || !Object.keys(propPicks).filter((k) => propPicks[k]).length} onClick={savePropPicks}>{weekLocked ? <><AppIcon name="lock" size={18} /> Week locked</> : serverBusy === 'prop-save' ? 'Saving…' : 'Save prop picks →'}</button>
                 <p className="muted prop-disclaimer">Prop picks are for fun within your league. Results are settled by the commissioner after games wrap.</p>
               </div>
             )}
@@ -2429,7 +2501,7 @@ function App() {
                     </div>
                   ))}
                 </div>
-              ) : <EmptyState icon="📋" title="No picks in yet" text={`Standings appear once ${weekLabel} picks are in.`} action="Make picks" onAction={() => setView('picks')} />}
+              ) : <EmptyState icon="📋" title="No picks in yet" text={`Standings appear once ${weekLabel} picks are in.`} action="Make picks" onAction={() => navigate('picks')} />}
               <p className="muted">Locked = correct picks in final games. Leading = picks currently ahead in live games. Projections shift with every score.</p>
             </section>
             <section className="live-games">
@@ -2482,11 +2554,12 @@ function App() {
                   <div className="proof-heading"><div><span className="proof-step">HEAD-TO-HEAD</span><h2>Who owns who</h2></div></div>
                   <div className="h2h-scroll">
                     <table className="h2h-table">
-                      <thead><tr><th></th>{playerStats.players.map((p) => <th key={p.key}>{p.name.split(' ')[0]}</th>)}</tr></thead>
+                      <caption>Head-to-head weekly wins by player</caption>
+                      <thead><tr><th scope="col">Player</th>{playerStats.players.map((p) => <th scope="col" key={p.key}>{p.name.split(' ')[0]}</th>)}</tr></thead>
                       <tbody>
                         {playerStats.players.map((a) => (
                           <tr key={a.key}>
-                            <th>{a.name.split(' ')[0]}</th>
+                            <th scope="row">{a.name.split(' ')[0]}</th>
                             {playerStats.players.map((b) => {
                               if (a.key === b.key) return <td className="h2h-self" key={b.key}>—</td>;
                               const rec = playerStats.h2h[`${a.key}|${b.key}`] ?? { wins: 0, losses: 0 };
@@ -2500,7 +2573,7 @@ function App() {
                   <p className="muted">Row vs column: weekly score wins–losses in weeks both played.</p>
                 </section>
               )}
-            </> : <EmptyState icon="📊" title="No stats yet" text="Stats build as picks come in and weeks get scored." action="Make picks" onAction={() => setView('picks')} />}
+            </> : <EmptyState icon="📊" title="No stats yet" text="Stats build as picks come in and weeks get scored." action="Make picks" onAction={() => navigate('picks')} />}
           </StandardPage>
         )}
 
@@ -2515,26 +2588,26 @@ function App() {
                 {/* The one question this page must answer: do I owe anything right now? */}
                 {mySheet && !mySheet.paid ? (
                   <section className="owe-card">
-                    <div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>You owe ${ENTRY_FEE} for {weekLabel}</h2><p>Your picks are in — pay the entry to be in the pot.</p></div>
+                    <div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>You owe ${entryFee} for {weekLabel}</h2><p>Your picks are in — pay the entry to be in the pot.</p></div>
                     <div className="credit-chip-row">
                       <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
-                      {myCredit >= ENTRY_FEE && (
+                      {myCredit >= entryFee && (
                         <button className="button button-primary" type="button" disabled={serverBusy === 'sheet-credit-pay'} onClick={() => paySheetWithCredit(mySheet.id)}>
-                          {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from my credit`}
+                          {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${entryFee} from my credit`}
                         </button>
                       )}
-                      {myCredit < ENTRY_FEE && (
+                      {myCredit < entryFee && (
                         mySheet.paymentClaim
                           ? <span className="claim-waiting">⏳ You said you sent it — the commissioner will confirm and you'll get a notification.</span>
                           : <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'claim-sheet'} onClick={() => claimSheetPayment(mySheet.id)}>
-                              {serverBusy === 'claim-sheet' ? 'Sending…' : `✋ I sent my $${ENTRY_FEE}`}
+                              {serverBusy === 'claim-sheet' ? 'Sending…' : `✋ I sent my $${entryFee}`}
                             </button>
                       )}
                     </div>
-                    {serverLeague?.settings?.cashAppPool?.url && myCredit < ENTRY_FEE && !mySheet.paymentClaim && (
+                    {serverLeague?.settings?.cashAppPool?.url && myCredit < entryFee && !mySheet.paymentClaim && (
                       <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
                         <span className="cashapp-icon">💵</span>
-                        <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App'}</strong><small>{'1. Tap here → 2. Send $'}{ENTRY_FEE}{' → 3. Come back & tap "I sent it"'}</small></div>
+                        <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App'}</strong><small>{'1. Tap here → 2. Send $'}{entryFee}{' → 3. Come back & tap "I sent it"'}</small></div>
                         <span className="cashapp-arrow">↗</span>
                       </a>
                     )}
@@ -2542,7 +2615,7 @@ function App() {
                 ) : mySheet?.paid ? (
                   <section className="owe-card paid"><div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>✅ You're paid up for {weekLabel}</h2><p>Nothing owed. Good luck.</p></div></section>
                 ) : (
-                  <section className="owe-card"><div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>No picks in for {weekLabel} yet</h2><p>Get your picks in, then pay the ${ENTRY_FEE} entry here.</p></div><button className="button button-primary" type="button" onClick={() => setView('picks')}>Make my picks →</button></section>
+                  <section className="owe-card"><div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>No picks in for {weekLabel} yet</h2><p>Get your picks in, then pay the ${entryFee} entry here.</p></div><button className="button button-primary" type="button" onClick={() => navigate('picks')}>Make my picks →</button></section>
                 )}
                 <div className="payment-summary-cards">
                   <div className="payment-summary-card">
@@ -2627,7 +2700,7 @@ function App() {
         {view === 'entries' && (
           <StandardPage eyebrow={weekLabel.toUpperCase()} title="Who's in" subtitle="Everyone with picks in for this week. Picks stay hidden until the week locks — then you can see them on the Board.">
             {weekSheets.length ? <div className="entry-list">{weekSheets.map((sheet, index) => (
-              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{Object.keys(sheet.picks).length} picks · TB {sheet.tiebreaker}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b>{isComm && (
+              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{sheet.pickCount ?? Object.keys(sheet.picks ?? {}).length} picks · {sheet.tiebreaker == null ? 'TB hidden' : `TB ${sheet.tiebreaker}`}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time>{playerSession.authenticated || isComm ? <b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b> : <b className="paid-pill unpaid">MEMBERS ONLY</b>}{isComm && (
                 <button className="entry-remove" type="button" title="Remove sheet" disabled={serverBusy === `del-${sheet.id}`} onClick={async () => {
                   if (!window.confirm(`Remove ${sheet.name}'s ${weekLabel} sheet? This can't be undone.`)) return;
                   setServerBusy(`del-${sheet.id}`);
@@ -2639,7 +2712,7 @@ function App() {
                   finally { setServerBusy(''); }
                 }}>{serverBusy === `del-${sheet.id}` ? '…' : '✕'}</button>
               )}</article>
-            ))}</div> : <EmptyState icon="◎" title="Nobody's in yet" text="Be the first to get your picks in this week." action="Make picks" onAction={() => setView('picks')} />}
+            ))}</div> : <EmptyState icon="◎" title="Nobody's in yet" text="Be the first to get your picks in this week." action="Make picks" onAction={() => navigate('picks')} />}
           </StandardPage>
         )}
 
@@ -2678,7 +2751,7 @@ function App() {
                   <b>{entry.score}<small> / {completedGames || '—'}</small></b>
                 </div>;
               })}
-            </div> : <EmptyState icon="↗" title="No standings yet" text="Locked entries will appear here as soon as the league joins." action="Make picks" onAction={() => setView('picks')} />}
+            </div> : <EmptyState icon="↗" title="No standings yet" text="Locked entries will appear here as soon as the league joins." action="Make picks" onAction={() => navigate('picks')} />}
           </StandardPage>
         )}
 
@@ -2722,7 +2795,7 @@ function App() {
 
             <section className="device-prefs">
               <button type="button" className={`sound-toggle ${soundEnabled ? 'on' : ''}`} onClick={() => { const next = !soundEnabled; setSfxEnabled(next); setSoundEnabled(next); unlockSfx(); if (next) tapSound(); }} aria-pressed={soundEnabled}>
-                <span className="sound-toggle-icon">{soundEnabled ? '🔊' : '🔇'}</span>
+                <span className="sound-toggle-icon"><AppIcon name={soundEnabled ? 'volume' : 'volumeOff'} size={23} /></span>
                 <span className="sound-toggle-label"><strong>Button sounds</strong><small>{soundEnabled ? 'On — you\'ll hear a tap on every button' : 'Off — buttons are silent'}</small></span>
                 <span className="sound-toggle-switch" aria-hidden="true" />
               </button>
@@ -2757,10 +2830,10 @@ function App() {
                 <div className="panel-heading"><div><span className="eyebrow dark">PROFILE PIC</span><h2>Change your picture</h2></div><PlayerAvatar player={currentPlayer} size={44} /></div>
                 <div className="signup-avatar-grid">
                   {PRESET_AVATARS.map((emoji) => (
-                    <button type="button" key={emoji} className={`avatar-pick ${currentPlayer.avatar === emoji ? 'selected' : ''}`} disabled={serverBusy === `player-${currentPlayer.id}`} onClick={() => changeMyAvatar(emoji)}>{emoji}</button>
+                    <button type="button" key={emoji} className={`avatar-pick ${currentPlayer.avatar === emoji ? 'selected' : ''}`} aria-label={`Use ${emoji} as profile picture`} aria-pressed={currentPlayer.avatar === emoji} disabled={serverBusy === `player-${currentPlayer.id}`} onClick={() => changeMyAvatar(emoji)}>{emoji}</button>
                   ))}
                 </div>
-                <label className="upload-btn">📷 Upload a photo<input type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) changeMyAvatar(f); e.target.value = ''; }} /></label>
+                <label className="upload-btn"><AppIcon name="camera" size={17} /> Upload a photo<input type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) changeMyAvatar(f); e.target.value = ''; }} /></label>
               </section>
             )}
 
@@ -2777,7 +2850,7 @@ function App() {
                         {playerSession.authenticated && <PayHandle player={player} compact />}
                       </div>
                       {player.trashTalk?.jackPolicy?.favoriteTeam && <img className="crew-card-team" src={getTeamLogoUrl(player.trashTalk.jackPolicy.favoriteTeam)} alt="" />}
-                      {isComm && <button type="button" className="crew-reset-pin" disabled={serverBusy === `reset-${player.id}`} onClick={() => commissionerResetPin(player)} title={`Reset ${player.name}'s PIN`}>🔑</button>}
+                      {isComm && <button type="button" className="crew-reset-pin" disabled={serverBusy === `reset-${player.id}`} onClick={() => commissionerResetPin(player)} aria-label={`Reset ${player.name}'s PIN`}><AppIcon name="key" size={18} /></button>}
                     </article>
                   ))}
                 </div>
@@ -2821,7 +2894,7 @@ function App() {
                 <div className="panel">
                   <div className="panel-heading"><div><span className="eyebrow dark">NOTIFICATIONS</span><h2>Push alerts</h2></div></div>
                   <p className="muted">Get notified when the deadline is approaching, when results post, and when the commissioner has announcements.</p>
-                  <button className={`button ${pushEnabled ? 'button-ghost' : 'button-primary'}`} type="button" onClick={togglePushNotifications}>{pushEnabled ? '🔕 Disable push notifications' : '🔔 Enable push notifications'}</button>
+                  <button className={`button ${pushEnabled ? 'button-ghost' : 'button-primary'}`} type="button" onClick={togglePushNotifications}><AppIcon name={pushEnabled ? 'bellOff' : 'notifs'} size={18} /> {pushEnabled ? 'Disable push notifications' : 'Enable push notifications'}</button>
                   {pushEnabled && <p className="push-status-on">Push notifications are active on this device.</p>}
                 </div>
               </section>
@@ -2946,7 +3019,7 @@ function App() {
             <div className="ai-grid">
               <AiCard number="01" title="League recap" description="Summarize the current pot, entries, standings, and completed games into a shareable update." button={aiResult.recap ? 'Rewrite recap' : 'Write recap'} loading={aiLoading === 'recap'} disabled={!weekSheets.length} onClick={getRecap} result={aiResult.recap} />
               <AiCard number="02" title="Picks review" description="Jack checks your current picks for blanks, patterns, and tiebreaker readiness—without pretending to know the future." button={aiResult.picks ? 'Review again' : 'Review my picks'} loading={aiLoading === 'picks'} onClick={analyzePicks} result={aiResult.picks} />
-              <AiCard number="03" title="Trash-talk assist" description="Draft friendly banter from the actual standings, then edit it before anything is posted." button="Open chat" onClick={() => setView('chat')} />
+              <AiCard number="03" title="Trash-talk assist" description="Draft friendly banter from the actual standings, then edit it before anything is posted." button="Open chat" onClick={() => navigate('chat')} />
               <AiCard number="04" title="League assistant" description="Ask Jack about standings, rules, schedules, your entry credits, or where to find something in the app." button="Ask Jack" onClick={() => setAssistantOpen(true)} />
             </div>
             <div className="ai-privacy"><span>✦</span><div><strong>{aiStatus.configured ? `Connected to ${aiStatus.model}` : 'Jack is in fallback mode'}</strong><p>{aiStatus.configured ? 'Prompts are assembled on the server from league context. The API key never ships to the browser.' : 'Jack is running in fallback mode. Add a Gemini API key in the server settings to unlock his full commentary.'}</p></div></div>
@@ -2958,7 +3031,10 @@ function App() {
           <StandardPage eyebrow="KEEP IT FRIENDLY" title="League chat" subtitle="The place for victory laps, questionable predictions, and receipts.">
             <div className="chat-layout">
               <section className="chat-panel">
-                <div className="messages">
+                <div className="messages" ref={chatMessagesRef} onScroll={(event) => {
+                  const element = event.currentTarget;
+                  chatShouldStickRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+                }}>
                   {chatMsgs.length ? chatMsgs.map((message) => {
                     const isJack = message.playerId == null;
                     const isMine = Boolean(playerSession.playerId) && message.playerId === playerSession.playerId;
@@ -2968,8 +3044,9 @@ function App() {
                 </div>
                 {playerSession.authenticated ? (
                   <div className="composer">
-                    {showEmoji && <div className="emoji-row">{EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => setChatInput((current) => current + emoji)}>{emoji}</button>)}</div>}
-                    <div className="message-input"><button type="button" onClick={() => setShowEmoji((current) => !current)} aria-label="Emoji">☺</button><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && sendChat()} placeholder="Write something you can defend later…" maxLength="400" /><button className="send" type="button" onClick={sendChat}>Send ↑</button></div>
+                    {showEmoji && <div className="emoji-row" id="chat-emoji-picker">{EMOJIS.map((emoji) => <button type="button" key={emoji} aria-label={`Add ${emoji}`} onClick={() => setChatInput((current) => current + emoji)}>{emoji}</button>)}</div>}
+                    <label className="sr-only" htmlFor="chat-message">Message</label>
+                    <div className="message-input"><button type="button" onClick={() => setShowEmoji((current) => !current)} aria-label="Choose emoji" aria-expanded={showEmoji} aria-controls="chat-emoji-picker">☺</button><input id="chat-message" value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && sendChat()} placeholder="Write something you can defend later…" maxLength="400" /><button className="send" type="button" onClick={sendChat}>Send ↑</button></div>
                   </div>
                 ) : (
                   <div className="composer composer-signed-out">
@@ -3062,7 +3139,7 @@ function App() {
                 <div className="cfb-pool-head">
                   <div>
                     <h2 className="cfb-section-title">🏆 Week {cfbPool.week} Pick-Em Pool</h2>
-                    <small className="muted">{cfbPool.games.length} games · ${cfbPool.entryFee} entry · Pot ${Object.values(cfbPool.entries ?? {}).filter((e) => e.paid).length * cfbPool.entryFee}</small>
+                    <small className="muted">{cfbPool.games.length} games · ${cfbPool.entryFee} entry · {playerSession.authenticated ? `Pot $${Object.values(cfbPool.entries ?? {}).filter((e) => e.paid).length * cfbPool.entryFee}` : 'Pot visible to members'}</small>
                   </div>
                   <span className={`cfb-pool-status ${cfbPool.status}`}>{cfbPool.status === 'open' ? '🟢 Open for picks' : cfbPool.status === 'locked' ? '🔒 Locked' : '🏁 Final'}</span>
                 </div>
@@ -3177,13 +3254,14 @@ function App() {
                     <summary>See everyone's picks</summary>
                     <div className="cfb-reveal-table-wrap">
                       <table className="cfb-reveal-table">
-                        <thead><tr><th>Game</th>{cfbBoard.rows.map((row) => <th key={row.playerId}>{row.name.split(' ')[0]}</th>)}</tr></thead>
+                        <caption>Revealed college football picks by game and player</caption>
+                        <thead><tr><th scope="col">Game</th>{cfbBoard.rows.map((row) => <th scope="col" key={row.playerId}>{row.name.split(' ')[0]}</th>)}</tr></thead>
                         <tbody>
                           {cfbPool.games.map((g) => {
                             const cover = cfbBoard.covers[g.id];
                             return (
                               <tr key={g.id}>
-                                <td>{g.away.abbr}@{g.home.abbr}<small> {g.spreadLabel}</small></td>
+                                <th scope="row">{g.away.abbr}@{g.home.abbr}<small> {g.spreadLabel}</small></th>
                                 {cfbBoard.rows.map((row) => {
                                   const pick = row.picks?.[g.id];
                                   const label = pick === 'home' ? g.home.abbr : pick === 'away' ? g.away.abbr : '—';
@@ -3202,15 +3280,15 @@ function App() {
                 {/* Commissioner pool controls */}
                 {isComm && (
                   <div className="cfb-admin-bar">
-                    {cfbPool.status === 'open' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('locked')}>🔒 Lock picks</button>}
-                    {cfbPool.status === 'locked' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('open')}>🔓 Reopen picks</button>}
-                    <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-sync'} onClick={syncCfbScores}>{serverBusy === 'cfb-sync' ? 'Syncing…' : '⚡ Sync scores from ESPN'}</button>
+                    {cfbPool.status === 'open' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('locked')}><AppIcon name="lock" size={18} /> Lock picks</button>}
+                    {cfbPool.status === 'locked' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('open')}><AppIcon name="unlock" size={18} /> Reopen picks</button>}
+                    <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-sync'} onClick={syncCfbScores}>{serverBusy === 'cfb-sync' ? 'Syncing…' : <><AppIcon name="sync" size={18} /> Sync scores from ESPN</>}</button>
                     {cfbPool.status === 'final' && !cfbPool.potCredited && cfbBoard?.winners?.length > 0 && (
                       <button className="button button-primary" type="button" disabled={serverBusy === 'cfb-credit-winners'} onClick={creditCfbWinners}>
-                        {serverBusy === 'cfb-credit-winners' ? 'Crediting…' : `💰 Credit pot to ${cfbBoard.winners.map((w) => w.name.split(' ')[0]).join(' & ')}`}
+                        {serverBusy === 'cfb-credit-winners' ? 'Crediting…' : <><AppIcon name="wallet" size={18} /> Credit pot to {cfbBoard.winners.map((w) => w.name.split(' ')[0]).join(' & ')}</>}
                       </button>
                     )}
-                    {cfbPool.potCredited && <span className="credit-chip">💰 Pot credited to winners</span>}
+                    {cfbPool.potCredited && <span className="credit-chip"><AppIcon name="wallet" size={16} /> Pot credited to winners</span>}
                   </div>
                 )}
               </section>
@@ -3288,7 +3366,7 @@ function App() {
         {view === 'rules' && (
           <StandardPage eyebrow="THE FINE PRINT" title="House rules" subtitle="Simple enough to explain before kickoff. Firm enough to settle Monday-night arguments.">
             <div className="rules-grid">
-              <Rule number="01" title="Entry" text={`Each weekly entry costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE cash out (60/30/10 unless the commissioner changes the split).`} />
+              <Rule number="01" title="Entry" text={`Each weekly entry costs $${entryFee}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE cash out (60/30/10 unless the commissioner changes the split).`} />
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. You can change your picks anytime until the week locks — after that they're final.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
               <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess takes it. Identical guesses split the pot." />
@@ -3382,7 +3460,7 @@ function App() {
                     notify(`Deadline reminder sent to ${result.sent} of ${result.missing} missing players.`);
                   } catch (err) { notify(err.message); }
                   finally { setServerBusy(''); }
-                }}>{serverBusy === 'push-reminder' ? 'Sending…' : weekLocked ? '🔒 Week locked' : 'Push reminder to missing players'}</button>
+                }}>{serverBusy === 'push-reminder' ? 'Sending…' : weekLocked ? <><AppIcon name="lock" size={18} /> Week locked</> : 'Push reminder to missing players'}</button>
               </div>
             </section>
             <section className="autopilot-section">
@@ -3417,7 +3495,7 @@ function App() {
                   {' — paste it below (or use any Cash App link you want).'}
                 </li>
                 <li>Hit <strong>Save</strong>. The green pay button shows up on the Picks page and inside every CFB pool automatically.</li>
-                <li>{'Players tap the button → Cash App opens → they send $'}{ENTRY_FEE}{' → they mark "I sent it" in the app → you one-tap confirm.'}</li>
+                <li>{'Players tap the button → Cash App opens → they send $'}{entryFee}{' → they mark "I sent it" in the app → you one-tap confirm.'}</li>
               </ol>
               <div className="cashapp-admin-form">
                 <label>Cash App URL<input type="url" value={cashAppPoolUrl || serverLeague?.settings?.cashAppPool?.url || ''} onChange={(e) => setCashAppPoolUrl(e.target.value)} placeholder="https://cash.app/$Tique" /></label>
@@ -3517,22 +3595,22 @@ function App() {
             <div className="admin-toolbar">
               <label>Rollover pot ($)<input type="number" min="0" value={rolloverPot} onChange={(event) => setRolloverPot(Number(event.target.value || 0))} /></label>
               <p>{completedGames} results posted</p>
-              <button className="button button-ghost-dark" type="button" onClick={syncFinals} disabled={serverBusy === 'sync-finals'}>{serverBusy === 'sync-finals' ? 'Syncing…' : '⚡ Sync finals from live feed'}</button>
-              <button className="button button-ghost-dark" type="button" onClick={sendPickReminders} disabled={serverBusy === 'reminders' || weekLocked}>{serverBusy === 'reminders' ? 'Sending…' : '⏰ Text pick reminders'}</button>
+              <button className="button button-ghost-dark" type="button" onClick={syncFinals} disabled={serverBusy === 'sync-finals'}>{serverBusy === 'sync-finals' ? 'Syncing…' : <><AppIcon name="sync" size={18} /> Sync finals from live feed</>}</button>
+              <button className="button button-ghost-dark" type="button" onClick={sendPickReminders} disabled={serverBusy === 'reminders' || weekLocked}>{serverBusy === 'reminders' ? 'Sending…' : <><AppIcon name="clock" size={18} /> Text pick reminders</>}</button>
             </div>
             <section className="group-text-section">
-              <div className="panel-heading"><div><span className="eyebrow dark">MESSAGING</span><h2>📢 Group Text</h2></div></div>
+              <div className="panel-heading"><div><span className="eyebrow dark">MESSAGING</span><h2>Group text</h2></div></div>
               <p className="muted">Send an SMS to all players with verified phone numbers. Group MMS creates a shared thread (2–10 players); Individual sends separate texts to each.</p>
               <div className="group-text-controls">
                 <div className="group-text-mode-toggle">
-                  <button type="button" className={`mode-btn ${groupTextMode === 'individual' ? 'active' : ''}`} onClick={() => setGroupTextMode('individual')}>📱 Individual</button>
-                  <button type="button" className={`mode-btn ${groupTextMode === 'group_mms' ? 'active' : ''}`} onClick={() => setGroupTextMode('group_mms')}>👥 Group MMS</button>
+                  <button type="button" className={`mode-btn ${groupTextMode === 'individual' ? 'active' : ''}`} onClick={() => setGroupTextMode('individual')}><AppIcon name="phone" size={18} /> Individual</button>
+                  <button type="button" className={`mode-btn ${groupTextMode === 'group_mms' ? 'active' : ''}`} onClick={() => setGroupTextMode('group_mms')}><AppIcon name="users" size={18} /> Group MMS</button>
                 </div>
                 <textarea className="group-text-input" rows="3" maxLength={500} placeholder="Type your message to the league…" value={groupTextMsg} onChange={(e) => setGroupTextMsg(e.target.value)} />
                 <div className="group-text-footer">
                   <span className="char-count">{groupTextMsg.length}/500</span>
                   <button className="button button-primary" type="button" disabled={serverBusy === 'group-text' || !groupTextMsg.trim()} onClick={sendGroupText}>
-                    {serverBusy === 'group-text' ? 'Sending…' : groupTextMode === 'group_mms' ? '📤 Send Group MMS' : '📤 Send to All'}
+                    {serverBusy === 'group-text' ? 'Sending…' : <><AppIcon name="send" size={18} /> {groupTextMode === 'group_mms' ? 'Send Group MMS' : 'Send to all'}</>}
                   </button>
                 </div>
               </div>
@@ -3567,11 +3645,11 @@ function App() {
       {/* ── Jack Assistant Drawer ── */}
       {assistantOpen && (
         <div className="assistant-overlay" onClick={(e) => e.target === e.currentTarget && setAssistantOpen(false)}>
-          <div className="assistant-drawer">
+          <div className="assistant-drawer" role="dialog" aria-modal="true" aria-labelledby="assistant-dialog-title" tabIndex="-1">
             <div className="assistant-header">
               <div className="assistant-title">
                 <JackAvatar state={jackAvatarState} settings={serverLeague?.settings} compact caption={assistantBusy ? 'Thinking…' : assistantSpeaking ? 'Speaking…' : 'Ready'} />
-                <div><strong>Jack</strong><small>League commissioner AI</small></div>
+                <div><strong id="assistant-dialog-title">Jack</strong><small>League commissioner AI</small></div>
               </div>
               <div className="assistant-header-actions">
                 <button
@@ -3588,9 +3666,9 @@ function App() {
                     if (last) readAssistantMessage(last.text);
                   }}
                 >
-                  {assistantSpeaking ? '■ Stop' : jackVoiceConsent ? '🔊 Voice on' : '🔇 Voice off'}
+                  {assistantSpeaking ? <><AppIcon name="stop" size={16} /> Stop</> : jackVoiceConsent ? <><AppIcon name="volume" size={16} /> Voice on</> : <><AppIcon name="volumeOff" size={16} /> Voice off</>}
                 </button>
-                <button className="assistant-close" type="button" onClick={() => { setAssistantOpen(false); stopSpeaking(); setJackAvatarState('idle'); }}>×</button>
+                <button className="assistant-close" type="button" aria-label="Close Jack assistant" onClick={() => { setAssistantOpen(false); stopSpeaking(); setJackAvatarState('idle'); }}>×</button>
               </div>
             </div>
 
@@ -3617,8 +3695,8 @@ function App() {
                       </button>
                     )}
                     {msg.role === 'assistant' && msg.id !== 'assistant-welcome' && msg.action !== 'auth' && (
-                      <button className="msg-speak" type="button" onClick={() => { if (!jackVoiceConsent) setJackVoiceConsent(true); assistantSpeaking ? stopSpeaking() : readAssistantMessage(msg.text); }} title={assistantSpeaking ? 'Stop' : 'Listen'}>
-                        {assistantSpeaking ? '■' : '🔊'}
+                      <button className="msg-speak" type="button" onClick={() => { if (!jackVoiceConsent) setJackVoiceConsent(true); assistantSpeaking ? stopSpeaking() : readAssistantMessage(msg.text); }} title={assistantSpeaking ? 'Stop' : 'Listen'} aria-label={assistantSpeaking ? 'Stop reading message' : 'Read message aloud'}>
+                        <AppIcon name={assistantSpeaking ? 'stop' : 'volume'} size={16} />
                       </button>
                     )}
                   </div>
@@ -3634,7 +3712,9 @@ function App() {
             </div>
 
             <div className="assistant-composer">
+              <label className="sr-only" htmlFor="assistant-question">Ask Jack a question</label>
               <input
+                id="assistant-question"
                 value={assistantInput}
                 onChange={(e) => setAssistantInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && askAssistant()}
@@ -3642,7 +3722,7 @@ function App() {
                 maxLength="500"
                 disabled={assistantBusy}
               />
-              <button className="assistant-send" type="button" onClick={() => askAssistant()} disabled={!assistantInput.trim() || assistantBusy}>
+              <button className="assistant-send" type="button" onClick={() => askAssistant()} disabled={!assistantInput.trim() || assistantBusy} aria-label="Send question to Jack">
                 {assistantBusy ? '…' : '↑'}
               </button>
             </div>
@@ -3655,7 +3735,7 @@ function App() {
       )}
 
       <footer><span>405 BadGuys Parlay · {weekLabel}</span><span>Built for bragging rights</span></footer>
-      {toast && <div className="toast" role="status">{toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite" aria-atomic="true">{toast}</div>}
     </div>
   );
 }
@@ -3742,7 +3822,7 @@ function PlayerAvatar({ player, size = 44 }) {
 
 function PlayerSessionPanel({ players, session, login, setLogin, onLogin, onLogout, busy }) {
   if (session.authenticated) return <div className="player-session active"><div><span>{session.name.split(' ').map((word) => word[0]).join('')}</span><p><strong>Signed in as {session.name}</strong><small>Player-owned controls are unlocked only for this identity.</small></p></div><button type="button" onClick={onLogout}>Switch player</button></div>;
-  return <form className="player-session" onSubmit={onLogin}><div><span>◎</span><p><strong>Player sign-in</strong><small>Enter the 4-digit PIN you created when you joined. Forgot it? Reset it from the Sign In screen.</small></p></div><label>Player<select aria-label="Player identity" value={login.playerId} onChange={(event) => setLogin((current) => ({ ...current, playerId: event.target.value }))}>{players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label><label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="4" value={login.pin} onChange={(event) => setLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} /></label><button type="submit" disabled={busy || login.pin.length !== 4}>{busy ? 'Signing in…' : 'Sign in'}</button></form>;
+  return <form className="player-session" onSubmit={onLogin}><div><span>◎</span><p><strong>Player sign-in</strong><small>Enter your PIN. Existing four-digit PINs still work; new PINs use six digits.</small></p></div><label>Player<select aria-label="Player identity" value={login.playerId} onChange={(event) => setLogin((current) => ({ ...current, playerId: event.target.value }))}>{players.map((player) => <option value={player.id} key={player.id}>{player.name}</option>)}</select></label><label>PIN<input aria-label="Player PIN" type="password" inputMode="numeric" maxLength="6" autoComplete="current-password" value={login.pin} onChange={(event) => setLogin((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '') }))} /></label><button type="submit" disabled={busy || login.pin.length < 4}>{busy ? 'Signing in…' : 'Sign in'}</button></form>;
 }
 
 function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
@@ -3751,13 +3831,14 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
   const total = data.slides.length;
   const canPrev = slideIndex > 0;
   const canNext = slideIndex < total - 1;
+  const [paused, setPaused] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
 
   // Auto-advance every 6 seconds
   useEffect(() => {
-    if (slideIndex >= total - 1) return;
+    if (paused || slideIndex >= total - 1) return undefined;
     const timer = setTimeout(() => onSlideChange(slideIndex + 1), 6000);
     return () => clearTimeout(timer);
-  }, [slideIndex, total, onSlideChange]);
+  }, [paused, slideIndex, total, onSlideChange]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -3772,8 +3853,9 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
 
   return (
     <div className="recap-show-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="recap-show">
-        <button className="recap-show-close" type="button" onClick={onClose}>×</button>
+      <div className="recap-show" role="dialog" aria-modal="true" aria-labelledby="recap-show-heading" tabIndex="-1">
+        <button className="recap-show-close" type="button" onClick={onClose} aria-label="Close recap show">×</button>
+        <button className="recap-show-pause" type="button" onClick={() => setPaused((value) => !value)} aria-pressed={paused}>{paused ? 'Resume' : 'Pause'}</button>
 
         <div className="recap-show-progress">
           {data.slides.map((_, i) => (
@@ -3785,7 +3867,7 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
           {slide.type === 'title' && (
             <div className="recap-slide recap-slide-title">
               <div className="recap-jack-badge">✦</div>
-              <h1>Week {slide.week} Recap</h1>
+              <h1 id="recap-show-heading">Week {slide.week} Recap</h1>
               <p className="recap-subtitle">{slide.season} Season · {slide.gameCount} Games</p>
               {narration[0] && <p className="recap-narration">{narration[0]}</p>}
               <div className="recap-meta-row">
@@ -3798,7 +3880,7 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
           {slide.type === 'winner' && (
             <div className="recap-slide recap-slide-winner">
               <span className="recap-crown">👑</span>
-              <h1>{slide.name}</h1>
+              <h1 id="recap-show-heading">{slide.name}</h1>
               <p className="recap-big-score">{slide.score}–{slide.total - slide.score}</p>
               {narration[1] && <p className="recap-narration">{narration[1]}</p>}
               {slide.runnerUp && (
@@ -3810,7 +3892,7 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
 
           {slide.type === 'standings' && (
             <div className="recap-slide recap-slide-standings">
-              <h2>Standings</h2>
+              <h2 id="recap-show-heading">Standings</h2>
               {narration[2] && <p className="recap-narration">{narration[2]}</p>}
               <div className="recap-standings-list">
                 {slide.entries.map((entry, i) => (
@@ -3829,7 +3911,7 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
 
           {slide.type === 'movers' && (
             <div className="recap-slide recap-slide-movers">
-              <h2>Week's Movers</h2>
+              <h2 id="recap-show-heading">Week's Movers</h2>
               {narration[2] && <p className="recap-narration">{narration[2]}</p>}
               <div className="recap-movers-grid">
                 {slide.rise && (
@@ -3854,7 +3936,7 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
 
           {slide.type === 'sideBets' && (
             <div className="recap-slide recap-slide-bets">
-              <h2>Side Bets Settled</h2>
+              <h2 id="recap-show-heading">Side Bets Settled</h2>
               {narration[3] && <p className="recap-narration">{narration[3]}</p>}
               <div className="recap-bets-list">
                 {slide.bets.map((bet, i) => (
@@ -3873,7 +3955,7 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
 
           {slide.type === 'roasts' && (
             <div className="recap-slide recap-slide-roasts">
-              <h2>Jack's Takes</h2>
+              <h2 id="recap-show-heading">Jack's Takes</h2>
               <div className="recap-roasts-scroll">
                 {slide.players.map((p) => (
                   <div className={`recap-roast-card ${p.isWinner ? 'winner' : ''}`} key={p.playerId}>
@@ -3891,7 +3973,7 @@ function RecapShow({ data, slideIndex, onSlideChange, onClose }) {
           {slide.type === 'closing' && (
             <div className="recap-slide recap-slide-closing">
               <div className="recap-jack-badge large">✦</div>
-              <h1>That's a wrap!</h1>
+              <h1 id="recap-show-heading">That's a wrap!</h1>
               <p className="recap-subtitle">Week {slide.week} is in the books.</p>
               {narration[4] && <p className="recap-narration">{narration[4]}</p>}
               <p className="recap-signoff">— Jack, Commissioner AI</p>

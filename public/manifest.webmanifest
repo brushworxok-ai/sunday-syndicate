@@ -10,8 +10,8 @@
     "minimal-ui"
   ],
   "orientation": "any",
-  "background_color": "#070814",
-  "theme_color": "#11152b",
+  "background_color": "#0a0a12",
+  "theme_color": "#0a0a12",
   "shortcuts": [
     {
       "name": "Make picks",
@@ -26,7 +26,7 @@
     {
       "name": "Ask Jack",
       "short_name": "Jack",
-      "url": "/?view=join"
+      "url": "/?view=home&assistant=1"
     }
   ],
   "icons": [

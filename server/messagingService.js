@@ -64,6 +64,7 @@ export class TelnyxSmsProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
       body: JSON.stringify({ from: this.fromNumber, to: player.phoneE164, text }),
+      signal: AbortSignal.timeout(8_000),
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -124,6 +125,7 @@ export class TextBeltSmsProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: player.phoneE164, message: text, key: this.apiKey }),
+      signal: AbortSignal.timeout(8_000),
     });
     const result = await response.json();
     if (!result.success) {
@@ -141,6 +143,7 @@ export async function sendTextBeltRaw({ phone, text, apiKey }) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ phone, message: text, key: apiKey }),
+    signal: AbortSignal.timeout(8_000),
   });
   const result = await response.json();
   if (!result.success) throw new Error(result.error || 'TextBelt delivery failed');

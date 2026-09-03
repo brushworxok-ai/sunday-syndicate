@@ -13,6 +13,7 @@ test('SQLite store seeds and assembles the complete demo league', () => {
   assert.equal(Object.keys(league.results).length, Object.keys(DEMO_LEAGUE.results).length);
   assert.equal(league.sideBets.length, 2);
   assert.equal(league.latestBroadcast.deliveries.length, 4);
+  assert.equal(store.getPlayerCredential('player-marcus').status, 'demo');
   store.close();
 });
 
@@ -27,6 +28,17 @@ test('preference update creates immutable consent and audit records', () => {
   assert.equal(player.trashTalk.level, 'none');
   assert.equal(league.consentRecords.filter((record) => record.playerId === 'player-marcus').length, 4);
   assert.equal(league.auditLog[0].event, 'player.preferences_updated');
+  store.close();
+});
+
+test('SQLite credentials expose the rotation timestamp used to revoke sessions', () => {
+  const store = new LeagueStore(':memory:');
+  store.seedDemo();
+  store.setPlayerPin('player-marcus', 'scrypt$test');
+  const credential = store.getPlayerCredential('player-marcus');
+  assert.equal(credential.pinHash, 'scrypt$test');
+  assert.equal(credential.status, 'active');
+  assert.match(credential.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
   store.close();
 });
 

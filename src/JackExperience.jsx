@@ -28,18 +28,29 @@ const AVATAR_VIDEO_BY_STATE = {
 export function JackAvatar({ state = 'idle', settings, compact = false, caption }) {
   const jack = normalizeJackSettings(settings);
   const [videoFailed, setVideoFailed] = useState(false);
+  const [systemReducedMotion, setSystemReducedMotion] = useState(() => (
+    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  ));
+  useEffect(() => {
+    const query = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!query) return undefined;
+    const update = (event) => setSystemReducedMotion(event.matches);
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+  const reducedMotion = jack.animation.reducedMotion || systemReducedMotion;
   const resolved = nextJackAvatarState(state, {
     animationEnabled: jack.animation.enabled,
-    reducedMotion: jack.animation.reducedMotion,
+    reducedMotion,
   });
   const label = caption || STATE_LABELS[resolved.state];
-  const prefersStill = jack.animation.reducedMotion || !jack.animation.enabled;
+  const prefersStill = reducedMotion || !jack.animation.enabled;
   const videoSrc = !prefersStill && !videoFailed ? AVATAR_VIDEO_BY_STATE[resolved.state] : null;
   return <figure className={`jack-avatar jack-avatar-${resolved.state} ${resolved.motion} ${compact ? 'compact' : ''}`} data-state={resolved.state} aria-label={`Jack is ${label.toLowerCase()}`}>
     <div className="jack-avatar-frame">
       <span className="jack-avatar-aura" aria-hidden="true" />
       {videoSrc
-        ? <video key={videoSrc} src={videoSrc} poster="/jack.jpg" autoPlay loop muted playsInline onError={() => setVideoFailed(true)} aria-label="Jack, the 405 league host" />
+        ? <video key={videoSrc} src={videoSrc} poster="/jack.jpg" autoPlay loop muted playsInline preload="metadata" onError={() => setVideoFailed(true)} aria-label="Jack, the 405 league host" />
         : <img src="/jack.jpg" alt="Jack, the 405 league host" />}
       <span className="jack-avatar-scan" aria-hidden="true" />
       <span className="jack-avatar-expression" aria-hidden="true">{resolved.state === 'winner' ? '♛' : resolved.state === 'shock' ? '!' : resolved.state === 'error' ? '×' : '●'}</span>

@@ -4,7 +4,20 @@ const COOKIE_NAME = 'syndicate_admin';
 const PLAYER_COOKIE_NAME = 'syndicate_player';
 
 function parseCookies(header = '') {
-  return Object.fromEntries(header.split(';').map((part) => part.trim().split('=').map(decodeURIComponent)).filter(([key]) => key));
+  const cookies = {};
+  for (const part of String(header).split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 1) continue;
+    try {
+      const key = decodeURIComponent(part.slice(0, separator).trim());
+      const value = decodeURIComponent(part.slice(separator + 1).trim());
+      if (key) cookies[key] = value;
+    } catch {
+      // Ignore a malformed cookie instead of turning an unauthenticated request
+      // into a server error. Other valid cookies remain usable.
+    }
+  }
+  return cookies;
 }
 
 function safeEqual(left, right) {
@@ -37,6 +50,9 @@ export function createAdminAuth({ password, secret, secure = false }) {
   const cookie = (token, maxAge) => `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 
   return {
+    isAuthenticated(request) {
+      return verifyToken(parseCookies(request.headers.cookie)[COOKIE_NAME]);
+    },
     login(request, response) {
       if (!password || !safeEqual(request.body?.password ?? '', password)) return response.status(401).json({ error: 'Invalid commissioner password.' });
       response.setHeader('Set-Cookie', cookie(createToken(), 8 * 60 * 60));

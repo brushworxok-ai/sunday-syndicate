@@ -163,6 +163,46 @@ test('Store: releaseClaim lets a failed payout retry', () => {
   s.close();
 });
 
+test('Store: weekly credits and payout commit atomically and only once', () => {
+  const s = freshStore();
+  const payout = {
+    id: 'payout-weekly-1', week: 1, pool: 'weekly', amount: 40,
+    winnerPlayerIds: ['a', 'b'], winnerNames: ['A', 'B'],
+    winnerAmounts: { a: 20, b: 20 }, paidAt: '2026-09-01T00:00:00.000Z', paidBy: 'auto',
+  };
+  const credits = [
+    { id: 'credit-a', playerId: 'a', amount: 20, reason: 'Week 1 winnings', by: 'auto', at: payout.paidAt },
+    { id: 'credit-b', playerId: 'b', amount: 20, reason: 'Week 1 winnings', by: 'auto', at: payout.paidAt },
+  ];
+  const first = s.commitWeeklyPayout(LG, { payout, credits });
+  const second = s.commitWeeklyPayout(LG, { payout, credits });
+  assert.equal(first.credited, 2);
+  assert.equal(second.alreadyRecorded, true);
+  const league = s.getLeague(LG);
+  assert.equal(league.payouts.length, 1);
+  assert.equal(creditBalance(league.creditLedger, 'a'), 20);
+  assert.equal(creditBalance(league.creditLedger, 'b'), 20);
+  s.close();
+});
+
+test('Store: CFB credits and paid marker commit atomically and only once', () => {
+  const s = freshStore();
+  const pool = cfbPool({
+    a: { playerId: 'a', name: 'A', paid: true, tiebreaker: 42, picks: { g1: 'home', g2: 'home', g3: 'away' } },
+  });
+  s.saveCfbPool(LG, pool);
+  const at = '2026-09-01T00:00:00.000Z';
+  const credits = [{ id: 'credit-cfb-a', playerId: 'a', amount: 10, reason: 'CFB Week 1 pot', by: 'auto', at }];
+  const first = s.commitCfbPayout(LG, { poolId: pool.id, credits, at, actor: 'auto' });
+  const second = s.commitCfbPayout(LG, { poolId: pool.id, credits, at, actor: 'auto' });
+  assert.equal(first.credited, 1);
+  assert.equal(second.alreadyRecorded, true);
+  const league = s.getLeague(LG);
+  assert.equal(league.cfbPools[0].potCredited, true);
+  assert.equal(creditBalance(league.creditLedger, 'a'), 10);
+  s.close();
+});
+
 test('Store: mergeLeagueSettings does not clobber concurrent writers', () => {
   const s = freshStore();
   // Two independent prop-pick saves for the same week must both survive.
