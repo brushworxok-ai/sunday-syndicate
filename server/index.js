@@ -34,6 +34,7 @@ function validateAvatar(value) {
 }
 import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
+import { withoutPushCredentials } from './publicLeagueView.js';
 import { ModerationError } from './moderation.js';
 import { DEMO_LEAGUE, buildLeaderboard, scoreSheet } from '../src/demoLeague.js';
 import {
@@ -55,6 +56,8 @@ import {
   settleSideBetFromLeague,
 } from './leagueService.js';
 import { applyDeliveryStatus, createSmsProvider, sendTextBeltRaw, sendApprovedRecap, sendJackBroadcast } from './messagingService.js';
+import { verifyTelnyxWebhook, telnyxDeliveryEvent } from './telnyxWebhook.js';
+import { validatePushSubscription, savePlayerSubscription, removePlayerSubscription, deliverPush, subscriptionsFor } from './pushService.js';
 import { randomInt } from 'node:crypto';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -90,9 +93,26 @@ const leagueId = 'league-sunday-syndicate-demo';
 
 /** Save a notification for the in-app notification history. */
 async function saveNotification(lid, { playerId = 'all', kind, title, body = '', metadata = {} }) {
+  const notification = { id: `notif-${randomUUID()}`, playerId, kind, title, body, metadata, at: new Date().toISOString() };
   try {
-    await store.saveNotification(lid, { id: `notif-${randomUUID()}`, playerId, kind, title, body, metadata, at: new Date().toISOString() });
-  } catch (error) { console.error('saveNotification failed (non-fatal):', error.message); }
+    await store.saveNotification(lid, notification);
+  } catch (error) { console.error('saveNotification failed (non-fatal):', error.message); return null; }
+  try {
+    if (webpush && ['results', 'payout', 'payment_confirmed', 'jack_sms'].includes(kind)) {
+      const report = await deliverPush({ store, leagueId: lid, webpush, playerIds: playerId === 'all' ? undefined : [playerId], payload: { title, body, url: `/?view=${kind === 'results' ? 'results' : 'notifs'}`, tag: `${kind}-${metadata.week ?? playerId}` } });
+      if (report.failed || report.expired) await store.writeAudit(lid, 'push.delivery_partial', 'Some notification subscriptions could not be reached.', 'system', { notificationId: notification.id, ...report });
+    }
+  } catch (error) { console.error('Notification push failed (in-app copy preserved):', error.message); }
+  return notification;
+}
+
+async function notifyFinalResults(lid, week) {
+  const league = await store.getLeague(lid);
+  const games = getGames(week);
+  if (!games.length || !games.every((game) => league?.results?.[game.id]?.verifiedAt) || !league.sheets?.some((sheet) => sheet.week === week)) return;
+  if (!await store.claimOnce(lid, `results-notification-${week}`)) return;
+  const saved = await saveNotification(lid, { kind: 'results', title: `Week ${week} results are final`, body: 'Jack’s board is ready. Open the app to see the final standings.', metadata: { week } });
+  if (!saved) await store.releaseClaim(lid, `results-notification-${week}`);
 }
 
 app.set('trust proxy', 1);
@@ -115,7 +135,7 @@ app.use(helmet({
     },
   },
 }));
-app.use(express.json({ limit: '256kb' })); // profile photos ride along as small data URLs
+app.use(express.json({ limit: '256kb', verify(request, _response, bytes) { request.rawBody = Buffer.from(bytes); } }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
 
@@ -125,17 +145,20 @@ app.get('/api/sms/diagnose', auth.requireAdmin, asyncRoute(async (_request, resp
     const provider = createSmsProvider(process.env);
     if (typeof provider.diagnose !== 'function') return response.json({ provider: provider.name, note: 'No diagnostics for this provider.' });
     const report = await provider.diagnose();
-    let testSend = null;
-    if (process.env.ADMIN_PHONE_E164) {
-      try {
-        const r = await provider.send({ player: { id: 'diag', phoneE164: process.env.ADMIN_PHONE_E164 }, text: '405 BadGuys Parlay: SMS test from the commissioner tools. If you got this, texts work.' });
-        testSend = { ok: true, ...r };
-      } catch (error) { testSend = { ok: false, error: error.message, code: error.code ?? null }; }
-    }
-    return response.json({ ...report, testSend });
+    return response.json({ ...report, webhookVerificationConfigured: Boolean(process.env.TELNYX_PUBLIC_KEY), testDestinationConfigured: Boolean(process.env.ADMIN_PHONE_E164), note: 'Read-only check. POST /api/sms/test with confirm:true sends one test to ADMIN_PHONE_E164.' });
   } catch (error) {
     return response.status(500).json({ error: error.message });
   }
+}));
+
+app.post('/api/sms/test', auth.requireAdmin, asyncRoute(async (request, response) => {
+  if (request.body?.confirm !== true) return response.status(422).json({ error: 'Confirm the test send with confirm:true.' });
+  if (!process.env.ADMIN_PHONE_E164) return response.status(503).json({ error: 'Configure ADMIN_PHONE_E164 as the authorized test destination first.' });
+  if (!['telnyx', 'twilio', 'textbelt'].includes(process.env.SMS_PROVIDER)) return response.status(503).json({ error: 'A real SMS provider is required for a delivery test.' });
+  if (!checkPlayerRate(ASSISTANT_RATE, 'admin-sms-test', 2, 60_000)) return response.status(429).json({ error: 'Wait a minute before another test text.' });
+  const provider = createSmsProvider(process.env);
+  const result = await provider.send({ player: { id: 'diag', phoneE164: process.env.ADMIN_PHONE_E164 }, text: '405 BadGuys Parlay: Jack SMS test. This is a single test requested by the commissioner.' });
+  return response.json({ accepted: true, ...result, note: 'Accepted is not delivered. Check /api/sms/trace?id= with this message ID and confirm receipt on the phone.' });
 }));
 
 /* Commissioner-only: what happened to the last verification text for a phone,
@@ -180,6 +203,8 @@ app.get('/api/health', asyncRoute(async (_request, response) => {
     ttsConfigured: String(process.env.JACK_TTS_PROVIDER ?? '').toLowerCase() === 'elevenlabs'
       ? Boolean(process.env.JACK_TTS_API_KEY && process.env.JACK_TTS_VOICE_ID)
       : false,
+    pushConfigured: Boolean(webpush),
+    smsWebhookVerificationConfigured: Boolean(process.env.TELNYX_PUBLIC_KEY),
   });
 }));
 
@@ -412,7 +437,7 @@ app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   const league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
   if (!league) return response.status(404).json({ error: 'League not found.' });
   await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
-  return response.json(league);
+  return response.json(withoutPushCredentials(league));
 }));
 
 /* ── Manual season start: commissioner clears the demo crew on demand ── */
@@ -724,9 +749,19 @@ app.post('/api/webhooks/twilio/inbound', asyncRoute(async (request, response) =>
 }));
 
 /* ── Telnyx Inbound SMS Webhook ── */
-app.post('/api/sms/inbound', asyncRoute(async (request, response) => {
+const requireTelnyxSignature = (request, response, next) => {
+  if (!process.env.TELNYX_PUBLIC_KEY) return response.status(503).json({ error: 'Telnyx webhook verification is not configured.' });
+  if (!verifyTelnyxWebhook({ publicKey: process.env.TELNYX_PUBLIC_KEY, timestamp: request.get('telnyx-timestamp'), signature: request.get('telnyx-signature-ed25519'), rawBody: request.rawBody })) return response.status(403).json({ error: 'Invalid Telnyx signature.' });
+  return next();
+};
+app.post('/api/sms/inbound', requireTelnyxSignature, asyncRoute(async (request, response) => {
   // Telnyx sends JSON with data.event_type and data.payload
   const evt = request.body?.data;
+  const deliveryEvent = telnyxDeliveryEvent(evt);
+  if (deliveryEvent) {
+    await applyDeliveryStatus({ store, ...deliveryEvent });
+    return response.json({ ok: true });
+  }
   if (!evt || evt.event_type !== 'message.received') return response.status(200).json({ ok: true });
 
   const from = evt.payload?.from?.phone_number;
@@ -756,20 +791,20 @@ app.post('/api/sms/inbound', asyncRoute(async (request, response) => {
       if (!question) {
         // "Hey Jack" with no question — stay silent to avoid SMS costs
       } else {
+        if (!evt.id) return response.status(422).json({ error: 'Missing webhook event ID.' });
+        if (!await store.claimOnce(player.leagueId, `sms-reply-${evt.id}`)) return response.json({ ok: true, duplicate: true });
         try {
           const answer = await askJackAssistant({
-            leagueId,
+            leagueId: player.leagueId,
             question: `${question}\n\n(Answering over SMS: keep it under 300 characters, plain text, no markdown, PG-13.)`,
             playerId: player.id,
           });
           if (answer?.text && process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER) {
             const smsText = answer.text.replace(/[*_#`]/g, '').replace(/\s+/g, ' ').trim().slice(0, 320);
-            await fetch('https://api.telnyx.com/v2/messages', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
-              body: JSON.stringify({ from: process.env.TELNYX_FROM_NUMBER, to: from, text: smsText }),
-            });
-            await saveNotification(leagueId, { playerId: player.id, kind: 'jack_sms', title: 'Jack replied via SMS', body: smsText, metadata: { question } });
+            const broadcast = await sendJackBroadcast({ store, leagueId: player.leagueId, provider: createSmsProvider({ ...process.env, SMS_PROVIDER: 'telnyx' }), messages: [{ playerId: player.id, text: smsText }], actor: 'jack', kind: 'jack_reply' });
+            const delivery = broadcast.deliveries[0];
+            const submitted = ['queued', 'sending', 'sent', 'delivered'].includes(delivery?.status);
+            await saveNotification(player.leagueId, { playerId: player.id, kind: 'jack_sms', title: submitted ? 'Jack replied — SMS submitted' : 'Jack replied — SMS was not submitted', body: smsText, metadata: { question, smsStatus: delivery?.status, providerMessageId: delivery?.providerMessageId } });
           }
         } catch (error) {
           console.error('Text-Jack reply failed:', error.message);
@@ -782,14 +817,9 @@ app.post('/api/sms/inbound', asyncRoute(async (request, response) => {
 }));
 
 /* ── Telnyx Delivery Status Webhook ── */
-app.post('/api/webhooks/telnyx/status', asyncRoute(async (request, response) => {
-  const evt = request.body?.data;
-  if (!evt) return response.status(200).json({ ok: true });
-  const statusMap = { 'message.sent': 'sent', 'message.delivered': 'delivered', 'message.failed': 'failed' };
-  const status = statusMap[evt.event_type];
-  if (status) {
-    await applyDeliveryStatus({ store, providerMessageId: evt.payload?.id, status, errorCode: evt.payload?.errors?.[0]?.code || null });
-  }
+app.post('/api/webhooks/telnyx/status', requireTelnyxSignature, asyncRoute(async (request, response) => {
+  const deliveryEvent = telnyxDeliveryEvent(request.body?.data);
+  if (deliveryEvent) await applyDeliveryStatus({ store, ...deliveryEvent });
   return response.status(200).json({ ok: true });
 }));
 
@@ -1487,6 +1517,7 @@ app.post('/api/leagues/:leagueId/results/sync', auth.requireAdmin, asyncRoute(as
     await maybePostRivalryChat(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner });
     applied.push({ gameId: score.gameId, matchup: `${score.away} at ${score.home}`, final: `${score.awayScore}–${score.homeScore}`, winner });
   }
+  await notifyFinalResults(request.params.leagueId, week);
   return response.json({ week, applied, appliedCount: applied.length, alreadyVerified: skipped.length, liveInProgress: feed.scores.filter((s) => s.state === 'in').length });
 }));
 
@@ -1606,26 +1637,17 @@ app.post('/api/leagues/:leagueId/group-text', auth.requireAdmin, asyncRoute(asyn
     }
   }
   if (!eligible.length) return response.status(422).json({ error: 'No players with verified phones and SMS consent.' });
+  if (!['individual', 'group_mms'].includes(mode)) return response.status(422).json({ error: 'Choose individual texts or group MMS.' });
+  if (mode === 'group_mms' && (eligible.length < 2 || eligible.length > 8)) return response.status(422).json({ error: 'Group MMS requires 2–8 eligible players. Choose Individual for this group.' });
 
   const results = [];
+  const provider = createSmsProvider({ ...process.env, SMS_PROVIDER: 'telnyx' });
 
-  if (mode === 'group_mms' && eligible.length >= 2 && eligible.length <= 10) {
+  if (mode === 'group_mms') {
     // Telnyx MMS group: send one message to all recipients in a shared thread
     try {
-      const resp = await fetch('https://api.telnyx.com/v2/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
-        body: JSON.stringify({
-          from: process.env.TELNYX_FROM_NUMBER,
-          to: eligible.map((p) => ({ phone_number: p.phone })),
-          text,
-          type: 'MMS',
-          subject: '405 BadGuys',
-        }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.errors?.[0]?.detail ?? 'Telnyx group MMS failed');
-      results.push({ mode: 'group_mms', status: 'sent', recipients: eligible.length, messageId: data?.data?.id });
+      const sent = await provider.sendGroup({ players: eligible.map((player) => ({ phoneE164: player.phone })), text });
+      results.push({ mode: 'group_mms', status: sent.status, recipients: eligible.length, messageId: sent.id });
     } catch (error) {
       results.push({ mode: 'group_mms', status: 'failed', error: error.message });
     }
@@ -1633,22 +1655,17 @@ app.post('/api/leagues/:leagueId/group-text', auth.requireAdmin, asyncRoute(asyn
     // Individual SMS broadcast (works for any group size)
     for (const player of eligible) {
       try {
-        const resp = await fetch('https://api.telnyx.com/v2/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
-          body: JSON.stringify({ from: process.env.TELNYX_FROM_NUMBER, to: player.phone, text }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data?.errors?.[0]?.detail ?? 'Send failed');
-        results.push({ playerId: player.id, name: player.name, status: 'sent', messageId: data?.data?.id });
+        const sent = await provider.send({ player: { phoneE164: player.phone }, text });
+        results.push({ playerId: player.id, name: player.name, status: sent.status, messageId: sent.id });
       } catch (error) {
         results.push({ playerId: player.id, name: player.name, status: 'failed', error: error.message });
       }
     }
   }
 
-  const sent = results.filter((r) => r.status === 'sent').length;
-  const failed = results.filter((r) => r.status === 'failed').length;
+  const sent = results.filter((r) => ['sent', 'queued', 'sending', 'delivered'].includes(r.status)).reduce((sum, result) => sum + (result.recipients ?? 1), 0);
+  const failed = mode === 'group_mms' && !sent ? eligible.length : results.filter((r) => r.status === 'failed').length;
+  await store.saveBroadcast(request.params.leagueId, { id: `broadcast-${randomUUID()}`, kind: 'group_text', provider: provider.name, sentAt: new Date().toISOString(), status: failed ? 'completed_with_failures' : 'submitted', deliveries: results.map((result) => ({ playerId: result.playerId ?? null, recipientCount: result.recipients ?? 1, channel: 'sms', status: result.status, providerMessageId: result.messageId, error: result.error })) });
   await store.writeAudit(request.params.leagueId, 'group_text.sent', `Commissioner sent ${mode} to ${eligible.length} players: ${sent} sent, ${failed} failed`, request.actor, { mode, text: text.slice(0, 100) });
   await saveNotification(request.params.leagueId, { kind: 'group_text', title: `Commissioner group text`, body: text.slice(0, 200), metadata: { mode, recipientCount: eligible.length } });
 
@@ -2460,6 +2477,7 @@ app.get('/api/leagues/:leagueId/payment-overview', auth.requireAdmin, asyncRoute
 
 /* ── Notification history ── */
 app.get('/api/leagues/:leagueId/notifications', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  if (request.player.leagueId !== request.params.leagueId) return response.status(403).json({ error: 'This player does not belong to that league.' });
   const limit = Math.min(Number(request.query.limit) || 50, 100);
   const kinds = request.query.kinds ? String(request.query.kinds).split(',') : null;
   const notifications = await store.getNotifications(request.params.leagueId, { playerId: request.player.id, limit, kinds });
@@ -2478,6 +2496,13 @@ app.get('/api/tts/diagnose', auth.requireAdmin, asyncRoute(async (_request, resp
   const provider = createJackTtsProvider(process.env);
   if (typeof provider.diagnose !== 'function') return response.json({ provider: provider.kind, configured: provider.configured });
   return response.json(await provider.diagnose());
+}));
+
+app.post('/api/tts/diagnose', auth.requireAdmin, asyncRoute(async (request, response) => {
+  if (!checkPlayerRate(TTS_RATE, 'admin-voice-test', 3, 60_000)) return response.status(429).json({ error: 'Wait a minute before testing the studio voice again.' });
+  const { createJackTtsProvider } = await import('./ttsService.js');
+  const provider = createJackTtsProvider(process.env);
+  return response.json(provider.diagnose ? await provider.diagnose({ testAudio: true }) : { provider: provider.kind, configured: false });
 }));
 
 app.post('/api/tts', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
@@ -2521,33 +2546,45 @@ if (vapidPublic && vapidPrivate) {
 }
 
 app.get('/api/push/vapid-public', (_request, response) => {
-  if (!vapidPublic) return response.status(503).json({ error: 'Push notifications not configured.' });
+  if (!webpush) return response.status(503).json({ error: 'Push notifications not configured.' });
   response.json({ vapidPublicKey: vapidPublic });
 });
 
-// Save push subscription for a player
-app.post('/api/leagues/:leagueId/push/subscribe', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+const subscribePush = asyncRoute(async (request, response) => {
   if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
-  const sub = request.body?.subscription;
-  if (!sub?.endpoint) return response.status(400).json({ error: 'Invalid subscription.' });
-  const league = await store.getLeague(request.params.leagueId);
+  const lid = request.params.leagueId ?? request.player.leagueId;
+  if (lid !== request.player.leagueId) return response.status(403).json({ error: 'This player does not belong to that league.' });
+  if (request.body?.playerId && request.body.playerId !== request.player.id) return response.status(409).json({ error: 'The signed-in player changed. Enable push again.' });
+  let sub;
+  try { sub = validatePushSubscription(request.body?.subscription); }
+  catch (error) { return response.status(422).json({ error: error.message }); }
+  const league = await store.getLeague(lid);
   if (!league) return response.status(404).json({ error: 'League not found.' });
-  await store.mergeLeagueSettings(request.params.leagueId, (s) => {
-    s.pushSubscriptions = s.pushSubscriptions ?? {};
-    s.pushSubscriptions[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
-  });
+  await store.mergeLeagueSettings(lid, (settings) => savePlayerSubscription(settings, request.player.id, sub));
+  response.json({ ok: true });
+});
+app.post('/api/leagues/:leagueId/push/subscribe', playerAuth.requirePlayer, subscribePush);
+app.post('/api/push/subscribe', playerAuth.requirePlayer, subscribePush);
+app.delete('/api/push/subscribe', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const endpoint = String(request.body?.endpoint ?? '');
+  if (!endpoint) return response.status(422).json({ error: 'Device endpoint is required.' });
+  await store.mergeLeagueSettings(request.player.leagueId, (settings) => removePlayerSubscription(settings, request.player.id, endpoint));
   response.json({ ok: true });
 }));
-// Legacy route for existing clients
-app.post('/api/push/subscribe', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+
+app.post('/api/push/test', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
   if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
-  const sub = request.body?.subscription;
-  if (!sub?.endpoint) return response.status(400).json({ error: 'Invalid subscription.' });
-  await store.mergeLeagueSettings(leagueId, (s) => {
-    s.pushSubscriptions = s.pushSubscriptions ?? {};
-    s.pushSubscriptions[request.player.id] = { ...sub, subscribedAt: new Date().toISOString() };
-  });
-  response.json({ ok: true });
+  if (!checkPlayerRate(ASSISTANT_RATE, `push-test-${request.player.id}`, 3, 60_000)) return response.status(429).json({ error: 'Wait a minute before another test notification.' });
+  const endpoint = String(request.body?.endpoint ?? '');
+  if (!endpoint) return response.status(422).json({ error: 'Select this device by including its endpoint.' });
+  const report = await deliverPush({ store, leagueId: request.player.leagueId, webpush, playerIds: [request.player.id], endpoint, payload: { title: 'Jack notification test', body: 'This device is subscribed to your league alerts.', url: '/?view=notifs', tag: 'jack-push-test' } });
+  return response.status(report.sent ? 200 : report.total ? 502 : 404).json({ ...report, ...(report.sent ? {} : { error: 'The test could not reach this subscription. Disable and enable push, then retry.' }) });
+}));
+
+app.get('/api/push/diagnose', auth.requireAdmin, asyncRoute(async (_request, response) => {
+  const league = await store.getLeague(leagueId);
+  const entries = Object.values(league?.settings?.pushSubscriptions ?? {});
+  return response.json({ configured: Boolean(webpush), subscribedPlayers: entries.filter((value) => subscriptionsFor(value).length).length, subscribedDevices: entries.reduce((total, value) => total + subscriptionsFor(value).length, 0) });
 }));
 
 // Admin: send push to all subscribed players
@@ -2555,16 +2592,9 @@ app.post('/api/push/broadcast', auth.requireAdmin, asyncRoute(async (request, re
   if (!webpush) return response.status(503).json({ error: 'Push not configured.' });
   const { title, body, url, tag } = request.body ?? {};
   if (!body) return response.status(400).json({ error: 'Message body required.' });
-  const league = await store.getLeague(leagueId);
-  const subs = Object.entries(league?.settings?.pushSubscriptions ?? {});
-  let sent = 0;
-  for (const [, sub] of subs) {
-    try {
-      await webpush.sendNotification(sub, JSON.stringify({ title: title || '405 Bad Guys Parlays', body, url: url || '/', tag: tag || 'broadcast' }));
-      sent++;
-    } catch { /* subscription expired or invalid */ }
-  }
-  response.json({ sent, total: subs.length });
+  const report = await deliverPush({ store, leagueId, webpush, payload: { title: String(title || '405 Bad Guys Parlays').slice(0, 100), body: String(body).slice(0, 500), url: url || '/?view=notifs', tag: tag || 'broadcast' } });
+  await saveNotification(leagueId, { kind: 'announcement', title: String(title || 'Commissioner announcement').slice(0, 100), body: String(body).slice(0, 500) });
+  response.json(report);
 }));
 
 // Send deadline reminder push to players without sheets
@@ -2577,21 +2607,8 @@ app.post('/api/push/deadline-reminder', auth.requireAdmin, asyncRoute(async (req
   const missing = (league?.players ?? []).filter((p) => p.id && !submitted.has(p.id));
   const deadline = getWeekDeadline(week);
   const deadlineStr = deadline ? deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET' : 'soon';
-  let sent = 0;
-  for (const p of missing) {
-    const sub = (league?.settings?.pushSubscriptions ?? {})[p.id];
-    if (!sub) continue;
-    try {
-      await webpush.sendNotification(sub, JSON.stringify({
-        title: 'Picks due ' + deadlineStr,
-        body: `Hey ${p.name ?? 'player'}, your Week ${week} sheet isn't in yet. Don't let Jack roast you for being late.`,
-        url: '/?view=picks',
-        tag: `deadline-w${week}`,
-      }));
-      sent++;
-    } catch { /* expired */ }
-  }
-  response.json({ sent, missing: missing.length, week });
+  const report = await deliverPush({ store, leagueId, webpush, playerIds: missing.map((player) => player.id), payload: { title: 'Picks due ' + deadlineStr, body: `Your Week ${week} sheet isn't in yet. Open the app to submit your picks.`, url: '/?view=picks', tag: `deadline-w${week}` } });
+  response.json({ ...report, missing: missing.length, week });
 }));
 
 /* ── COMMISSIONER AUTO-PILOT ─────────────────────────────────────────
@@ -2720,6 +2737,7 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
         verified += 1;
       }
       if (verified) actions.push(`Verified ${verified} final score(s) for Week ${week} from ESPN.`);
+      await notifyFinalResults(leagueId, week);
     } catch (error) { console.error('Auto-pilot score sync failed:', error.message); }
 
     // 2. Auto-settle props when the whole week is final and picks exist
@@ -2812,17 +2830,9 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
           if (missing.length) {
             const when = deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET';
             // Push
-            let pushed = 0;
-            if (webpush) {
-              for (const p of missing) {
-                const sub = (settings.pushSubscriptions ?? {})[p.id];
-                if (!sub) continue;
-                try {
-                  await webpush.sendNotification(sub, JSON.stringify({ title: `Picks lock ${when}`, body: `${p.name}, your Week ${week} sheet isn't in. ~${Math.max(1, Math.round(hoursLeft))}h left.`, url: '/?view=picks', tag: `deadline-w${week}` }));
-                  pushed += 1;
-                } catch { /* expired sub */ }
-              }
-            }
+            const pushReport = await deliverPush({ store, leagueId, webpush, playerIds: missing.map((player) => player.id), payload: { title: `Picks lock ${when}`, body: `Your Week ${week} sheet isn't in. ~${Math.max(1, Math.round(hoursLeft))}h left.`, url: '/?view=picks', tag: `deadline-w${week}` } });
+            const pushed = pushReport.sent;
+            for (const player of missing) await saveNotification(leagueId, { playerId: player.id, kind: 'pick_reminder', title: `Week ${week} picks due soon`, body: `Your picks lock ${when}. Open Picks to submit your sheet.`, metadata: { week } });
             // SMS through Jack
             let texted = 0;
             try {

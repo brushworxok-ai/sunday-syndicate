@@ -25,6 +25,7 @@ import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebrea
 import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
 import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle } from './payment.js';
+import { createJackVoicePlayback } from './jackVoice.js';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
@@ -129,6 +130,7 @@ function App() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
   const [pushSupported] = useState(() => 'serviceWorker' in navigator && 'PushManager' in window);
   const [paymentHistory, setPaymentHistory] = useState(null);
   const [notifications, setNotifications] = useState([]);
@@ -353,7 +355,10 @@ function App() {
     } catch { /* non-fatal */ }
   }, [playerSession.authenticated]);
 
-  const [notifsSeenAt, setNotifsSeenAt] = useState(() => { try { return localStorage.getItem('notifs-seen-at') || ''; } catch { return ''; } });
+  const [notifsSeenAt, setNotifsSeenAt] = useState('');
+  const notificationPlayerRef = useRef(playerSession.playerId);
+  const notificationDataOwnerRef = useRef(null);
+  notificationPlayerRef.current = playerSession.playerId;
   const unreadNotifs = useMemo(
     () => notifications.filter((n) => n.kind !== 'payment_claimed' && (!notifsSeenAt || String(n.at) > notifsSeenAt)).length,
     [notifications, notifsSeenAt],
@@ -362,21 +367,45 @@ function App() {
     if (!playerSession.authenticated) return;
     try {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/notifications`);
-      setNotifications(data.notifications ?? []);
+      if (notificationPlayerRef.current === playerSession.playerId) {
+        notificationDataOwnerRef.current = playerSession.playerId;
+        setNotifications(data.notifications ?? []);
+      }
     } catch { /* non-fatal */ }
-  }, [playerSession.authenticated]);
+  }, [playerSession.authenticated, playerSession.playerId]);
 
   // Load payment & notification data when switching to those views
   useEffect(() => {
     if (view === 'payments') loadPaymentHistory();
-    if (playerSession.authenticated && notifications.length === 0) loadNotifications();
-    if (view === 'notifs') {
-      loadNotifications();
-      const stamp = new Date().toISOString();
-      setNotifsSeenAt(stamp);
-      try { localStorage.setItem('notifs-seen-at', stamp); } catch { /* private mode */ }
-    }
-  }, [view, loadPaymentHistory, loadNotifications, playerSession.authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (view === 'notifs') loadNotifications();
+  }, [view, loadPaymentHistory, loadNotifications]);
+
+  useEffect(() => {
+    setNotifications([]);
+    setNotifsSeenAt('');
+    if (!playerSession.authenticated) return;
+    try { setNotifsSeenAt(localStorage.getItem(`notifs-seen-at:${playerSession.playerId}`) || ''); } catch { /* private mode */ }
+    const refresh = () => { if (document.visibilityState !== 'hidden') loadNotifications(); };
+    const onPush = (event) => { if (event.data?.type === 'league-notification') refresh(); };
+    refresh();
+    const timer = setInterval(refresh, 60_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    navigator.serviceWorker?.addEventListener('message', onPush);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+      navigator.serviceWorker?.removeEventListener('message', onPush);
+    };
+  }, [playerSession.authenticated, playerSession.playerId, loadNotifications]);
+
+  useEffect(() => {
+    if (view !== 'notifs' || !playerSession.playerId || notificationDataOwnerRef.current !== playerSession.playerId || !notifications.length) return;
+    const stamp = notifications.reduce((latest, item) => String(item.at) > latest ? String(item.at) : latest, notifsSeenAt);
+    setNotifsSeenAt(stamp);
+    try { localStorage.setItem(`notifs-seen-at:${playerSession.playerId}`, stamp); } catch { /* private mode */ }
+  }, [view, notifications, playerSession.playerId, notifsSeenAt]);
 
   // Deep-link: open the view specified in ?view= (e.g. invite links)
   useEffect(() => {
@@ -1075,7 +1104,7 @@ function App() {
       if (!jackVoiceConsent) setTimeout(() => setJackAvatarState((current) => (current === 'talking' || current === 'roast' || current === 'winner' || current === 'shock') ? 'idle' : current), 4000);
       setTimeout(() => { assistantEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, 100);
       // Auto-speak only after user has opted in by tapping the speaker button
-      if (jackVoiceConsent) readAssistantMessage(data.text);
+      if (voicePlaybackAllowedRef.current.open && voicePlaybackAllowedRef.current.consent && voicePlaybackAllowedRef.current.playerId === playerSession.playerId) readAssistantMessage(data.text);
     } catch (error) {
       setAssistantMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', text: `Sorry, I couldn't answer that right now. ${error.message}` }]);
       setJackAvatarState('error');
@@ -1085,9 +1114,14 @@ function App() {
     }
   };
 
-  const jackAudioRef = useRef(null);
+  const jackPlaybackRef = useRef(null);
+  const voicePlaybackAllowedRef = useRef(null);
+  voicePlaybackAllowedRef.current = { open: assistantOpen, consent: jackVoiceConsent, playerId: playerSession.playerId };
+  const [jackVoiceStatus, setJackVoiceStatus] = useState('');
+  const [jackVoiceBlocked, setJackVoiceBlocked] = useState(false);
   const jackAudioCtxRef = useRef(null);
   const jackLevelRafRef = useRef(0);
+  const jackAudioGraphCleanupRef = useRef(null);
   const audioUnlockedRef = useRef(false);
 
   /* iOS blocks audio unless it starts inside a user gesture and the AudioContext
@@ -1137,6 +1171,8 @@ function App() {
 
   const stopJackLevelLoop = () => {
     cancelAnimationFrame(jackLevelRafRef.current);
+    jackAudioGraphCleanupRef.current?.();
+    jackAudioGraphCleanupRef.current = null;
     setJackLevel(0);
   };
 
@@ -1151,6 +1187,7 @@ function App() {
       analyser.fftSize = 256;
       source.connect(analyser);
       analyser.connect(ctx.destination);
+      jackAudioGraphCleanupRef.current = () => { try { source.disconnect(); analyser.disconnect(); } catch { /* already released */ } };
       const data = new Uint8Array(analyser.frequencyBinCount);
       const tick = () => {
         if (audio.paused || audio.ended) {
@@ -1181,64 +1218,30 @@ function App() {
     jackLevelRafRef.current = requestAnimationFrame(tick);
   };
 
-  const speakWithBrowser = (text) => {
-    if (!('speechSynthesis' in window)) { setAssistantSpeaking(''); setJackAvatarState('idle'); return; }
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.95;
-    utterance.pitch = 0.7;
-    // Jack is a man. Browsers default to a female voice (Samantha on iPhone),
-    // so pick a known male English voice when one is installed.
-    const voice = pickMaleVoice();
-    if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
-    utterance.onend = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); };
-    utterance.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); };
-    setJackAvatarState(classifyJackMood(text));
-    startSyntheticSync();
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const readAssistantMessage = async (text) => {
-    if (!text || assistantSpeaking) return;
-    unlockAudio(); // must run inside the tap gesture, before any await, for iOS
-    setAssistantSpeaking(text.slice(0, 40));
-    // Try Jack's real voice first (server-side ElevenLabs); fall back to the browser voice.
-    try {
-      const response = await fetch('/api/tts', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: text.slice(0, 1200) }),
-      });
-      if (response.ok && (response.headers.get('content-type') || '').startsWith('audio/')) {
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        jackAudioRef.current = audio;
-        audio.onended = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); URL.revokeObjectURL(url); jackAudioRef.current = null; };
-        audio.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); URL.revokeObjectURL(url); jackAudioRef.current = null; };
+  useEffect(() => {
+    const playback = createJackVoicePlayback({
+      onState: (state) => {
+        setAssistantSpeaking(['loading', 'playing'].includes(state.phase) ? state.phase : '');
+        setJackVoiceStatus(state.message ?? '');
+        setJackVoiceBlocked(state.phase === 'blocked');
+      },
+      onStop: () => { setJackAvatarState('idle'); stopJackLevelLoop(); },
+      onAudio: (audio, text) => {
         setJackAvatarState(classifyJackMood(text));
-        // On iOS, routing an <audio> element through WebAudio can silence it, so
-        // there we play the element directly (guaranteed sound) with a synthetic
-        // glow. Elsewhere the analyser drives a real amplitude-reactive glow.
-        if (!isIOS && jackAudioCtxRef.current?.state === 'running' && startVoiceSync(audio)) {
-          /* real analyser glow is running */
-        } else {
-          startSyntheticSync();
-        }
-        await audio.play();
-        return;
-      }
-    } catch { /* fall through to browser voice */ }
-    speakWithBrowser(text);
-  };
+        if (isIOS || jackAudioCtxRef.current?.state !== 'running' || !startVoiceSync(audio)) startSyntheticSync();
+      },
+      onBrowser: (text) => { setJackAvatarState(classifyJackMood(text)); startSyntheticSync(); },
+    });
+    jackPlaybackRef.current = playback;
+    return () => { playback.stop(); jackPlaybackRef.current = null; };
+  }, [isIOS]);
 
-  const stopSpeaking = () => {
-    if (jackAudioRef.current) { jackAudioRef.current.pause(); jackAudioRef.current = null; }
-    window.speechSynthesis?.cancel();
-    setAssistantSpeaking('');
-    setJackAvatarState('idle');
-    stopJackLevelLoop();
+  const readAssistantMessage = (text) => {
+    unlockAudio(); // prime audio inside the tap gesture, before the request
+    return jackPlaybackRef.current?.play(text);
   };
+  const stopSpeaking = () => jackPlaybackRef.current?.stop();
+  useEffect(() => { stopSpeaking(); }, [playerSession.playerId, assistantOpen]);
 
   // Keep the sfx module + saved preference in sync with the toggle
   useEffect(() => {
@@ -1305,9 +1308,13 @@ function App() {
   };
 
   const logoutPlayer = async () => {
-    await apiRequest('/api/auth/player', { method: 'DELETE' });
-    setPlayerSession({ authenticated: false, playerId: null, name: null });
-    notify('Signed out.');
+    try {
+      await disableDevicePush();
+      await apiRequest('/api/auth/player', { method: 'DELETE' });
+      setPlayerSession({ authenticated: false, playerId: null, name: null });
+      setNotifications([]);
+      notify('Signed out.');
+    } catch (error) { notify(`Could not finish signing out: ${error.message}`); }
   };
 
   const createBet = async (event) => {
@@ -1398,7 +1405,8 @@ function App() {
     setServerBusy('reminders');
     try {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/reminders/picks`, { method: 'POST', body: JSON.stringify({ week: selectedWeek }) });
-      notify(data.missing?.length ? `Jack nudged ${data.missing.join(', ')}.` : data.message);
+      const accepted = (data.broadcast?.deliveries ?? []).filter((delivery) => ['queued', 'sent', 'sending', 'delivered'].includes(delivery.status)).length;
+      notify(data.missing?.length ? `${accepted} reminder text${accepted === 1 ? '' : 's'} submitted; in-app reminders saved for ${data.missing.length} players. Delivery is tracked by the SMS provider.` : data.message);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -1411,8 +1419,8 @@ function App() {
     try {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/group-text`, { method: 'POST', body: JSON.stringify({ text: msg, mode: groupTextMode }) });
       const sent = data.sent ?? data.results?.filter((r) => r.ok).length ?? 0;
-      notify(groupTextMode === 'group_mms' ? `Group MMS sent to ${sent} players in a shared thread.` : `Broadcast sent individually to ${sent} player${sent === 1 ? '' : 's'}.`);
-      setGroupTextMsg('');
+      notify(`${sent} text${sent === 1 ? '' : 's'} submitted to the carrier; ${data.failed ?? 0} failed. Submitted does not mean delivered.`);
+      if (sent) setGroupTextMsg('');
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -1473,36 +1481,86 @@ function App() {
 
   // Register service worker and check push status
   useEffect(() => {
+    let cancelled = false;
+    setPushEnabled(false);
     if (!pushSupported) return;
     navigator.serviceWorker.register('/sw.js').then(async (reg) => {
       const sub = await reg.pushManager.getSubscription();
-      if (sub) setPushEnabled(true);
+      let owner;
+      try { owner = localStorage.getItem(`push-owner:${LEAGUE_ID}`); } catch { /* private mode */ }
+      if (!cancelled && sub && playerSession.authenticated && owner === playerSession.playerId) {
+        await apiRequest('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription: sub, playerId: playerSession.playerId }) });
+        if (!cancelled) setPushEnabled(true);
+      }
     }).catch(() => {});
-  }, [pushSupported]);
+    return () => { cancelled = true; };
+  }, [pushSupported, playerSession.authenticated, playerSession.playerId]);
+
+  const devicePushRegistration = async () => {
+    let timer;
+    try {
+      return await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Notification setup is not ready. Reload the app and try again.')), 8000); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  };
+  const disableDevicePush = async () => {
+    if (!pushSupported) return;
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    const sub = await reg?.pushManager.getSubscription();
+    if (sub) {
+      await sub.unsubscribe();
+      await apiRequest('/api/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {}); // device is already unsubscribed
+    }
+    try { localStorage.removeItem(`push-owner:${LEAGUE_ID}`); } catch { /* private mode */ }
+    setPushEnabled(false);
+  };
 
   const togglePushNotifications = async () => {
     if (!pushSupported) return notify('Push notifications are not supported in this browser.');
     if (!playerSession.authenticated) return notify('Sign in first to enable notifications.');
+    if (pushBusy) return;
+    setPushBusy(true);
     try {
-      const reg = await navigator.serviceWorker.ready;
       if (pushEnabled) {
-        const sub = await reg.pushManager.getSubscription();
-        if (sub) await sub.unsubscribe();
-        setPushEnabled(false);
+        await disableDevicePush();
         notify('Push notifications disabled.');
         return;
       }
+      if (Notification.permission === 'default') await Notification.requestPermission();
+      if (Notification.permission !== 'granted') throw new DOMException('Notification permission denied.', 'NotAllowedError');
+      const reg = await devicePushRegistration();
       const vapidResp = await apiRequest('/api/push/vapid-public');
       if (!vapidResp.vapidPublicKey) return notify('Push not configured on the server yet.');
       const applicationServerKey = Uint8Array.from(atob(vapidResp.vapidPublicKey.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-      const subscription = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
-      await apiRequest('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription }) });
+      let subscription = await reg.pushManager.getSubscription();
+      const oldKey = subscription?.options?.applicationServerKey;
+      if (subscription && (!oldKey || String(new Uint8Array(oldKey)) !== String(applicationServerKey))) {
+        await subscription.unsubscribe();
+        await apiRequest('/api/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint: subscription.endpoint }) });
+        subscription = null;
+      }
+      subscription ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+      await apiRequest('/api/push/subscribe', { method: 'POST', body: JSON.stringify({ subscription, playerId: playerSession.playerId }) });
+      try { localStorage.setItem(`push-owner:${LEAGUE_ID}`, playerSession.playerId); } catch { /* private mode */ }
       setPushEnabled(true);
-      notify('Push notifications enabled — you\'ll get deadline reminders and results alerts.');
+      notify('This device is subscribed to league alerts. Send a test notification to confirm it works.');
     } catch (err) {
       if (err.name === 'NotAllowedError') notify('Notification permission was denied. Enable it in your browser settings.');
       else notify(err.message || 'Could not enable push notifications.');
-    }
+    } finally { setPushBusy(false); }
+  };
+
+  const testDevicePush = async () => {
+    setPushBusy(true);
+    try {
+      const sub = await (await devicePushRegistration()).pushManager.getSubscription();
+      if (!sub) throw new Error('Enable push on this device first.');
+      await apiRequest('/api/push/test', { method: 'POST', body: JSON.stringify({ endpoint: sub.endpoint }) });
+      notify('Test accepted by the push service. Check this device’s notification center.');
+    } catch (error) { notify(error.message); }
+    finally { setPushBusy(false); }
   };
 
   const toggleSeasonPaid = async (playerId) => {
@@ -2826,8 +2884,8 @@ function App() {
                 <div className="panel">
                   <div className="panel-heading"><div><span className="eyebrow dark">NOTIFICATIONS</span><h2>Push alerts</h2></div></div>
                   <p className="muted">Get notified when the deadline is approaching, when results post, and when the commissioner has announcements.</p>
-                  <button className={`button ${pushEnabled ? 'button-ghost' : 'button-primary'}`} type="button" onClick={togglePushNotifications}>{pushEnabled ? '🔕 Disable push notifications' : '🔔 Enable push notifications'}</button>
-                  {pushEnabled && <p className="push-status-on">Push notifications are active on this device.</p>}
+                  <button className={`button ${pushEnabled ? 'button-ghost' : 'button-primary'}`} type="button" disabled={pushBusy} onClick={togglePushNotifications}>{pushBusy ? 'Working…' : pushEnabled ? 'Disable push notifications' : 'Enable push notifications'}</button>
+                  {pushEnabled && <><button className="button button-ghost" type="button" disabled={pushBusy} onClick={testDevicePush}>Send test notification</button><p className="push-status-on">This device is subscribed. Use the test button to confirm it displays alerts.</p></>}
                 </div>
               </section>
             )}
@@ -3527,7 +3585,7 @@ function App() {
             </div>
             <section className="group-text-section">
               <div className="panel-heading"><div><span className="eyebrow dark">MESSAGING</span><h2>📢 Group Text</h2></div></div>
-              <p className="muted">Send an SMS to all players with verified phone numbers. Group MMS creates a shared thread (2–10 players); Individual sends separate texts to each.</p>
+              <p className="muted">Text players with verified phones and SMS consent. Group MMS creates a shared thread (2–8 players) and exposes participants’ phone numbers to each other; Individual keeps numbers private.</p>
               <div className="group-text-controls">
                 <div className="group-text-mode-toggle">
                   <button type="button" className={`mode-btn ${groupTextMode === 'individual' ? 'active' : ''}`} onClick={() => setGroupTextMode('individual')}>📱 Individual</button>
@@ -3599,6 +3657,8 @@ function App() {
               </div>
             </div>
 
+            {jackVoiceStatus && <p role="status" className="muted" style={{ margin: '8px 16px', fontSize: 12 }}>{jackVoiceStatus}</p>}
+            {jackVoiceBlocked && <button className="button button-primary" type="button" onClick={() => { unlockAudio(); jackPlaybackRef.current?.resume(); }}>Play studio voice</button>}
             <div className="assistant-quick-prompts">
               {JACK_QUICK_PROMPTS.map((prompt) => (
                 <button key={prompt} type="button" onClick={() => askAssistant(prompt)} disabled={assistantBusy}>{prompt}</button>
@@ -3727,19 +3787,6 @@ function PayHandle({ player, compact = false }) {
   const pay = preferredHandle(player);
   if (!pay) return compact ? null : <span className="pay-handle missing">No pay handle</span>;
   return <a className={`pay-handle ${pay.key}`} href={pay.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title={`Pay ${player.name} on ${pay.label}`}>{compact ? pay.display : `${pay.label} ${pay.display}`}</a>;
-}
-
-const MALE_VOICE_NAMES = ['Daniel', 'Aaron', 'Fred', 'Arthur', 'Rishi', 'Gordon', 'Reed', 'Rocko', 'Eddy', 'Google UK English Male', 'Google US English Male', 'Microsoft David', 'Microsoft Guy', 'Microsoft Mark', 'Microsoft Christopher', 'Microsoft Eric', 'Microsoft Ryan', 'Alex', 'Tom', 'Lee', 'Oliver'];
-function pickMaleVoice() {
-  try {
-    const voices = window.speechSynthesis?.getVoices?.() ?? [];
-    const english = voices.filter((v) => /^en[-_]/i.test(v.lang));
-    for (const name of MALE_VOICE_NAMES) {
-      const hit = english.find((v) => v.name.toLowerCase().startsWith(name.toLowerCase()));
-      if (hit) return hit;
-    }
-    return english.find((v) => /male/i.test(v.name) && !/female/i.test(v.name)) ?? null;
-  } catch { return null; }
 }
 
 function PlayerAvatar({ player, size = 44 }) {

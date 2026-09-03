@@ -23,12 +23,19 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || '/';
+  let target;
+  try { target = new URL(event.notification.data?.url || '/', self.location.origin); } catch { target = new URL('/', self.location.origin); }
+  const url = target.origin === self.location.origin ? target.href : new URL('/', self.location.origin).href;
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      const existing = clients.find((c) => c.url.includes(self.location.origin));
-      if (existing) { existing.navigate(url); return existing.focus(); }
+      const existing = clients.find((c) => new URL(c.url).origin === self.location.origin);
+      if (existing) return existing.navigate(url).then((client) => (client || existing).focus());
       return self.clients.openWindow(url);
     })
   );
 });
+
+self.addEventListener('push', (event) => {
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+    for (const client of windows) client.postMessage({ type: 'league-notification' });
+  }));

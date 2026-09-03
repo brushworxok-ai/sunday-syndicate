@@ -103,3 +103,15 @@ SMS_PROVIDER=twilio
 ```
 
 Use Twilio API keys in production rather than placing an Account Auth Token in application configuration. Validate webhook signatures, keep STOP/START consent records synchronized, and never send when the local consent record is inactive.
+
+## Jack voice, SMS and push verification
+
+- Voice: set `JACK_TTS_PROVIDER=elevenlabs`, `JACK_TTS_API_KEY`, and the exact `JACK_TTS_VOICE_ID`. Jack uses that voice's saved settings. `GET /api/tts/diagnose` (commissioner session) is read-only and reports its name, category and subscription status. `POST /api/tts/diagnose` generates one short, billable audio probe. The player Listen button labels studio playback versus device fallback; Stop cancels pending synthesis too.
+- Telnyx: set `SMS_PROVIDER=telnyx`, `TELNYX_API_KEY`, `TELNYX_FROM_NUMBER`, and `TELNYX_PUBLIC_KEY`. Set the messaging profile's v2 webhook to `/api/sms/inbound`; this accepts inbound messages and delivery events. A separate `/api/webhooks/telnyx/status` route is also available. Unsigned requests are rejected. Jack responds to an opted-in, verified player's “Hey Jack”, “Yo Jack”, or “Ask Jack” question.
+- `GET /api/sms/diagnose` is read-only. To send one deliberate test, configure your authorized `ADMIN_PHONE_E164`, then POST `{ "confirm": true }` to `/api/sms/test` as commissioner. Use the returned ID with `/api/sms/trace?id=...` to check carrier status. `queued` or `sent` is not handset delivery; `delivered` is the carrier receipt. Sender registration/carrier errors must be resolved in Telnyx; API credentials alone do not prove delivery.
+- Group MMS uses Telnyx's dedicated endpoint and permits 2–8 recipients. All participants can see each other's numbers. Use Individual mode for privacy or larger groups.
+- Push: configure a persistent `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` pair and `VAPID_SUBJECT`. In My Profile, enable push and choose **Send test notification**. Confirm the notification appears in the device's notification center. Each player can subscribe up to five devices; logout unsubscribes that device. Expired subscriptions are removed. `/api/push/diagnose` reports configured state and device counts to the commissioner without exposing endpoints or encryption keys.
+- In-app notifications refresh on focus, on push receipt and every minute while visible. Seen state is per player. Final results, payouts, payment confirmations and Jack SMS replies also attempt push delivery; their in-app copies remain available when push fails.
+- Scheduling limitation: `vercel.json` currently runs auto-pilot once daily at 16:00 UTC, with additional runs on league visits. This cannot guarantee every 24-hour/3-hour reminder window. Use a hosting plan or external scheduler supporting frequent authenticated calls (for example every 15 minutes) before promising precise reminders. No paid scheduler is provisioned automatically.
+
+Deployment gate: verify the intended ElevenLabs voice name, an actual test SMS/carrier receipt, and an actual device notification after deployment. Automated tests mock providers and do not prove carrier or operating-system delivery.

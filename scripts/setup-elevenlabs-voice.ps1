@@ -31,9 +31,9 @@ try {
   Write-Host ''
   Write-Host 'Checking Jack voice status...' -ForegroundColor Yellow
   $health = Invoke-RestMethod -Uri 'https://sunday-syndicate.vercel.app/api/health' -TimeoutSec 30
-  if ($health.jackVoiceProvider -eq 'elevenlabs' -and $health.jackVoiceConfigured -eq $true) {
+  if ($health.ttsProvider -eq 'elevenlabs' -and $health.ttsConfigured -eq $true) {
     Write-Host ''
-    Write-Host 'SUCCESS: Jack is configured to use ElevenLabs.' -ForegroundColor Green
+    Write-Host 'CONFIGURED: Jack is set to ElevenLabs. Confirm the selected voice name in /api/tts/diagnose while signed in as commissioner.' -ForegroundColor Green
     Write-Host 'Open the app, sign in, open Ask Jack, and tap Read aloud.'
   } else {
     throw 'The deployment finished, but Jack voice is not reporting ready yet.'
@@ -42,7 +42,7 @@ try {
 catch {
   Write-Host ''
   Write-Host "SETUP STOPPED: $($_.Exception.Message)" -ForegroundColor Red
-  Write-Host 'Nothing was saved in the app files. You can safely run this setup again.'
+  Write-Host 'No key was saved in the app files. Hosting settings may already have been saved; check Vercel before retrying.'
   exit 1
 }
 finally {

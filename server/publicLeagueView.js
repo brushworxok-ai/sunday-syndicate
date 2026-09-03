@@ -5,9 +5,14 @@ function scoreSheet(sheet, results = {}) {
   );
 }
 
+export function withoutPushCredentials(league) {
+  const { pushSubscriptions: _privatePushCredentials, ...publicSettings } = league.settings ?? {};
+  return { ...league, settings: publicSettings };
+}
+
 export function buildPublicLeagueView(league) {
   return {
-    ...league,
+    ...withoutPushCredentials(league),
     sheets: (league.sheets ?? []).map(({ picks, ...sheet }) => ({
       ...sheet,
       pickCount: Object.keys(picks ?? {}).length,

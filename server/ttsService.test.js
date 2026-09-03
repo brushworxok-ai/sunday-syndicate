@@ -27,3 +27,33 @@ test('Jack TTS keeps provider credentials server-side and bounds the script', as
   assert.equal(JSON.parse(request.options.body).text, 'Winner script alert.');
   assert.throws(() => normalizeSpeechText('x'.repeat(1201)), /1,200/);
 });
+
+test('Jack uses the configured voice ID and preserves saved voice settings by default', async () => {
+  let payload, target;
+  const provider = createJackTtsProvider({ JACK_TTS_PROVIDER: ' elevenlabs ', JACK_TTS_API_KEY: ' key ', JACK_TTS_VOICE_ID: ' jack-original ' }, async (url, options) => {
+    target = url;
+    payload = JSON.parse(options.body);
+    return new Response(new Uint8Array([1]), { headers: { 'content-type': 'audio/mpeg' } });
+  });
+  await provider.synthesize({ text: 'Jack here.' });
+  assert.match(target, /\/jack-original\?/);
+  assert.equal(payload.voice_settings, undefined);
+});
+
+test('Jack refuses non-audio and empty provider responses', async () => {
+  const env = { JACK_TTS_PROVIDER: 'elevenlabs', JACK_TTS_API_KEY: 'key', JACK_TTS_VOICE_ID: 'voice' };
+  await assert.rejects(createJackTtsProvider(env, async () => Response.json({ error: 'bad' })).synthesize({ text: 'hello' }), /non-audio/);
+  await assert.rejects(createJackTtsProvider(env, async () => new Response('', { headers: { 'content-type': 'audio/mpeg' } })).synthesize({ text: 'hello' }), /empty audio/);
+});
+
+test('Read-only voice diagnostics identify the voice without generating billable speech', async () => {
+  const calls = [];
+  const provider = createJackTtsProvider({ JACK_TTS_PROVIDER: 'elevenlabs', JACK_TTS_API_KEY: 'key', JACK_TTS_VOICE_ID: 'voice' }, async (url) => {
+    calls.push(url);
+    return Response.json(url.includes('/voices/') ? { name: 'Original Jack', category: 'generated', labels: { gender: 'male' } } : { tier: 'test', character_count: 0, character_limit: 100 });
+  });
+  const report = await provider.diagnose();
+  assert.equal(report.voiceLookup.name, 'Original Jack');
+  assert.equal(report.testSynthesis, undefined);
+  assert.equal(calls.some((url) => url.includes('text-to-speech')), false);
+});
