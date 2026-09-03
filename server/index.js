@@ -2473,6 +2473,13 @@ app.get('/api/leagues/:leagueId/notifications/all', auth.requireAdmin, asyncRout
 }));
 
 /* ── Jack voice (server-side TTS; API key never reaches the browser) ── */
+app.get('/api/tts/diagnose', auth.requireAdmin, asyncRoute(async (_request, response) => {
+  const { createJackTtsProvider } = await import('./ttsService.js');
+  const provider = createJackTtsProvider(process.env);
+  if (typeof provider.diagnose !== 'function') return response.json({ provider: provider.kind, configured: provider.configured });
+  return response.json(await provider.diagnose());
+}));
+
 app.post('/api/tts', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
   if (!checkPlayerRate(TTS_RATE, request.player.id, 10, 60_000)) {
     return response.status(429).json({ error: 'Voice limit reached — 10 per minute. The browser voice will fill in.', fallback: 'browser' });

@@ -35,8 +35,28 @@ export function createJackTtsProvider(env = process.env, fetchImpl = fetch) {
         }),
         signal: AbortSignal.timeout(12_000),
       });
-      if (!response.ok) throw new Error(`Voice provider request failed (${response.status}).`);
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`Voice provider request failed (${response.status})${detail ? `: ${detail.slice(0, 200)}` : ''}.`);
+      }
       return { contentType: response.headers.get('content-type') || 'audio/mpeg', bytes: Buffer.from(await response.arrayBuffer()) };
+    },
+    /* Commissioner diagnostic: which voice is this, and does the key still work? */
+    async diagnose() {
+      const headers = { 'xi-api-key': apiKey };
+      const out = { provider: 'elevenlabs', configured, voiceId: voiceId ? `${voiceId.slice(0, 4)}…${voiceId.slice(-4)}` : null, model: env.JACK_TTS_MODEL || 'eleven_flash_v2_5' };
+      if (!configured) return out;
+      const v = await fetchImpl(`https://api.elevenlabs.io/v1/voices/${encodeURIComponent(voiceId)}`, { headers, signal: AbortSignal.timeout(10_000) });
+      const vj = await v.json().catch(() => ({}));
+      out.voiceLookup = v.ok ? { name: vj.name, category: vj.category, labels: vj.labels ?? null } : { error: vj?.detail?.message ?? vj?.detail ?? `HTTP ${v.status}` };
+      const sub = await fetchImpl('https://api.elevenlabs.io/v1/user/subscription', { headers, signal: AbortSignal.timeout(10_000) });
+      const sj = await sub.json().catch(() => ({}));
+      out.subscription = sub.ok ? { tier: sj.tier, used: sj.character_count, limit: sj.character_limit, status: sj.status } : { error: sj?.detail?.message ?? `HTTP ${sub.status}` };
+      try {
+        const r = await this.synthesize({ text: 'Jack here. Voice check.' });
+        out.testSynthesis = { ok: true, bytes: r.bytes.length, contentType: r.contentType };
+      } catch (error) { out.testSynthesis = { ok: false, error: error.message }; }
+      return out;
     },
   };
 }

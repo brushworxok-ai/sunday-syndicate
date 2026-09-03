@@ -1110,6 +1110,7 @@ function App() {
     if (!audioUnlockedRef.current) {
       try {
         if ('speechSynthesis' in window) {
+          window.speechSynthesis.getVoices();
           const warm = new SpeechSynthesisUtterance(' ');
           warm.volume = 0;
           window.speechSynthesis.speak(warm);
@@ -1184,7 +1185,11 @@ function App() {
     if (!('speechSynthesis' in window)) { setAssistantSpeaking(''); setJackAvatarState('idle'); return; }
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 0.95;
-    utterance.pitch = 0.85;
+    utterance.pitch = 0.7;
+    // Jack is a man. Browsers default to a female voice (Samantha on iPhone),
+    // so pick a known male English voice when one is installed.
+    const voice = pickMaleVoice();
+    if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
     utterance.onend = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); };
     utterance.onerror = () => { setAssistantSpeaking(''); setJackAvatarState('idle'); stopJackLevelLoop(); };
     setJackAvatarState(classifyJackMood(text));
@@ -3722,6 +3727,19 @@ function PayHandle({ player, compact = false }) {
   const pay = preferredHandle(player);
   if (!pay) return compact ? null : <span className="pay-handle missing">No pay handle</span>;
   return <a className={`pay-handle ${pay.key}`} href={pay.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title={`Pay ${player.name} on ${pay.label}`}>{compact ? pay.display : `${pay.label} ${pay.display}`}</a>;
+}
+
+const MALE_VOICE_NAMES = ['Daniel', 'Aaron', 'Fred', 'Arthur', 'Rishi', 'Gordon', 'Reed', 'Rocko', 'Eddy', 'Google UK English Male', 'Google US English Male', 'Microsoft David', 'Microsoft Guy', 'Microsoft Mark', 'Microsoft Christopher', 'Microsoft Eric', 'Microsoft Ryan', 'Alex', 'Tom', 'Lee', 'Oliver'];
+function pickMaleVoice() {
+  try {
+    const voices = window.speechSynthesis?.getVoices?.() ?? [];
+    const english = voices.filter((v) => /^en[-_]/i.test(v.lang));
+    for (const name of MALE_VOICE_NAMES) {
+      const hit = english.find((v) => v.name.toLowerCase().startsWith(name.toLowerCase()));
+      if (hit) return hit;
+    }
+    return english.find((v) => /male/i.test(v.name) && !/female/i.test(v.name)) ?? null;
+  } catch { return null; }
 }
 
 function PlayerAvatar({ player, size = 44 }) {
