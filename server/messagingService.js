@@ -76,6 +76,15 @@ export class TelnyxSmsProvider {
     return { status: result.data?.to?.[0]?.status ?? 'queued', id: result.data?.id ?? randomUUID() };
   }
 
+  /* Look up what happened to a message after Telnyx accepted it. */
+  async messageStatus(id) {
+    const res = await fetch(`https://api.telnyx.com/v2/messages/${encodeURIComponent(id)}`, { headers: { Authorization: `Bearer ${this.apiKey}` } });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return { id, error: json?.errors?.[0]?.detail ?? `HTTP ${res.status}` };
+    const d = json.data ?? {};
+    return { id, to: d.to?.map((t) => ({ number: t.phone_number, status: t.status, carrier: t.carrier, lineType: t.line_type })) ?? [], errors: d.errors ?? [], sentAt: d.sent_at, completedAt: d.completed_at, direction: d.direction, type: d.type };
+  }
+
   /* Commissioner diagnostic: is the API key valid, and is the FROM number
      actually on this account with messaging enabled? */
   async diagnose() {

@@ -138,6 +138,25 @@ app.get('/api/sms/diagnose', auth.requireAdmin, asyncRoute(async (_request, resp
   }
 }));
 
+/* Commissioner-only: what happened to the last verification text for a phone,
+   or to any Telnyx message id. Shows carrier-side delivery status + errors. */
+app.get('/api/sms/trace', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const provider = createSmsProvider(process.env);
+  if (typeof provider.messageStatus !== 'function') return response.json({ note: 'No tracing for this provider.' });
+  let id = String(request.query.id ?? '').trim();
+  let otp = null;
+  if (!id && request.query.phone) {
+    let digits = String(request.query.phone).replace(/\D/g, '');
+    if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+    otp = await otpGet(`+1${digits}`);
+    id = otp?.providerMessageId ?? '';
+    if (!id) return response.json({ phone: `+1${digits}`, otpRecord: otp ? { sentAt: new Date(otp.sentAt).toISOString(), expired: otp.expiresAt < Date.now() } : null, note: 'No provider message id stored for this phone (sent before tracing existed, or expired).' });
+  }
+  if (!id) return response.status(422).json({ error: 'Pass ?phone= or ?id=.' });
+  const status = await provider.messageStatus(id);
+  return response.json({ otpRecord: otp ? { sentAt: new Date(otp.sentAt).toISOString(), expired: otp.expiresAt < Date.now(), attempts: otp.attempts } : undefined, ...status });
+}));
+
 app.get('/api/health', asyncRoute(async (_request, response) => {
   const geminiKey = await getGeminiKey().catch(() => ({ value: null, source: 'none' }));
   response.json({
@@ -270,7 +289,8 @@ app.post('/api/otp/send', asyncRoute(async (request, response) => {
   if (liveSms) {
     try {
       const provider = createSmsProvider(process.env);
-      await provider.send({ player: { id: `otp-${digits}`, phoneE164 }, text: `405 BadGuys Parlay: Your verification code is ${code}. Expires in 5 min.` });
+      const sent = await provider.send({ player: { id: `otp-${digits}`, phoneE164 }, text: `405 BadGuys Parlay: Your verification code is ${code}. Expires in 5 min.` });
+      await otpPut(phoneE164, { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0, sentAt: Date.now(), providerMessageId: sent?.id ?? null });
     } catch (error) {
       console.error('OTP send error:', error.message);
       await otpClear(phoneE164);
