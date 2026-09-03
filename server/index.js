@@ -291,6 +291,19 @@ app.post('/api/otp/send', asyncRoute(async (request, response) => {
       const provider = createSmsProvider(process.env);
       const sent = await provider.send({ player: { id: `otp-${digits}`, phoneE164 }, text: `405 BadGuys Parlay: Your verification code is ${code}. Expires in 5 min.` });
       await otpPut(phoneE164, { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0, sentAt: Date.now(), providerMessageId: sent?.id ?? null });
+      // Carriers reject asynchronously (e.g. 40010 "not 10DLC registered").
+      // Give it a moment and surface that instead of a false "we sent it".
+      if (sent?.id && typeof provider.messageStatus === 'function') {
+        await new Promise((r) => setTimeout(r, 2500));
+        const status = await provider.messageStatus(sent.id).catch(() => null);
+        const failed = status?.to?.some((t) => t.status === 'delivery_failed' || t.status === 'sending_failed');
+        if (failed) {
+          const reason = status.errors?.[0];
+          const carrier = status.to?.[0]?.carrier ? ` (${status.to[0].carrier})` : '';
+          await otpClear(phoneE164);
+          return response.status(502).json({ error: `Your carrier${carrier} rejected the text${reason?.title ? `: ${reason.title}` : ''}. Join without a code — the commissioner can verify you later.`, detail: reason?.detail ?? null, code: reason?.code ?? null });
+        }
+      }
     } catch (error) {
       console.error('OTP send error:', error.message);
       await otpClear(phoneE164);
