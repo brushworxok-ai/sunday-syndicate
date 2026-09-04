@@ -38,7 +38,7 @@ export function validateCfbPicks({ pool, picks, tiebreaker, now = new Date() }) 
   }
   if (entries.length !== gameIds.size) return { ok: false, error: `Pick every game — ${gameIds.size - entries.length} still open.` };
   const tb = Number(tiebreaker);
-  if (!Number.isFinite(tb) || tb < 0 || tb > 200 || !Number.isInteger(tb)) {
+  if (tiebreaker == null || String(tiebreaker).trim() === '' || typeof tiebreaker === 'boolean' || !Number.isFinite(tb) || tb < 0 || tb > 200 || !Number.isInteger(tb)) {
     return { ok: false, error: 'Tiebreaker must be a whole number between 0 and 200 (total points in the tiebreaker game).' };
   }
   return { ok: true };

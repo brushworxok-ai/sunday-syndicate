@@ -1,0 +1,10 @@
+.git/
+.vercel/
+.playwright-mcp/
+node_modules/
+dist/
+work/
+.env*
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

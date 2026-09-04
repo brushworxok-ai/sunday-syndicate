@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createPlayerAuth, hashPin, verifyPin } from './auth.js';
+import { createAdminAuth, createPlayerAuth, hashPin, verifyPin, normalizeCredential } from './auth.js';
 
 function responseMock() {
   return {
@@ -55,4 +55,28 @@ test('rotating a private PIN immediately invalidates older player sessions', asy
   await auth.status({ headers: { cookie } }, staleResponse);
   assert.equal(staleResponse.body.authenticated, false);
   assert.match(staleResponse.headers['Set-Cookie'], /Max-Age=0/);
+});
+
+test('Malformed cookies are ignored without breaking commissioner authentication', () => {
+  const auth = createAdminAuth({ password: 'secret', secret: 'test-secret' });
+  const login = responseMock();
+  auth.login({ body: { password: 'secret' } }, login);
+  const cookie = login.headers['Set-Cookie'].split(';')[0];
+  assert.equal(auth.isAuthenticated({ headers: { cookie: `junk=%; ${cookie}` } }), true);
+  assert.equal(auth.isAuthenticated({ headers: { cookie: 'syndicate_admin=%zz' } }), false);
+});
+
+test('Legacy demo credentials are rejected without blocking existing real accounts', () => {
+  assert.equal(normalizeCredential({ updatedAt: '2025-11-18T18:00:00.000Z' }).status, 'demo');
+  assert.equal(normalizeCredential({ updatedAt: '2026-09-01T10:00:00.000Z' }).status, 'active');
+});
+
+test('Signed-in players cannot act in a different league', async () => {
+  const player = { id: 'p1', leagueId: 'league-a' };
+  const credential = { pinHash: hashPin('123456'), status: 'active', updatedAt: 'today' };
+  const auth = createPlayerAuth({ store: { getPlayer: async () => player, getPlayerCredential: async () => credential }, secret: 'test' });
+  const login = responseMock(); await auth.login({ body: { playerId: 'p1', pin: '123456' } }, login);
+  const response = responseMock();
+  await auth.requirePlayer({ headers: { cookie: login.headers['Set-Cookie'].split(';')[0] }, params: { leagueId: 'league-b' } }, response, () => assert.fail('Must not reach handler'));
+  assert.equal(response.statusCode, 403);
 });

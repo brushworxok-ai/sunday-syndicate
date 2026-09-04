@@ -34,7 +34,7 @@ function validateAvatar(value) {
 }
 import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
-import { withoutPushCredentials } from './publicLeagueView.js';
+import { buildLeagueView } from './publicLeagueView.js';
 import { ModerationError } from './moderation.js';
 import { DEMO_LEAGUE, buildLeaderboard, scoreSheet } from '../src/demoLeague.js';
 import {
@@ -57,6 +57,8 @@ import {
 } from './leagueService.js';
 import { applyDeliveryStatus, createSmsProvider, sendTextBeltRaw, sendApprovedRecap, sendJackBroadcast } from './messagingService.js';
 import { verifyTelnyxWebhook, telnyxDeliveryEvent } from './telnyxWebhook.js';
+import { sendCommissionerSmsTest } from './smsTest.js';
+import { parseNflInjuries } from './nflInjuries.js';
 import { validatePushSubscription, savePlayerSubscription, removePlayerSubscription, deliverPush, subscriptionsFor } from './pushService.js';
 import { randomInt } from 'node:crypto';
 
@@ -86,7 +88,7 @@ const auth = createAdminAuth({
   secret: sessionSecret,
   secure: secureCookies,
 });
-const playerAuth = createPlayerAuth({ store, secret: `${sessionSecret}:player`, secure: secureCookies });
+const playerAuth = createPlayerAuth({ store, secret: `${sessionSecret}:player`, secure: secureCookies, allowDemoCredentials: !isDeployed });
 
 const asyncRoute = (handler) => (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
 const leagueId = 'league-sunday-syndicate-demo';
@@ -155,10 +157,11 @@ app.post('/api/sms/test', auth.requireAdmin, asyncRoute(async (request, response
   if (request.body?.confirm !== true) return response.status(422).json({ error: 'Confirm the test send with confirm:true.' });
   if (!process.env.ADMIN_PHONE_E164) return response.status(503).json({ error: 'Configure ADMIN_PHONE_E164 as the authorized test destination first.' });
   if (!['telnyx', 'twilio', 'textbelt'].includes(process.env.SMS_PROVIDER)) return response.status(503).json({ error: 'A real SMS provider is required for a delivery test.' });
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.body?.requestId ?? '')) return response.status(422).json({ error: 'A unique requestId is required for this test.' });
   if (!checkPlayerRate(ASSISTANT_RATE, 'admin-sms-test', 2, 60_000)) return response.status(429).json({ error: 'Wait a minute before another test text.' });
   const provider = createSmsProvider(process.env);
-  const result = await provider.send({ player: { id: 'diag', phoneE164: process.env.ADMIN_PHONE_E164 }, text: '405 BadGuys Parlay: Jack SMS test. This is a single test requested by the commissioner.' });
-  return response.json({ accepted: true, ...result, note: 'Accepted is not delivered. Check /api/sms/trace?id= with this message ID and confirm receipt on the phone.' });
+  const result = await sendCommissionerSmsTest({ store, leagueId, provider, destination: process.env.ADMIN_PHONE_E164, requestId: request.body.requestId });
+  return response.json(result);
 }));
 
 /* Commissioner-only: what happened to the last verification text for a phone,
@@ -401,10 +404,11 @@ app.post('/api/leagues/:leagueId/players/:playerId/reset-pin', auth.requireAdmin
   return response.json({ ok: true, playerId: player.id, name: player.name });
 }));
 
-app.post('/api/auth/admin', (request, response) => auth.login(request, response));
+const loginLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 15, skipSuccessfulRequests: true, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many sign-in attempts. Wait 15 minutes before trying again.' } });
+app.post('/api/auth/admin', loginLimiter, (request, response) => auth.login(request, response));
 app.delete('/api/auth/admin', (request, response) => auth.logout(request, response));
 app.get('/api/auth/status', (request, response) => auth.status(request, response));
-app.post('/api/auth/player', asyncRoute((request, response) => playerAuth.login(request, response)));
+app.post('/api/auth/player', loginLimiter, asyncRoute((request, response) => playerAuth.login(request, response)));
 app.delete('/api/auth/player', (request, response) => playerAuth.logout(request, response));
 app.get('/api/auth/player/status', asyncRoute((request, response) => playerAuth.status(request, response)));
 
@@ -437,7 +441,9 @@ app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   const league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
   if (!league) return response.status(404).json({ error: 'League not found.' });
   await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
-  return response.json(withoutPushCredentials(league));
+  const player = await playerAuth.playerFromRequest(request);
+  response.set('Cache-Control', 'private, no-store');
+  return response.json(buildLeagueView(league, { playerId: player?.leagueId === league.id ? player.id : null, isAdmin: auth.isAuthenticated(request) }));
 }));
 
 /* ── Manual season start: commissioner clears the demo crew on demand ── */
@@ -565,14 +571,17 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
 
 app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) => {
   const input = request.body ?? {};
-  const name = String(input.name ?? '').trim().slice(0, 50);
+  const sessionPlayer = await playerAuth.playerFromRequest(request);
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  if (sessionPlayer && sessionPlayer.leagueId !== league.id) return response.status(403).json({ error: 'This player does not belong to that league.' });
+  const name = String(sessionPlayer?.name ?? input.name ?? '').trim().slice(0, 50);
   const picks = input.picks ?? {};
   if (!name) return response.status(422).json({ error: 'Name is required.' });
   // SECURITY: a sheet's playerId comes ONLY from the session cookie — never
   // from the request body, or anyone could submit (or replace) sheets as
   // another player. Signed-in resubmission before lock replaces the player's
   // own sheet (store keeps paid status); anonymous sheets carry no playerId.
-  const sessionPlayer = await playerAuth.playerFromRequest(request);
   const playerId = sessionPlayer?.id ?? null;
   if (!playerId) {
     // Anonymous sheets can't borrow a registered player's name.
@@ -584,7 +593,7 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   // Signed-in players may submit unpaid and settle from credit or Cash App after;
   // anonymous sheets still need the payment confirmation checkbox.
   if (!input.paid && !playerId) return response.status(422).json({ error: 'Payment confirmation is required.' });
-  if (!Number.isInteger(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0 || Number(input.tiebreaker) > 250) return response.status(422).json({ error: 'Tiebreaker must be a whole number between 0 and 250 (total points in the tiebreaker game).' });
+  if (input.tiebreaker == null || String(input.tiebreaker).trim() === '' || typeof input.tiebreaker === 'boolean' || !Number.isInteger(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0 || Number(input.tiebreaker) > 250) return response.status(422).json({ error: 'Tiebreaker must be a whole number between 0 and 250 (total points in the tiebreaker game).' });
   const submittedWeek = Number(input.week) || getCurrentWeek();
   const weekGames = getGames(submittedWeek);
   if (!weekGames.length) return response.status(422).json({ error: `No games found for Week ${submittedWeek}.` });
@@ -599,8 +608,13 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   }
   const everyPickValid = weekGames.every((game) => picks[game.id] === game.away || picks[game.id] === game.home);
   if (!everyPickValid || Object.keys(picks).length !== weekGames.length) return response.status(422).json({ error: `Exactly ${weekGames.length} valid picks are required for Week ${submittedWeek}.` });
-  const sheet = { id: `sheet-${randomUUID()}`, playerId, name: sessionPlayer?.name ?? name, handle: String(input.handle ?? '').trim().slice(0, 50), picks, tiebreaker: Number(input.tiebreaker), paid: Boolean(input.paid), week: submittedWeek, submittedAt: new Date().toISOString() };
+  // A checkbox is a payment CLAIM, never proof that money was received.
+  const sheet = { id: `sheet-${randomUUID()}`, playerId, name, handle: String(input.handle ?? '').trim().slice(0, 50), picks, tiebreaker: Number(input.tiebreaker), paid: false, week: submittedWeek, submittedAt: new Date().toISOString() };
   await store.createSheet(request.params.leagueId, sheet);
+  if (input.paid === true && !sheet.paid) {
+    sheet.paymentClaim = { claimedAt: sheet.submittedAt, method: 'external', amount: Number(league.settings?.entryFee) || ENTRY_FEE };
+    await store.updateSheetFields(league.id, sheet.id, { paymentClaim: sheet.paymentClaim });
+  }
   return response.status(201).json(sheet);
 }));
 
@@ -656,11 +670,14 @@ app.put('/api/leagues/:leagueId/results/:gameId', auth.requireAdmin, asyncRoute(
   if (!game) return response.status(404).json({ error: 'Game not found.' });
   const awayScore = Number(request.body?.awayScore);
   const homeScore = Number(request.body?.homeScore);
-  if (!Number.isInteger(awayScore) || !Number.isInteger(homeScore) || awayScore < 0 || homeScore < 0) return response.status(422).json({ error: 'Enter non-negative whole-number final scores.' });
+  const missingScore = [request.body?.awayScore, request.body?.homeScore].some((score) => score == null || String(score).trim() === '' || typeof score === 'boolean');
+  if (missingScore || !Number.isInteger(awayScore) || !Number.isInteger(homeScore) || awayScore < 0 || homeScore < 0) return response.status(422).json({ error: 'Enter non-negative whole-number final scores.' });
   // NFL games can end tied — a tie counts as no point for anyone.
   const result = { awayScore, homeScore, winner: awayScore === homeScore ? 'TIE' : (awayScore > homeScore ? game.away : game.home) };
   const saved = await store.upsertResult(request.params.leagueId, game.id, result, request.actor);
   await maybePostRivalryChat(request.params.leagueId, game.id, result);
+  const resultWeek = SCHEDULE.find((week) => week.games.some((candidate) => candidate.id === game.id))?.week;
+  if (resultWeek) await notifyFinalResults(request.params.leagueId, resultWeek);
   return response.json(saved);
 }));
 
@@ -1390,18 +1407,7 @@ async function fetchNflInjuries() {
     clearTimeout(timer);
     if (!upstream.ok) throw new Error(`ESPN injuries responded ${upstream.status}`);
     const payload = await upstream.json();
-    const teams = [];
-    for (const team of payload?.season ?? payload?.injuries ?? []) {
-      const abbr = team?.team?.abbreviation ?? '';
-      const injuries = (team?.injuries ?? []).slice(0, 8).map((inj) => ({
-        name: `${inj.athlete?.firstName ?? ''} ${inj.athlete?.lastName ?? ''}`.trim(),
-        position: inj.athlete?.position?.abbreviation ?? '',
-        status: inj.status ?? '',
-        type: inj.type ?? '',
-        detail: inj.longComment ?? inj.shortComment ?? '',
-      })).filter((i) => i.name && i.status);
-      if (injuries.length) teams.push({ team: abbr, logo: `https://a.espncdn.com/i/teamlogos/nfl/500/${abbr.toLowerCase()}.png`, injuries });
-    }
+    const teams = parseNflInjuries(payload);
     const data = { fetchedAt: new Date().toISOString(), teams };
     injuryCache = { at: Date.now(), data };
     return data;
@@ -2861,6 +2867,7 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
 }
 
 async function maybeRunAutoPilot() {
+  if (process.env.NODE_ENV === 'test') return;
   if (Date.now() - autoPilotLastRun < 10 * 60_000) return; // at most every 10 minutes
   autoPilotLastRun = Date.now(); // claim the slot immediately so bursts don't double-run
   try { await runAutoPilot({ source: 'traffic' }); }
@@ -2871,7 +2878,7 @@ async function maybeRunAutoPilot() {
 const cronAuthorized = (request) => {
   const secret = process.env.CRON_SECRET;
   if (secret) return request.get('authorization') === `Bearer ${secret}`;
-  return Boolean(request.get('x-vercel-cron')) || !isProduction;
+  return !isDeployed; // A caller-supplied x-vercel-cron header is not authentication.
 };
 
 app.post(['/api/cron/auto-pilot', '/api/cron/jack-live-desk'], asyncRoute(async (request, response) => {

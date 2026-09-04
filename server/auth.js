@@ -4,7 +4,20 @@ const COOKIE_NAME = 'syndicate_admin';
 const PLAYER_COOKIE_NAME = 'syndicate_player';
 
 function parseCookies(header = '') {
-  return Object.fromEntries(header.split(';').map((part) => part.trim().split('=').map(decodeURIComponent)).filter(([key]) => key));
+  const cookies = {};
+  for (const part of String(header).split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 1) continue;
+    try { cookies[decodeURIComponent(part.slice(0, separator).trim())] = decodeURIComponent(part.slice(separator + 1).trim()); }
+    catch { /* Ignore malformed cookies rather than crashing authentication. */ }
+  }
+  return cookies;
+}
+
+// Both stores historically seeded demo credentials at this fixed timestamp.
+// Normalize legacy rows without disabling real accounts created before statuses existed.
+export function normalizeCredential(credential) {
+  return credential ? { ...credential, status: credential.status ?? (credential.updatedAt === '2025-11-18T18:00:00.000Z' ? 'demo' : 'active') } : null;
 }
 
 function safeEqual(left, right) {
@@ -37,6 +50,7 @@ export function createAdminAuth({ password, secret, secure = false }) {
   const cookie = (token, maxAge) => `${COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
 
   return {
+    isAuthenticated(request) { return verifyToken(parseCookies(request.headers.cookie)[COOKIE_NAME]); },
     login(request, response) {
       if (!password || !safeEqual(request.body?.password ?? '', password)) return response.status(401).json({ error: 'Invalid commissioner password.' });
       response.setHeader('Set-Cookie', cookie(createToken(), 8 * 60 * 60));
@@ -98,7 +112,7 @@ export function createPlayerAuth({ store, secret, secure = false, allowDemoCrede
       const player = credential ? await store.getPlayer(request.body.playerId) : null;
       if (credential && !credentialAllowed(credential)) {
         return response.status(403).json({
-          error: 'The commissioner must issue this player a new private 6-digit PIN before sign-in.',
+          error: 'The commissioner must issue this player a new private PIN before sign-in.',
           code: 'player_pin_setup_required',
         });
       }
@@ -118,6 +132,7 @@ export function createPlayerAuth({ store, secret, secure = false, allowDemoCrede
     async requirePlayer(request, response, next) {
       const player = await resolveSessionPlayer(request);
       if (!player) return response.status(401).json({ error: 'Player sign-in required.' });
+      if (request.params?.leagueId && request.params.leagueId !== player.leagueId) return response.status(403).json({ error: 'This player does not belong to that league.' });
       request.player = player;
       request.actor = player.id;
       return next();

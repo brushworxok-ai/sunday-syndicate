@@ -26,6 +26,8 @@ import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
 import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle } from './payment.js';
 import { createJackVoicePlayback } from './jackVoice.js';
+import { createJackSpeechInput } from './jackSpeechInput.js';
+import CommunicationsCheck from './CommunicationsCheck.jsx';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
@@ -156,6 +158,7 @@ function App() {
   const [assistantInput, setAssistantInput] = useState('');
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef(null);
+  const assistantRequestRef = useRef(null);
   const speechSupported = useMemo(() => typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition), []);
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantSpeaking, setAssistantSpeaking] = useState('');
@@ -326,9 +329,12 @@ function App() {
   // Player credit form (admin)
   const [creditForm, setCreditForm] = useState({ playerId: '', amount: '', reason: '' });
 
+  const leagueRequestRef = useRef(0);
   const loadLeague = useCallback(async () => {
+    const requestVersion = ++leagueRequestRef.current;
     try {
       const league = await apiRequest(`/api/leagues/${LEAGUE_ID}`);
+      if (requestVersion !== leagueRequestRef.current) return null;
       setServerLeague(league);
       setSheets(league.sheets);
       setResults(league.results);
@@ -345,6 +351,7 @@ function App() {
       setServerError('');
       return league;
     } catch (error) {
+      if (requestVersion !== leagueRequestRef.current) return null;
       setServerError(error.message);
       return null;
     }
@@ -354,9 +361,9 @@ function App() {
     if (!playerSession.authenticated) return;
     try {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/payment-history`);
-      setPaymentHistory(data);
+      if (notificationPlayerRef.current === playerSession.playerId) setPaymentHistory(data);
     } catch { /* non-fatal */ }
-  }, [playerSession.authenticated]);
+  }, [playerSession.authenticated, playerSession.playerId]);
 
   const [notifsSeenAt, setNotifsSeenAt] = useState('');
   const notificationPlayerRef = useRef(playerSession.playerId);
@@ -617,7 +624,7 @@ function App() {
       name: entry.name,
       score: entry.score,
       tiebreaker: entry.tiebreaker,
-      pickCount: Object.keys(entry.picks).length,
+      pickCount: entry.pickCount ?? Object.keys(entry.picks).length,
       roastLevel: player?.trashTalk.level ?? 'none',
       roastEligible: Boolean(player && player.trashTalk.level !== 'none'),
     };
@@ -643,12 +650,24 @@ function App() {
       await apiRequest('/api/auth/admin', { method: 'POST', body: JSON.stringify({ password: adminPassword }) });
       setIsComm(true);
       setAdminPassword('');
+      await loadLeague();
       notify('Signed in as commissioner.');
     } catch (error) {
       notify(error.message);
     } finally { setServerBusy(''); }
   };
 
+
+  const logoutAdmin = async () => {
+    setServerBusy('admin-logout');
+    try {
+      await apiRequest('/api/auth/admin', { method: 'DELETE' });
+      setIsComm(false);
+      await loadLeague();
+      notify('Commissioner access signed out.');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
 
   // CFB data loaders
   const loadCfbRankings = async () => {
@@ -974,12 +993,11 @@ function App() {
 
     setServerBusy('entry');
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/entries`, { method: 'POST', body: JSON.stringify({ name: name.trim(), handle: handle.trim(), picks, tiebreaker: Number(tiebreaker), paid, week: selectedWeek, playerId: playerSession.playerId ?? undefined }) });
+      const saved = await apiRequest(`/api/leagues/${LEAGUE_ID}/entries`, { method: 'POST', body: JSON.stringify({ name: name.trim(), handle: handle.trim(), picks, tiebreaker: Number(tiebreaker), paid, week: selectedWeek }) });
       await loadLeague();
       // Stay on the sheet in a confirmed state (picks + tiebreaker kept), and
       // bring the pay block into view if they still owe the entry.
-      const wasPaid = paid || Boolean(mySheet?.paid);
-      notify(wasPaid ? `You're in for ${weekLabel}. Good luck.` : `You're in for ${weekLabel} — now pay your $${ENTRY_FEE} entry below.`);
+      notify(saved.paid ? `You're in for ${weekLabel}. Good luck.` : saved.paymentClaim ? 'Picks saved. Payment is awaiting commissioner confirmation.' : `You're in for ${weekLabel} — now pay your $${ENTRY_FEE} entry below.`);
       setTimeout(() => slipRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
@@ -1075,44 +1093,32 @@ function App() {
 
   /* Talk to Jack: tap the mic, say it, it sends when you stop talking. */
   const toggleListening = () => {
-    if (listening) { try { recognitionRef.current?.stop(); } catch { /* noop */ } return; }
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) return notify('Voice input isn’t supported in this browser — type to Jack instead.');
     unlockAudio(); // same gesture unlocks Jack's reply audio on iPhone
     stopSpeaking();
-    const rec = new Recognition();
-    rec.lang = 'en-US';
-    rec.interimResults = true;
-    rec.maxAlternatives = 1;
-    let finalText = '';
-    rec.onresult = (event) => {
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const chunk = event.results[i][0].transcript;
-        if (event.results[i].isFinal) finalText += chunk; else interim += chunk;
-      }
-      setAssistantInput((finalText + interim).trim());
-    };
-    rec.onerror = (event) => {
-      setListening(false);
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') notify('Allow microphone access to talk to Jack.');
-      else if (event.error !== 'aborted' && event.error !== 'no-speech') notify('Didn’t catch that — try again.');
-    };
-    rec.onend = () => {
-      setListening(false);
-      recognitionRef.current = null;
-      const said = finalText.trim();
-      if (said) { setJackVoiceConsent(true); askAssistant(said); }
-    };
-    recognitionRef.current = rec;
-    setListening(true);
-    setJackAvatarState('listening');
-    try { rec.start(); } catch { setListening(false); notify('Couldn’t start the mic. Try again.'); }
+    if (!recognitionRef.current) recognitionRef.current = createJackSpeechInput({
+      Recognition,
+      onText: setAssistantInput,
+      onListening: (active) => { setListening(active); setJackAvatarState(active ? 'listening' : 'idle'); },
+      onError: (error) => notify(['not-allowed', 'service-not-allowed'].includes(error) ? 'Allow microphone access to talk to Jack.' : 'Couldn’t capture your voice. Try again or type your message.'),
+      onSubmit: (said) => {
+        recognitionRef.current = null;
+        if (voicePlaybackAllowedRef.current.open) { setJackVoiceConsent(true); askAssistant(said); }
+      },
+    });
+    recognitionRef.current.toggle();
   };
 
   const askAssistant = async (question) => {
     const q = (question || assistantInput).trim();
-    if (!q || assistantBusy) return;
+    if (!q || assistantRequestRef.current) return;
+    recognitionRef.current?.cancel();
+    recognitionRef.current = null;
+    const controller = new AbortController();
+    assistantRequestRef.current = controller;
+    const isCurrent = () => assistantRequestRef.current === controller && !controller.signal.aborted;
+    const requestTimer = setTimeout(() => controller.abort('timeout'), 25_000);
     const userMsg = { id: `user-${Date.now()}`, role: 'user', text: q };
     setAssistantMessages((prev) => [...prev, userMsg]);
     setAssistantInput('');
@@ -1123,10 +1129,12 @@ function App() {
       const response = await fetch(`/api/leagues/${LEAGUE_ID}/assistant`, {
         method: 'POST',
         credentials: 'same-origin',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: q, history, playerId: playerSession.playerId }),
       });
       const data = await response.json();
+      if (!isCurrent()) return;
       if (response.status === 401) {
         // Not signed in — keep it in Jack's voice and hand them the door.
         setAssistantMessages((prev) => [...prev, {
@@ -1146,11 +1154,17 @@ function App() {
       // Auto-speak only after user has opted in by tapping the speaker button
       if (voicePlaybackAllowedRef.current.open && voicePlaybackAllowedRef.current.consent && voicePlaybackAllowedRef.current.playerId === playerSession.playerId) readAssistantMessage(data.text);
     } catch (error) {
+      if (assistantRequestRef.current !== controller) return;
+      if (controller.signal.aborted) error = new Error('The request timed out. Please try again.');
       setAssistantMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', text: `Sorry, I couldn't answer that right now. ${error.message}` }]);
       setJackAvatarState('error');
       setTimeout(() => setJackAvatarState('idle'), 3000);
     } finally {
-      setAssistantBusy(false);
+      clearTimeout(requestTimer);
+      if (assistantRequestRef.current === controller) {
+        assistantRequestRef.current = null;
+        setAssistantBusy(false);
+      }
     }
   };
 
@@ -1282,6 +1296,23 @@ function App() {
   };
   const stopSpeaking = () => jackPlaybackRef.current?.stop();
   useEffect(() => { stopSpeaking(); }, [playerSession.playerId, assistantOpen]);
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.cancel();
+      recognitionRef.current = null;
+      assistantRequestRef.current?.abort();
+      assistantRequestRef.current = null;
+      setAssistantBusy(false);
+    };
+  }, [playerSession.playerId, assistantOpen]);
+  useEffect(() => {
+    setAssistantMessages((messages) => messages.filter((message) => message.id === 'assistant-welcome'));
+    setAssistantInput('');
+    setPaymentHistory(null);
+    setPicks({});
+    setTiebreaker('');
+    loadLeague();
+  }, [playerSession.playerId, loadLeague]);
 
   // Keep the sfx module + saved preference in sync with the toggle
   useEffect(() => {
@@ -2166,7 +2197,7 @@ function App() {
               <section className="injury-ticker" aria-label="Injury and news ticker">
                 <div className="ticker-head">
                   <span className="injury-icon">🏥</span>
-                  <strong>Injuries & player status</strong>
+                  <strong>Injuries & NFL news</strong>
                 </div>
                 <div className="injury-scroll">
                   {nflInjuries.teams?.slice(0, 12).map((team) => (
@@ -2790,7 +2821,7 @@ function App() {
         {view === 'entries' && (
           <StandardPage eyebrow={weekLabel.toUpperCase()} title="Who's in" subtitle="Everyone with picks in for this week. Picks stay hidden until the week locks — then you can see them on the Board.">
             {weekSheets.length ? <div className="entry-list">{weekSheets.map((sheet, index) => (
-              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{Object.keys(sheet.picks).length} picks · TB {sheet.tiebreaker}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b>{isComm && (
+              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{sheet.pickCount ?? Object.keys(sheet.picks).length} picks · {sheet.picksHidden ? 'Hidden until lock' : `TB ${sheet.tiebreaker}`}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b>{isComm && (
                 <button className="entry-remove" type="button" title="Remove sheet" disabled={serverBusy === `del-${sheet.id}`} onClick={async () => {
                   if (!window.confirm(`Remove ${sheet.name}'s ${weekLabel} sheet? This can't be undone.`)) return;
                   setServerBusy(`del-${sheet.id}`);
@@ -3044,7 +3075,7 @@ function App() {
                 {proofLeague.players.map((player) => <div className="proof-table-row" key={player.id}>
                   <strong>{player.name}</strong>
                   <span><StatusPill state="pass">Verified</StatusPill> {player.phone}</span>
-                  <span><StatusPill state={player.messaging.smsConsent === 'opted_in' ? 'pass' : 'neutral'}>{player.messaging.smsConsent === 'opted_in' ? 'Opted in' : 'STOP / opted out'}</StatusPill></span>
+                  <span><StatusPill state={player.messaging?.smsConsent === 'opted_in' ? 'pass' : 'neutral'}>{!player.messaging ? 'Private' : player.messaging.smsConsent === 'opted_in' ? 'Opted in' : 'STOP / opted out'}</StatusPill></span>
                   <span><StatusPill state={player.trashTalk.level === 'none' ? 'neutral' : player.trashTalk.level === 'maximum' ? 'warn' : 'pass'}>{player.trashTalk.level === 'none' ? 'No trash talk' : `${player.trashTalk.level} mode`}</StatusPill></span>
                 </div>)}
               </div>
@@ -3388,7 +3419,7 @@ function App() {
                 <h2 className="cfb-section-title">📊 {cfbRankings.name} — {cfbRankings.season}</h2>
                 <div className="cfb-rankings-grid">
                   {cfbRankings.teams.map((t) => (
-                    <article className={`cfb-rank-card ${t.rank <= 5 ? 'top5' : t.rank <= 10 ? 'top10' : ''}`} key={t.rank}>
+                    <article className={`cfb-rank-card ${t.rank <= 5 ? 'top5' : t.rank <= 10 ? 'top10' : ''}`} key={t.abbr || t.team}>
                       <span className="cfb-rank-num">{t.rank}</span>
                       {t.logo && <img className="cfb-team-logo" src={t.logo} alt="" loading="lazy" />}
                       <div className="cfb-rank-info"><strong>{t.team}</strong><small>{t.abbr} · {t.record || '—'}</small></div>
@@ -3472,6 +3503,8 @@ function App() {
 
         {view === 'admin' && isComm && (
           <StandardPage eyebrow="COMMISSIONER ACCESS" title="League operations" subtitle="Verify scores, generate and approve grounded recaps, send consent-aware broadcasts, and inspect delivery outcomes from one durable workflow.">
+            <button className="button button-ghost-dark" type="button" onClick={logoutAdmin} disabled={serverBusy === 'admin-logout'}>{serverBusy === 'admin-logout' ? 'Signing out…' : 'Sign out commissioner'}</button>
+            <CommunicationsCheck request={apiRequest} />
             {(() => {
               const players = (proofLeague.players ?? []).length;
               const picksIn = weekSheets.length;
@@ -3503,15 +3536,15 @@ function App() {
               );
             })()}
             <section className="admin-command-grid">
-              <article><span className="eyebrow dark">PROVIDERS</span><h2>System readiness</h2><dl><div><dt>Database</dt><dd>{aiStatus.database === 'postgres' ? 'Neon Postgres · durable' : aiStatus.database === 'sqlite' ? 'SQLite · local' : 'Unavailable'}</dd></div><div><dt>Gemini</dt><dd>{aiStatus.configured ? aiStatus.model : 'Fallback mode'}</dd></div><div><dt>SMS</dt><dd>{aiStatus.smsProvider === 'twilio' ? 'Twilio live' : aiStatus.smsProvider === 'textbelt' ? 'TextBelt live' : 'Demo adapter'}</dd></div></dl></article>
-              <article><span className="eyebrow dark">POLICY</span><h2>Send guardrails</h2><dl><div><dt>Auto-send</dt><dd>Off</dd></div><div><dt>Approval</dt><dd>Required</dd></div><div><dt>Tone cap</dt><dd>{proofLeague.settings.maximumTone}</dd></div></dl></article>
+              <article><span className="eyebrow dark">PROVIDERS</span><h2>System readiness</h2><dl><div><dt>Database</dt><dd>{aiStatus.database === 'postgres' ? 'Neon Postgres · durable' : aiStatus.database === 'sqlite' ? 'SQLite · local' : 'Unavailable'}</dd></div><div><dt>Gemini</dt><dd>{aiStatus.configured ? aiStatus.model : 'Fallback mode'}</dd></div><div><dt>SMS</dt><dd>{({ telnyx: 'Telnyx configured', twilio: 'Twilio configured', textbelt: 'TextBelt configured', demo: 'Demo adapter' })[aiStatus.smsProvider] || 'Unavailable'}</dd></div></dl></article>
+              <article><span className="eyebrow dark">POLICY</span><h2>Send guardrails</h2><dl><div><dt>Recaps</dt><dd>Approval required</dd></div><div><dt>Reminders</dt><dd>Automatic · consent required</dd></div><div><dt>Tone cap</dt><dd>{proofLeague.settings.maximumTone}</dd></div></dl></article>
               <article><span className="eyebrow dark">CURRENT</span><h2>Latest delivery</h2><dl><div><dt>Status</dt><dd>{proofLeague.latestBroadcast?.status?.replaceAll('_', ' ') ?? 'Not sent'}</dd></div><div><dt>Failures</dt><dd>{proofLeague.latestBroadcast?.deliveries?.filter((item) => item.status === 'failed').length ?? 0}</dd></div><div><dt>Suppressed</dt><dd>{proofLeague.latestBroadcast?.deliveries?.filter((item) => item.status === 'suppressed').length ?? 0}</dd></div></dl></article>
             </section>
             <section className="recap-workbench">
               <div className="panel-heading"><div><span className="eyebrow dark">WEEKLY WORKFLOW</span><h2>Recap review & send</h2></div><StatusPill state={proofLeague.latestRecap?.adminApproval?.status === 'approved' ? 'pass' : 'warn'}>{proofLeague.latestRecap?.adminApproval?.status ?? 'no draft'}</StatusPill></div>
               <div className="workflow-steps"><span className="done">1 · Results verified</span><span className={proofLeague.latestRecap ? 'done' : ''}>2 · Draft generated</span><span className={proofLeague.latestRecap?.adminApproval?.status === 'approved' ? 'done' : ''}>3 · Admin approved</span><span className={proofLeague.latestBroadcast?.recapId === proofLeague.latestRecap?.id ? 'done' : ''}>4 · Broadcast sent</span></div>
               <textarea value={recapEdit} onChange={(event) => setRecapEdit(event.target.value)} maxLength="3200" aria-label="Recap copy" />
-              <div className="workflow-actions"><button className="button button-ghost-dark" type="button" onClick={generateAdminRecap} disabled={serverBusy === 'generate-recap'}>{serverBusy === 'generate-recap' ? 'Generating…' : 'Generate grounded draft'}</button><button className="button button-primary" type="button" onClick={approveAdminRecap} disabled={!proofLeague.latestRecap || serverBusy === 'approve-recap'}>{serverBusy === 'approve-recap' ? 'Approving…' : 'Approve edited copy'}</button><button className="button button-send" type="button" onClick={sendAdminBroadcast} disabled={proofLeague.latestRecap?.adminApproval?.status !== 'approved' || serverBusy === 'send-broadcast'}>{serverBusy === 'send-broadcast' ? 'Sending…' : `Send via ${aiStatus.smsProvider === 'twilio' ? 'Twilio' : aiStatus.smsProvider === 'textbelt' ? 'TextBelt' : 'demo adapter'}`}</button></div>
+              <div className="workflow-actions"><button className="button button-ghost-dark" type="button" onClick={generateAdminRecap} disabled={serverBusy === 'generate-recap'}>{serverBusy === 'generate-recap' ? 'Generating…' : 'Generate grounded draft'}</button><button className="button button-primary" type="button" onClick={approveAdminRecap} disabled={!proofLeague.latestRecap || serverBusy === 'approve-recap'}>{serverBusy === 'approve-recap' ? 'Approving…' : 'Approve edited copy'}</button><button className="button button-send" type="button" onClick={sendAdminBroadcast} disabled={proofLeague.latestRecap?.adminApproval?.status !== 'approved' || serverBusy === 'send-broadcast'}>{serverBusy === 'send-broadcast' ? 'Sending…' : `Send via ${({ telnyx: 'Telnyx', twilio: 'Twilio', textbelt: 'TextBelt' })[aiStatus.smsProvider] || 'demo adapter'}`}</button></div>
               <p>Only verified, opted-in recipients reach the provider. Failures retry once and then receive an in-app fallback.</p>
               <div className="jack-text-row">
                 <div><strong>📱 Jack's weekly text</strong><p>Texts every opted-in player their results, the reigning champ shoutout, and a personal (PG-13 over SMS) jab. Full-strength roasts stay in the app.</p></div>
@@ -3550,7 +3583,7 @@ function App() {
             </section>
             <section className="autopilot-section">
               <div className="panel-heading"><div><span className="eyebrow dark">AUTO-PILOT</span><h2>Commissioner auto-pilot</h2></div><StatusPill state="pass">ON</StatusPill></div>
-              <p>The league runs itself: final scores verify from ESPN automatically, props settle the moment the week wraps, and players missing sheets get push + text reminders 24 hours and 3 hours before the deadline. It runs on a daily schedule and every time someone opens the app. Everything below happened without you lifting a finger.</p>
+              <p>Auto-pilot checks final scores, settles completed props, and attempts consent-aware reminders in the 24-hour and 3-hour deadline windows. It runs daily and on league visits, so those windows can be missed when nobody opens the app. A frequent authenticated scheduler is required before relying on precisely timed reminders. The log below shows what actually ran.</p>
               <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'autopilot-run'} onClick={async () => {
                 setServerBusy('autopilot-run');
                 try {
@@ -3753,7 +3786,7 @@ function App() {
                 >
                   {assistantSpeaking ? '■ Stop' : jackVoiceConsent ? '🔊 Voice on' : '🔇 Voice off'}
                 </button>
-                <button className="assistant-close" type="button" onClick={() => { setAssistantOpen(false); stopSpeaking(); setJackAvatarState('idle'); }}>×</button>
+                <button className="assistant-close" type="button" aria-label="Close Jack" onClick={() => { setAssistantOpen(false); stopSpeaking(); setJackAvatarState('idle'); }}>×</button>
               </div>
             </div>
 

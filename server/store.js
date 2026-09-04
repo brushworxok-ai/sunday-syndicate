@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DEMO_CHAT, DEMO_LEAGUE } from '../src/demoLeague.js';
-import { hashPin } from './auth.js';
+import { hashPin, normalizeCredential } from './auth.js';
 
 const parse = (value, fallback = null) => {
   if (value == null) return fallback;
@@ -293,8 +293,8 @@ export class LeagueStore {
   }
 
   getPlayerCredential(playerId) {
-    const row = this.db.prepare('SELECT player_id, pin_hash FROM player_credentials WHERE player_id = ?').get(playerId);
-    return row ? { playerId: row.player_id, pinHash: row.pin_hash } : null;
+    const row = this.db.prepare('SELECT player_id, pin_hash, updated_at FROM player_credentials WHERE player_id = ?').get(playerId);
+    return normalizeCredential(row ? { playerId: row.player_id, pinHash: row.pin_hash, updatedAt: row.updated_at } : null);
   }
 
   /* Reset a player's PIN (used by the phone-verified self-reset and the
@@ -374,15 +374,17 @@ export class LeagueStore {
     // old sheet (keeping paid status if the old one was already paid).
     let replaced = false;
     if (sheet.playerId) {
-      const existing = this.db.prepare('SELECT id, paid FROM sheets WHERE league_id = ? AND player_id = ? AND week = ?').get(leagueId, sheet.playerId, sheet.week);
+      const existing = this.db.prepare('SELECT id, paid, claim_json FROM sheets WHERE league_id = ? AND player_id = ? AND week = ?').get(leagueId, sheet.playerId, sheet.week);
       if (existing) {
+        sheet.id = existing.id;
+        sheet.paymentClaim = parse(existing.claim_json, null);
         if (existing.paid) sheet.paid = true;
-        this.db.prepare('DELETE FROM sheets WHERE id = ?').run(existing.id);
         replaced = true;
       }
     }
-    this.db.prepare(`INSERT INTO sheets (id, league_id, player_id, name, handle, picks_json, tiebreaker, paid, week, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(sheet.id, leagueId, sheet.playerId ?? null, sheet.name, sheet.handle ?? '', stringify(sheet.picks), sheet.tiebreaker, sheet.paid ? 1 : 0, sheet.week, sheet.submittedAt);
+    this.db.prepare(`INSERT INTO sheets (id, league_id, player_id, name, handle, picks_json, tiebreaker, paid, week, submitted_at, claim_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET name = excluded.name, handle = excluded.handle, picks_json = excluded.picks_json, tiebreaker = excluded.tiebreaker, submitted_at = excluded.submitted_at`)
+      .run(sheet.id, leagueId, sheet.playerId ?? null, sheet.name, sheet.handle ?? '', stringify(sheet.picks), sheet.tiebreaker, sheet.paid ? 1 : 0, sheet.week, sheet.submittedAt, sheet.paymentClaim ? stringify(sheet.paymentClaim) : null);
     this.writeAudit(leagueId, 'sheet.submitted', `${sheet.name} ${replaced ? 'updated their' : 'locked a'} Week ${sheet.week} sheet`, sheet.playerId ?? sheet.name, { sheetId: sheet.id, replaced });
     return sheet;
   }

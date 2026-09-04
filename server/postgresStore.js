@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { neon } from '@neondatabase/serverless';
 import { DEMO_CHAT, DEMO_LEAGUE } from '../src/demoLeague.js';
-import { hashPin } from './auth.js';
+import { hashPin, normalizeCredential } from './auth.js';
 
 const clone = (value) => value == null ? value : structuredClone(value);
 const byNewest = (field) => (left, right) => String(right?.[field] ?? '').localeCompare(String(left?.[field] ?? ''));
@@ -210,7 +210,7 @@ export class PostgresLeagueStore {
   async getPlayerCredential(playerId) {
     const states = await this.readAllStates();
     const credential = states.map((state) => state.playerCredentials?.[playerId]).find(Boolean);
-    return credential ? clone(credential) : null;
+    return normalizeCredential(clone(credential));
   }
 
   /* Reset a player's PIN (phone-verified self-reset or commissioner reset). */
@@ -297,7 +297,10 @@ export class PostgresLeagueStore {
       if (sheet.playerId) {
         const index = (draft.sheets ?? []).findIndex((item) => item.playerId === sheet.playerId && item.week === sheet.week);
         if (index >= 0) {
+          sheet.id = draft.sheets[index].id;
           if (draft.sheets[index].paid) sheet.paid = true;
+          sheet.paymentClaim = draft.sheets[index].paymentClaim;
+          sheet.paidVia = draft.sheets[index].paidVia;
           draft.sheets.splice(index, 1);
           replaced = true;
         }
