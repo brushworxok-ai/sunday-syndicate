@@ -127,6 +127,22 @@ export const PROMPTS = {
         weekLocked: supplied.weekLocked === true,
         standings: cleanEntries(supplied.standings).slice(0, 20),
         games: cleanGames(supplied.games),
+        seasonStats: Array.isArray(supplied.playerMemories) ? supplied.playerMemories.slice(0, 20).map((memory) => ({
+          name: cleanText(memory.name, 40),
+          totalPicks: cleanNumber(memory.totalPicks) ?? 0,
+          correct: cleanNumber(memory.correct) ?? 0,
+          winPercentage: cleanNumber(memory.winPercentage) ?? 0,
+          seasonRank: cleanNumber(memory.seasonRank),
+          currentStreak: memory.currentStreak ? { type: cleanText(memory.currentStreak.type, 12), length: cleanNumber(memory.currentStreak.length) ?? 0 } : null,
+          bestWeek: memory.bestWeek ? { week: cleanNumber(memory.bestWeek.week), correct: cleanNumber(memory.bestWeek.correct) } : null,
+          isWinner: memory.isWinner === true,
+        })) : [],
+        weeklyWinner: supplied.weeklyWinner ? {
+          status: cleanText(supplied.weeklyWinner.status, 24),
+          week: cleanNumber(supplied.weeklyWinner.week),
+          reigning: supplied.weeklyWinner.reigning === true,
+          winners: Array.isArray(supplied.weeklyWinner.winners) ? supplied.weeklyWinner.winners.slice(0, 10).map((winner) => ({ name: cleanText(winner.name, 40), score: cleanNumber(winner.score) })) : [],
+        } : null,
         seasonRace: supplied.seasonRace ? {
           status: ['live', 'official', 'complete_no_winner'].includes(supplied.seasonRace.status) ? supplied.seasonRace.status : 'live',
           weeksSettled: cleanNumber(supplied.seasonRace.weeksSettled) ?? 0,
@@ -219,7 +235,7 @@ export const PROMPTS = {
         'The season pool is an external commissioner-confirmed contribution record, separate from weekly credits. Never claim the app charged, held, transferred, or legally approved money.',
         'Do not reveal phone numbers, private messages, PINs, payment handles, or another player\'s account balance.',
         'If the answer is not in the supplied facts, say what the commissioner needs to verify.',
-        'Use plain language, short paragraphs, and no more than 140 words.',
+        'Use plain language, short paragraphs, and no more than 90 words.',
       ].join(' '),
       prompt: `League assistant request:\n${JSON.stringify(context)}`,
     };

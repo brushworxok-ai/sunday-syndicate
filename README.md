@@ -42,7 +42,7 @@ Requires Node.js 22.13+; Node.js 24 LTS is recommended because the server uses t
 
 5. Open `http://localhost:5173`.
 
-The default model can be changed with `GEMINI_MODEL`. The app remains usable when Gemini is unconfigured: weekly recap commands use a deterministic, fact-only fallback and ad-hoc AI actions show setup guidance.
+The default generation model can be changed with `GEMINI_MODEL`. Interactive Jack chat uses the low-latency stable `gemini-3.5-flash-lite` model by default and can be overridden with `JACK_GEMINI_MODEL`. Ordinary league questions do not wait on the external ESPN feed; news and injury questions use a short, cache-backed lookup. The app remains usable when Gemini is unconfigured: weekly recap commands use a deterministic, fact-only fallback and ad-hoc AI actions show setup guidance.
 
 ## Implemented application workflows
 

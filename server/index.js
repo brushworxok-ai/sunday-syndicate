@@ -62,11 +62,13 @@ import { hasCurrentSmsConsent, SMS_CONSENT_VERSION } from '../src/smsCompliance.
 import { parseNflInjuries } from './nflInjuries.js';
 import { validatePushSubscription, savePlayerSubscription, removePlayerSubscription, deliverPush, subscriptionsFor } from './pushService.js';
 import { randomInt } from 'node:crypto';
+import { DEFAULT_JACK_MODEL, formatNflNews, jackGenerationTuning, questionNeedsNflNews } from './jackAssistant.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
 const port = Number(process.env.PORT) || 8787;
 const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const jackModel = process.env.JACK_GEMINI_MODEL || DEFAULT_JACK_MODEL;
 const databasePath = process.env.DATABASE_PATH || path.join(projectRoot, 'work', 'sunday-syndicate.sqlite');
 const store = await createLeagueStore({ databaseUrl: process.env.DATABASE_URL, databasePath });
 const { makeGeminiKeyResolver, invalidateGeminiKeyCache } = await import('./geminiKey.js');
@@ -192,6 +194,7 @@ app.get('/api/health', asyncRoute(async (_request, response) => {
     geminiConfigured: Boolean(geminiKey.value),
     geminiKeySource: geminiKey.source,
     model,
+    jackModel,
     smsProvider: ['telnyx', 'twilio', 'textbelt'].includes(process.env.SMS_PROVIDER) ? process.env.SMS_PROVIDER : 'demo',
     telnyxConfigured: Boolean(process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER),
     twilioConfigured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_MESSAGING_SERVICE_SID),
@@ -925,6 +928,9 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
   const currentWeek = getCurrentWeek();
   const weekGames = getGames(currentWeek);
   const weekLabel = SCHEDULE.find((w) => w.week === currentWeek)?.label ?? `Week ${currentWeek}`;
+  const entryFee = Number(league.settings?.entryFee) || ENTRY_FEE;
+  const currentWeekSheets = (league.sheets ?? []).filter((sheet) => sheet.week === currentWeek);
+  const verifiedGameCount = weekGames.filter((game) => (league.results ?? {})[game.id]?.winner && (league.results ?? {})[game.id]?.verifiedAt).length;
 
   // Build season memories and winner recognition
   const playerMemories = buildSeasonMemories(league, currentWeek);
@@ -969,10 +975,15 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
     week: currentWeek,
     weekLabel,
     totalGames: weekGames.length,
+    entryFee,
+    pot: currentWeekSheets.filter((sheet) => sheet.paid).length * entryFee,
+    rollover: Number(league.settings?.rollover) || 0,
+    verifiedGameCount,
+    weekLocked: isWeekLocked(currentWeek),
     standings,
     games: weekGames.map((g) => {
       const r = (league.results ?? {})[g.id];
-      return { id: g.id, matchup: `${g.away} at ${g.home}`, winner: r?.winner ?? null, awayScore: r?.awayScore ?? null, homeScore: r?.homeScore ?? null };
+      return { id: g.id, away: g.away, home: g.home, winner: r?.winner ?? null, awayScore: r?.awayScore ?? null, homeScore: r?.homeScore ?? null };
     }),
     rules: [
       `WEEKLY ENTRY FEE: $${league.settings?.entryFee ?? 20} per weekly sheet.`,
@@ -987,7 +998,18 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
     ],
     seasonPool: (() => {
       const pool = league.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
-      return { entryFee: pool.entryFee, paidCount: (pool.paidPlayerIds ?? []).length, pot: (pool.paidPlayerIds ?? []).length * pool.entryFee, payoutSplit: pool.payoutSplit ?? [60, 30, 10] };
+      const confirmed = new Set(pool.paidPlayerIds ?? []);
+      const poolFee = Number(pool.entryFee) || 25;
+      return {
+        status: 'live',
+        canJoin: true,
+        entryFeeCents: Math.round(poolFee * 100),
+        potCents: confirmed.size * Math.round(poolFee * 100),
+        confirmedCount: confirmed.size,
+        deadlineAt: getWeekDeadline(1)?.toISOString() ?? null,
+        entries: (league.players ?? []).map((player) => ({ playerId: player.id, status: confirmed.has(player.id) ? 'confirmed' : 'not_joined' })),
+        rule: `One-time $${poolFee} season entry. Best combined record across all weekly sheets; top three split ${(pool.payoutSplit ?? [60, 30, 10]).join('/')} after Week 18.`,
+      };
     })(),
     submissionDeadline: getWeekDeadline(currentWeek)?.toISOString() ?? null,
     submissionLocked: isWeekLocked(currentWeek),
@@ -1043,20 +1065,26 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
   if (currentPlayerContext) {
     try {
       const { creditBalance } = await import('../src/credits.js');
-      currentPlayerContext.creditBalance = creditBalance(league.creditLedger ?? [], currentPlayerContext.id);
+      const balance = creditBalance(league.creditLedger ?? [], currentPlayerContext.id);
+      const sheet = currentWeekSheets.find((candidate) => candidate.playerId === currentPlayerContext.id);
+      currentPlayerContext.balanceCents = Math.round(balance * 100);
+      currentPlayerContext.entryCreditCount = Math.max(0, Math.floor(balance / entryFee));
+      currentPlayerContext.weeklyPaymentStatus = sheet?.paid ? 'confirmed' : sheet?.paymentClaim ? 'claimed' : 'not_claimed';
+      currentPlayerContext.winCount = playerMemories.find((memory) => memory.playerId === currentPlayerContext.id)?.weeklyRecord?.filter((week) => week.weeklyWinner).length ?? 0;
     } catch { /* credit context is optional */ }
   }
 
-  // Ground Jack in the latest NFL wire, but never let a cold/slow ESPN fetch
-  // stall his reply: time-box it to 1.5s and use whatever's cached otherwise.
-  // (fetchNflNews keeps running in the background and warms the cache for next time.)
-  try {
-    const news = await Promise.race([
-      fetchNflNews(),
-      new Promise((resolve) => setTimeout(() => resolve(newsCache.data ?? { items: [] }), 1500)),
-    ]);
-    context.nflNews = (news.items ?? []).slice(0, 6).map((item) => ({ headline: item.headline, description: item.description, published: item.published }));
-  } catch { context.nflNews = []; }
+  // Most league questions need no external data. Only news/injury questions
+  // touch ESPN, and even then a cold request gets 600ms before cached data wins.
+  if (questionNeedsNflNews(question)) {
+    try {
+      const news = await Promise.race([
+        fetchNflNews(),
+        new Promise((resolve) => setTimeout(() => resolve(newsCache.data ?? { fetchedAt: null, items: [] }), 600)),
+      ]);
+      context.nflNews = formatNflNews(news);
+    } catch { context.nflNews = formatNflNews(newsCache.data); }
+  }
 
   const history = Array.isArray(rawHistory) ? rawHistory.slice(-6).map((m) => ({
     role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -1073,15 +1101,14 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
     const { systemInstruction, prompt } = buildPrompt('assistant', { question, history, context });
     const client = new GoogleGenAI({ apiKey: geminiKeyValue });
     const result = await client.models.generateContent({
-      model,
+      model: jackModel,
       contents: prompt,
-      // Jack's chat answers are short (prompt caps ~140 words); a tighter output
-      // ceiling keeps replies snappy instead of generating up to 1024 tokens.
-      config: { systemInstruction, temperature: 0.5, maxOutputTokens: 400 },
+      // Low thinking plus a compact answer ceiling keeps interactive chat fast.
+      config: { systemInstruction, temperature: 0.5, maxOutputTokens: 256, ...jackGenerationTuning(jackModel) },
     });
     const text = result?.text?.trim();
     if (!text) throw new Error('Empty response from model.');
-    return { text, source: 'gemini' };
+    return { text, source: 'gemini', model: jackModel };
   } catch (error) {
     console.error('Assistant error:', error.message);
     const fallback = buildLocalAssistantFallback(question, context);

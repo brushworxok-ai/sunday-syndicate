@@ -61,3 +61,20 @@ test('assistant prompt admits only bounded sourced NFL news', () => {
   assert.equal(news.articles[0].isInjury, true);
   assert.match(systemInstruction, /not a complete official injury report/i);
 });
+
+test('assistant prompt preserves matchups and bounded season facts', () => {
+  const { prompt } = buildPrompt('assistant', {
+    question: 'How am I doing?',
+    context: {
+      games: [{ id: 'w1-g1', away: 'DAL', home: 'PHI', winner: 'PHI', awayScore: 17, homeScore: 24 }],
+      playerMemories: [{ name: 'Marcus', totalPicks: 16, correct: 11, winPercentage: 68.8, seasonRank: 2, currentStreak: { type: 'win', length: 3 }, bestWeek: { week: 1, correct: 11 } }],
+      weeklyWinner: { status: 'winner', week: 1, winners: [{ name: 'Avery', score: 12 }] },
+      currentPlayer: { name: 'Marcus', favoriteTeam: 'DAL', balanceCents: 4000, entryCreditCount: 2 },
+    },
+  });
+  const data = JSON.parse(prompt.split('\n')[1]);
+  assert.equal(data.league.games[0].matchup, 'DAL at PHI');
+  assert.equal(data.league.seasonStats[0].correct, 11);
+  assert.equal(data.league.weeklyWinner.winners[0].name, 'Avery');
+  assert.equal(data.currentPlayer.favoriteTeam, 'DAL');
+});
