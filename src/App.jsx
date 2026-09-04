@@ -152,6 +152,9 @@ function App() {
   const [trashTone, setTrashTone] = useState('playful');
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantInput, setAssistantInput] = useState('');
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  const speechSupported = useMemo(() => typeof window !== 'undefined' && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition), []);
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantSpeaking, setAssistantSpeaking] = useState('');
   const [assistantMessages, setAssistantMessages] = useState([{
@@ -1039,6 +1042,43 @@ function App() {
       seed: chatInput,
     }, 'trashTalk');
     if (text) setChatInput(text);
+  };
+
+  /* Talk to Jack: tap the mic, say it, it sends when you stop talking. */
+  const toggleListening = () => {
+    if (listening) { try { recognitionRef.current?.stop(); } catch { /* noop */ } return; }
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) return notify('Voice input isn’t supported in this browser — type to Jack instead.');
+    unlockAudio(); // same gesture unlocks Jack's reply audio on iPhone
+    stopSpeaking();
+    const rec = new Recognition();
+    rec.lang = 'en-US';
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    let finalText = '';
+    rec.onresult = (event) => {
+      let interim = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += chunk; else interim += chunk;
+      }
+      setAssistantInput((finalText + interim).trim());
+    };
+    rec.onerror = (event) => {
+      setListening(false);
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') notify('Allow microphone access to talk to Jack.');
+      else if (event.error !== 'aborted' && event.error !== 'no-speech') notify('Didn’t catch that — try again.');
+    };
+    rec.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+      const said = finalText.trim();
+      if (said) { setJackVoiceConsent(true); askAssistant(said); }
+    };
+    recognitionRef.current = rec;
+    setListening(true);
+    setJackAvatarState('listening');
+    try { rec.start(); } catch { setListening(false); notify('Couldn’t start the mic. Try again.'); }
   };
 
   const askAssistant = async (question) => {
@@ -1943,29 +1983,89 @@ function App() {
 
         {view === 'home' && (
           <div className="stack-lg">
-            <section className="hero">
-              <div className="hero-copy">
-                <span className="eyebrow">{weekLocked ? 'PICKS ARE LOCKED' : 'THE BOARD IS OPEN'}</span>
-                <h1>{currentGames.length} games.<br /><em>One clean sheet.</em></h1>
-                <p>{weekLocked ? 'Picks are in — watch the board and talk your trash.' : 'Call every winner, survive the tiebreaker, and earn the right to be unbearable until next week.'}</p>
-                <div className="hero-actions">
-                  <button className="button button-light" type="button" onClick={() => setView('picks')}>Make my picks <span>→</span></button>
-                  {!playerSession.authenticated && (
-                    <button className="button button-ghost" type="button" onClick={() => setShowWelcome(true)}>Join the league</button>
-                  )}
-                  {playerSession.authenticated && (
-                    <button className="button button-ghost" type="button" onClick={() => setView('results')}>View standings</button>
-                  )}
-                  <button className="button button-invite" type="button" onClick={shareInviteLink}>{shareCopied ? '✓ Copied!' : '📤 Invite friends'}</button>
-                </div>
-              </div>
-              <div className="hero-scorecard">
-                <span className="scorecard-label">This week's pot</span>
-                <strong>${totalPot.toLocaleString()}</strong>
-                <div><span>{weekSheets.length} entries</span><span>{completedGames}/{currentGames.length} final</span></div>
-                {rolloverPot > 0 && <p>Includes ${Number(rolloverPot).toLocaleString()} rollover</p>}
-              </div>
-            </section>
+            {(() => {
+              const crew = proofLeague.players ?? [];
+              const lastWon = [...seasonStats.weeks].reverse().find((w) => w.complete && w.winners.length > 0);
+              const leader = seasonStats.table[0];
+              const byName = (name) => crew.find((p) => p.name === name);
+              const openWeek = !weekLocked;
+              return (
+                <>
+                  <section className="home-head">
+                    <div className="home-head-copy">
+                      <span className="eyebrow">{weekLocked ? `${weekLabel.toUpperCase()} · PICKS LOCKED` : `${weekLabel.toUpperCase()} · BOARD OPEN`}</span>
+                      <h1>{weekLocked ? 'Watch the board.' : `${currentGames.length} games. Call every one.`}</h1>
+                      <p>{weekLocked ? 'Picks are in — the pot is live and the trash talk is open.' : deadlineCountdown ? `Picks lock in ${deadlineCountdown}.` : 'Straight-up winners, no spreads. Highest score takes the pot.'}</p>
+                      <div className="hero-actions">
+                        {openWeek && <button className="button button-light" type="button" onClick={() => setView('picks')}>{mySheet ? 'Update my picks' : 'Make my picks'} <span>→</span></button>}
+                        {weekLocked && <button className="button button-light" type="button" onClick={() => setView('results')}>See the board <span>→</span></button>}
+                        {!playerSession.authenticated && <button className="button button-ghost" type="button" onClick={() => { setWelcomeMode('join'); setShowWelcome(true); }}>Join the league</button>}
+                        <button className="button button-invite" type="button" onClick={shareInviteLink}>{shareCopied ? '✓ Copied!' : '📤 Invite friends'}</button>
+                      </div>
+                    </div>
+                    <div className="hero-scorecard">
+                      <span className="scorecard-label">This week's pot</span>
+                      <strong>${totalPot.toLocaleString()}</strong>
+                      <div><span>{weekSheets.length} {weekSheets.length === 1 ? 'entry' : 'entries'}</span><span>{completedGames}/{currentGames.length} final</span></div>
+                      {rolloverPot > 0 && <p>Includes ${Number(rolloverPot).toLocaleString()} rollover</p>}
+                    </div>
+                  </section>
+
+                  {/* ── Champions: who's winning ── */}
+                  <section className="champ-row" aria-label="League leaders">
+                    <button type="button" className={`champ-card ${lastWon ? 'lit' : ''}`} onClick={() => setView('season')}>
+                      <span className="champ-label">🏆 Last week's winner</span>
+                      {lastWon ? (
+                        <div className="champ-body">
+                          <div className="champ-avatars">{lastWon.winners.slice(0, 3).map((name) => <PlayerAvatar key={name} player={byName(name) ?? { name }} size={40} />)}</div>
+                          <div><strong>{lastWon.winners.map((n) => n.split(' ')[0]).join(' & ')}</strong><small>Week {lastWon.week} · {lastWon.topScore}/{currentGames.length || 16} correct · ${lastWon.pot.toLocaleString()}</small></div>
+                        </div>
+                      ) : (
+                        <div className="champ-body"><div className="champ-empty">?</div><div><strong>Up for grabs</strong><small>First pot decided after {weekLabel}</small></div></div>
+                      )}
+                    </button>
+                    <button type="button" className={`champ-card ${leader ? 'lit gold' : ''}`} onClick={() => setView('season')}>
+                      <span className="champ-label">👑 Season leader</span>
+                      {leader ? (
+                        <div className="champ-body">
+                          <PlayerAvatar player={byName(leader.name) ?? { name: leader.name }} size={40} />
+                          <div><strong>{leader.name.split(' ')[0]}</strong><small>{leader.totalCorrect} correct · {leader.weeklyWins} {leader.weeklyWins === 1 ? 'week' : 'weeks'} won · ${leader.earnings.toLocaleString()}</small></div>
+                        </div>
+                      ) : (
+                        <div className="champ-body"><div className="champ-empty">?</div><div><strong>Nobody yet</strong><small>Standings start after Week 1</small></div></div>
+                      )}
+                    </button>
+                  </section>
+
+                  {/* ── The Crew ── */}
+                  <section className="crew-strip" aria-label="Players">
+                    <div className="ticker-head">
+                      <strong>The crew</strong>
+                      <small>{crew.length} {crew.length === 1 ? 'player' : 'players'}{weekSheets.length ? ` · ${weekSheets.length} picked` : ''}</small>
+                      <button type="button" className="text-button" onClick={() => setView('players')}>See all →</button>
+                    </div>
+                    <div className="crew-scroll">
+                      {crew.map((player) => {
+                        const sheet = weekSheets.find((sh) => sh.playerId === player.id);
+                        const rank = leaderboard.findIndex((e) => e.playerId === player.id) + 1;
+                        return (
+                          <button type="button" className={`crew-chip ${player.id === playerSession.playerId ? 'me' : ''} ${sheet ? 'in' : ''}`} key={player.id} onClick={() => setView('players')}>
+                            <PlayerAvatar player={player} size={52} />
+                            <strong>{player.name.split(' ')[0]}</strong>
+                            <small>{rank > 0 && weekLocked ? `#${rank}` : sheet ? (sheet.paid ? 'In · paid' : 'Picks in') : openWeek ? 'No picks' : '—'}</small>
+                          </button>
+                        );
+                      })}
+                      <button type="button" className="crew-chip invite" onClick={shareInviteLink}>
+                        <span className="crew-chip-plus">+</span>
+                        <strong>Invite</strong>
+                        <small>{shareCopied ? 'Copied!' : 'Add a friend'}</small>
+                      </button>
+                    </div>
+                  </section>
+                </>
+              );
+            })()}
 
             {/* ── Live Game Ticker ── */}
             <section className="game-ticker" aria-label="Game ticker">
@@ -3643,10 +3743,15 @@ function App() {
                 value={assistantInput}
                 onChange={(e) => setAssistantInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && askAssistant()}
-                placeholder="Ask Jack anything…"
+                placeholder={listening ? 'Listening… go ahead' : speechSupported ? 'Ask Jack — or tap the mic and talk' : 'Ask Jack anything…'}
                 maxLength="500"
                 disabled={assistantBusy}
               />
+              {speechSupported && (
+                <button className={`assistant-mic ${listening ? 'on' : ''}`} type="button" onClick={toggleListening} disabled={assistantBusy} aria-pressed={listening} aria-label={listening ? 'Stop listening' : 'Talk to Jack'} title={listening ? 'Listening… tap to stop' : 'Talk to Jack'}>
+                  {listening ? '●' : '🎤'}
+                </button>
+              )}
               <button className="assistant-send" type="button" onClick={() => askAssistant()} disabled={!assistantInput.trim() || assistantBusy}>
                 {assistantBusy ? '…' : '↑'}
               </button>
