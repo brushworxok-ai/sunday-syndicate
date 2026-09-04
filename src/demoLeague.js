@@ -1,5 +1,6 @@
 import { GAMES, SEASON as DEMO_SEASON, WEEK } from './data.js';
 import { getWeekTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebreaker.js';
+import { SMS_CONSENT_VERSION } from './smsCompliance.js';
 
 export const TONE_LEVELS = ['none', 'light', 'competitive', 'maximum'];
 
@@ -11,7 +12,7 @@ export const DEMO_PLAYERS = [
     previousRank: 3,
     phone: '••• ••• 0142',
     phoneVerifiedAt: '2025-11-18T18:04:00.000Z',
-    messaging: { smsConsent: 'opted_in', consentedAt: '2025-11-18T18:05:00.000Z', pushConsent: 'opted_out', resultsChannel: 'sms_and_in_app' },
+    messaging: { smsConsent: 'opted_in', consentedAt: '2025-11-18T18:05:00.000Z', consentVersion: SMS_CONSENT_VERSION, consentSource: `demo_v${SMS_CONSENT_VERSION}`, pushConsent: 'opted_out', resultsChannel: 'sms_and_in_app' },
     trashTalk: { level: 'light', updatedAt: '2025-11-18T18:06:00.000Z' },
     jackPolicy: { roastEnabled: true, playerConsentLevel: 'pg13', adminAssignedLevel: 'pg13', adultLanguageConsent: false, adultAgeGate: true, favoriteTeam: 'DAL', updatedAt: '2025-11-18T18:06:00.000Z', updatedBy: 'player' },
     seasonHistory: [{ season: 2025, correct: 162, incorrect: 110, rank: 2, titles: 0, verifiedAt: '2026-01-10T18:00:00.000Z' }],
@@ -23,7 +24,7 @@ export const DEMO_PLAYERS = [
     previousRank: 1,
     phone: '••• ••• 0188',
     phoneVerifiedAt: '2025-11-18T18:12:00.000Z',
-    messaging: { smsConsent: 'opted_in', consentedAt: '2025-11-18T18:13:00.000Z', pushConsent: 'opted_out', resultsChannel: 'sms_and_in_app' },
+    messaging: { smsConsent: 'opted_in', consentedAt: '2025-11-18T18:13:00.000Z', consentVersion: SMS_CONSENT_VERSION, consentSource: `demo_v${SMS_CONSENT_VERSION}`, pushConsent: 'opted_out', resultsChannel: 'sms_and_in_app' },
     trashTalk: { level: 'competitive', updatedAt: '2025-11-18T18:14:00.000Z' },
     jackPolicy: { roastEnabled: true, playerConsentLevel: 'explicit', adminAssignedLevel: 'explicit', adultLanguageConsent: true, adultAgeGate: true, favoriteTeam: 'KC', updatedAt: '2025-11-18T18:14:00.000Z', updatedBy: 'player' },
     seasonHistory: [{ season: 2025, correct: 158, incorrect: 114, rank: 3, titles: 0, verifiedAt: '2026-01-10T18:00:00.000Z' }],
@@ -35,7 +36,7 @@ export const DEMO_PLAYERS = [
     previousRank: 2,
     phone: '••• ••• 0165',
     phoneVerifiedAt: '2025-11-18T18:20:00.000Z',
-    messaging: { smsConsent: 'opted_in', consentedAt: '2025-11-18T18:21:00.000Z', pushConsent: 'opted_out', resultsChannel: 'sms_and_in_app' },
+    messaging: { smsConsent: 'opted_in', consentedAt: '2025-11-18T18:21:00.000Z', consentVersion: SMS_CONSENT_VERSION, consentSource: `demo_v${SMS_CONSENT_VERSION}`, pushConsent: 'opted_out', resultsChannel: 'sms_and_in_app' },
     trashTalk: { level: 'maximum', updatedAt: '2025-11-18T18:22:00.000Z' },
     jackPolicy: { roastEnabled: true, playerConsentLevel: 'target', adminAssignedLevel: 'target', adultLanguageConsent: true, adultAgeGate: true, favoriteTeam: 'PHI', updatedAt: '2025-11-18T18:22:00.000Z', updatedBy: 'player' },
     seasonHistory: [{ season: 2025, correct: 135, incorrect: 137, rank: 4, titles: 0, verifiedAt: '2026-01-10T18:00:00.000Z' }],

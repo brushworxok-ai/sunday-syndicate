@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { neon } from '@neondatabase/serverless';
 import { DEMO_CHAT, DEMO_LEAGUE } from '../src/demoLeague.js';
+import { SMS_CONSENT_VERSION } from '../src/smsCompliance.js';
 import { hashPin, normalizeCredential } from './auth.js';
 
 const clone = (value) => value == null ? value : structuredClone(value);
@@ -244,9 +245,11 @@ export class PostgresLeagueStore {
         player.messaging.smsConsent = preferences.smsConsent;
         if (preferences.smsConsent === 'opted_in') {
           player.messaging.consentedAt = at;
+          player.messaging.consentVersion = SMS_CONSENT_VERSION;
+          player.messaging.consentSource = `player_settings_v${SMS_CONSENT_VERSION}`;
           delete player.messaging.optedOutAt;
         } else player.messaging.optedOutAt = at;
-        draft.consentRecords.push({ id: randomUUID(), playerId, channel: 'sms_results', status: preferences.smsConsent, source: actor === 'twilio_webhook' ? 'sms_keyword' : 'player_settings', recordedAt: at });
+        draft.consentRecords.push({ id: randomUUID(), playerId, channel: 'sms_results', status: preferences.smsConsent, source: actor.endsWith('_webhook') ? 'sms_keyword' : `player_settings_v${SMS_CONSENT_VERSION}`, recordedAt: at });
       }
       if (preferences.resultsChannel) player.messaging.resultsChannel = preferences.resultsChannel;
       if (preferences.payment !== undefined) player.payment = preferences.payment ? clone(preferences.payment) : null;
@@ -408,7 +411,7 @@ export class PostgresLeagueStore {
       draft.playerCredentials ??= {};
       draft.playerCredentials[player.id] = { playerId: player.id, pinHash, updatedAt: at };
       if (player.messaging?.smsConsent) {
-        draft.consentRecords.push({ id: randomUUID(), playerId: player.id, channel: 'sms_results', status: player.messaging.smsConsent, source: 'registration', recordedAt: at });
+        draft.consentRecords.push({ id: randomUUID(), playerId: player.id, channel: 'sms_results', status: player.messaging.smsConsent, source: player.messaging.consentSource ?? 'registration', recordedAt: at });
       }
       draft.auditLog.push(auditEntry('player.registered', `${player.name} joined the league`, player.id, { playerId: player.id }, at));
       return authenticatedPlayer(draft.players.at(-1));

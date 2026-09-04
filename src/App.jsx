@@ -28,6 +28,7 @@ import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle } from './pay
 import { createJackVoicePlayback } from './jackVoice.js';
 import { createJackSpeechInput } from './jackSpeechInput.js';
 import CommunicationsCheck from './CommunicationsCheck.jsx';
+import { hasCurrentSmsConsent, SMS_CONSENT_VERSION, SMS_DISCLOSURE } from './smsCompliance.js';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
@@ -103,6 +104,7 @@ function App() {
   const [otpSending, setOtpSending] = useState(false);
   const [otpError, setOtpError] = useState('');
   const [otpVerified, setOtpVerified] = useState(false);
+  const [signupSmsOptIn, setSignupSmsOptIn] = useState(false);
   const [resetPhone, setResetPhone] = useState('');
   const [resetCode, setResetCode] = useState('');
   const [resetPin, setResetPin] = useState('');
@@ -1741,14 +1743,14 @@ function App() {
     try {
       const registered = await apiRequest(`/api/leagues/${LEAGUE_ID}/players/register`, {
         method: 'POST',
-        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified, payment: parseQuickPay(signupPay) }),
+        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified, smsOptIn: signupSmsOptIn, smsConsentVersion: SMS_CONSENT_VERSION, payment: parseQuickPay(signupPay) }),
       });
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify({ playerId: registered.playerId, pin: signupPin }) });
       setPlayerSession(session);
       await loadLeague();
       setName(registered.name);
       setChatName(registered.name);
-      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam(''); setSignupAvatar(''); setSignupAvatarFile(null); setSignupStep(1); setSignupOtp(''); setOtpVerified(false);
+      setSignupName(''); setSignupPhone(''); setSignupPin(''); setSignupTeam(''); setSignupAvatar(''); setSignupAvatarFile(null); setSignupStep(1); setSignupOtp(''); setOtpVerified(false); setSignupSmsOptIn(false);
       setShowWelcome(false);
       notify(`Welcome to the 405 BadGuys Parlay, ${registered.name}! You're in.`);
       // Jack greets the new player with the house rules
@@ -1790,8 +1792,9 @@ function App() {
     if (signupStep === 2) {
       if (!signupTeam) return notify('Pick your favorite team — Jack needs to know who to roast.');
       if (!signupAvatar && !signupAvatarFile) return notify('Choose an avatar or upload a pic.');
-      // No SMS provider wired → skip the code step entirely and just register.
-      if (!smsLive()) return finishRegistration(false);
+      // Verification is only needed when the player explicitly requests texts.
+      // Phone ownership and recurring-SMS consent are separate decisions.
+      if (!smsLive() || !signupSmsOptIn) return finishRegistration(false);
       setSignupStep(3);
       setOtpSending(true);
       setOtpError('');
@@ -1965,15 +1968,19 @@ function App() {
                     <span className={`signup-step ${signupStep === 1 ? 'current' : 'done'}`}>1 · Info</span>
                     <span className="signup-step-line" />
                     <span className={`signup-step ${signupStep === 2 ? 'current' : signupStep > 2 ? 'done' : ''}`}>2 · Identity</span>
-                    {smsLive() && (<><span className="signup-step-line" /><span className={`signup-step ${signupStep === 3 ? 'current' : ''}`}>3 · Verify</span></>)}
+                    {smsLive() && signupSmsOptIn && (<><span className="signup-step-line" /><span className={`signup-step ${signupStep === 3 ? 'current' : ''}`}>3 · Verify</span></>)}
                   </div>
 
                   {signupStep === 1 && (<>
                     <label>Your name<input value={signupName} onChange={(e) => setSignupName(e.target.value)} placeholder="First and last" maxLength="50" autoFocus /></label>
-                    <label>Phone <small style={{ float: 'right', fontWeight: 400 }}>for SMS updates</small><input value={signupPhone} onChange={(e) => setSignupPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
+                    <label>Phone <small style={{ float: 'right', fontWeight: 400 }}>account ID</small><input value={signupPhone} onChange={(e) => setSignupPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
                     <label>Create a PIN<input value={signupPin} onChange={(e) => setSignupPin(e.target.value.replace(/\D/g, ''))} placeholder="4 digits" maxLength="4" type="password" inputMode="numeric" /></label>
+                    <div className="sms-consent-card">
+                      <label className="sms-consent-check"><input type="checkbox" checked={signupSmsOptIn} onChange={(event) => setSignupSmsOptIn(event.target.checked)} /><span>{SMS_DISCLOSURE}</span></label>
+                      <p><a href="/privacy.html" target="_blank" rel="noreferrer">Privacy Policy</a> · <a href="/terms.html" target="_blank" rel="noreferrer">SMS Terms</a></p>
+                    </div>
                     <button className="button button-primary full" style={{ marginTop: 16 }}>Next · Pick your team →</button>
-                    <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.45)', marginTop: 10 }}>Your number is used for game results, reminders, and Jack's weekly texts. Reply STOP to any message to opt out.</p>
+                    <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.45)', marginTop: 10 }}>Your phone identifies your account. Text updates are optional and off unless you check the consent box.</p>
                   </>)}
 
                   {signupStep === 2 && (<>
@@ -2004,7 +2011,7 @@ function App() {
 
                     <div className="signup-btn-row">
                       <button type="button" className="button button-ghost" onClick={() => setSignupStep(1)}>← Back</button>
-                      <button className="button button-primary">{smsLive() ? 'Next · Verify phone →' : 'Join the league →'}</button>
+                      <button className="button button-primary">{smsLive() && signupSmsOptIn ? 'Next · Verify phone →' : 'Join the league →'}</button>
                     </div>
                   </>)}
 
@@ -2982,17 +2989,17 @@ function App() {
             {currentPlayer ? (
               <div className="player-settings-grid">
                 <article className="player-settings-card current">
-                  <div className="player-card-head"><span>{currentPlayer.name.split(' ').map((word) => word[0]).join('')}</span><div><h2>{currentPlayer.name}</h2><p>{currentPlayer.phone} · {currentPlayer.phoneVerifiedAt ? 'verified' : 'unverified'}</p></div><StatusPill state={currentPlayer.messaging?.smsConsent === 'opted_in' ? 'pass' : 'neutral'}>{(currentPlayer.messaging?.smsConsent || 'pending').replace('_', ' ')}</StatusPill></div>
+                  <div className="player-card-head"><span>{currentPlayer.name.split(' ').map((word) => word[0]).join('')}</span><div><h2>{currentPlayer.name}</h2><p>{currentPlayer.phone} · {currentPlayer.phoneVerifiedAt ? 'verified' : 'unverified'}</p></div><StatusPill state={hasCurrentSmsConsent(currentPlayer) ? 'pass' : 'neutral'}>{hasCurrentSmsConsent(currentPlayer) ? 'SMS opted in' : currentPlayer.messaging?.smsConsent === 'opted_in' ? 'Re-confirm SMS' : 'SMS off'}</StatusPill></div>
                   <label>Weekly results
                     <select value={currentPlayer.messaging?.resultsChannel || 'sms_and_in_app'} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { resultsChannel: event.target.value })}>
                       <option value="sms_and_in_app">SMS + in-app</option><option value="sms">SMS only</option><option value="in_app">In-app only</option>
                     </select>
                   </label>
-                  <label>SMS consent
-                    <select value={currentPlayer.messaging?.smsConsent || 'pending'} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { smsConsent: event.target.value })}>
-                      <option value="opted_in">Opted in</option><option value="opted_out">STOP / opted out</option>
-                    </select>
-                  </label>
+                  <div className="sms-preference-card">
+                    <label className="sms-consent-check"><input type="checkbox" checked={hasCurrentSmsConsent(currentPlayer)} disabled={serverBusy === `player-${currentPlayer.id}` || !currentPlayer.phoneVerifiedAt} onChange={(event) => updatePreferences(currentPlayer.id, { smsConsent: event.target.checked ? 'opted_in' : 'opted_out', ...(!event.target.checked ? { resultsChannel: 'in_app' } : {}) })} /><span>{SMS_DISCLOSURE}</span></label>
+                    {!currentPlayer.phoneVerifiedAt && <p>Verify your phone before enabling text updates.</p>}
+                    <p><a href="/privacy.html" target="_blank" rel="noreferrer">Privacy Policy</a> · <a href="/terms.html" target="_blank" rel="noreferrer">SMS Terms</a></p>
+                  </div>
                   <label>Trash-talk level <small>Maximum / unfiltered is ON by default — switch to "No trash talk" anytime to opt out</small>
                     <select value={currentPlayer.trashTalk?.level === 'maximum' ? 'competitive' : (currentPlayer.trashTalk?.level || 'competitive')} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { trashTalkLevel: event.target.value })}>
                       <option value="none">No trash talk (opted out)</option><option value="light">Light / PG-13</option><option value="competitive">Maximum / unfiltered (default)</option>

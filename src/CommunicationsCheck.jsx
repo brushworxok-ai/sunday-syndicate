@@ -36,6 +36,7 @@ export default function CommunicationsCheck({ request }) {
     const result = await request(`/api/sms/trace?id=${encodeURIComponent(attempt.id)}`);
     saveAttempt({ ...attempt, trace: result });
   });
+  const smsRegistrationReady = report?.sms?.provider !== 'telnyx' || report?.sms?.tenDlcRegistered === true;
   return (
     <section className="communications-check" aria-labelledby="communications-title">
       <div className="panel-heading"><div><span className="eyebrow dark">LIVE VERIFICATION</span><h2 id="communications-title">Jack, texts & notifications</h2></div>
@@ -47,6 +48,7 @@ export default function CommunicationsCheck({ request }) {
         <div><strong>Text messages · {report.sms.provider || 'Unavailable'}</strong>
           <p>{report.sms.error || (report.sms.apiKeyValid === true ? `API key accepted. Sending number ${report.sms.numberStatus || 'status unknown'}.` : 'Provider access has not been verified.')}</p>
           <p>Messaging: {report.sms.messagingEnabled ? 'enabled' : 'not confirmed'} · Signed webhooks: {report.sms.webhookVerificationConfigured ? 'configured' : 'missing'}</p>
+          {report.sms.provider === 'telnyx' && <p><strong>10DLC registration: {report.sms.tenDlcRegistered === true ? 'number assigned' : report.sms.tenDlcRegistered === false ? 'missing campaign assignment' : 'could not be verified'}</strong></p>}
         </div>
         <div><strong>Jack’s selected voice</strong><p>{report.voice.error || report.voice.voiceLookup?.error || report.voice.voiceLookup?.name || 'No studio voice verified'}</p>
           <p>{report.voice.provider || 'Unknown provider'}{report.voice.voiceId ? ` · ${report.voice.voiceId}` : ''} · {report.voice.model || 'device fallback'}</p>
@@ -57,9 +59,10 @@ export default function CommunicationsCheck({ request }) {
       <div className="communications-test">
         <h3>One commissioner-only test</h3>
         <p>Sends only to the configured commissioner phone, never to the roster. Carrier charges may apply.</p>
+        {report?.sms?.provider === 'telnyx' && !smsRegistrationReady && <p role="alert">Test disabled: assign this number to an approved 10DLC campaign before trying again.</p>}
         {!attempt && <>
           <label className="check-row"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I authorize one test to the configured commissioner phone.</span></label>
-          <button className="button button-primary" type="button" disabled={!confirmed || Boolean(busy) || !report?.sms?.testDestinationConfigured} onClick={send}>{busy === 'send' ? 'Sending once…' : 'Send one test text'}</button>
+          <button className="button button-primary" type="button" disabled={!confirmed || Boolean(busy) || !report?.sms?.testDestinationConfigured || !smsRegistrationReady} onClick={send}>{busy === 'send' ? 'Sending once…' : 'Send one test text'}</button>
         </>}
         {attempt && <div role="status">
           <p><strong>Test status: {attempt.trace?.to?.map((recipient) => recipient.status).join(', ') || attempt.status || 'unknown'}</strong></p>

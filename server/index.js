@@ -58,6 +58,7 @@ import {
 import { applyDeliveryStatus, createSmsProvider, sendTextBeltRaw, sendApprovedRecap, sendJackBroadcast } from './messagingService.js';
 import { verifyTelnyxWebhook, telnyxDeliveryEvent } from './telnyxWebhook.js';
 import { sendCommissionerSmsTest } from './smsTest.js';
+import { hasCurrentSmsConsent, SMS_CONSENT_VERSION } from '../src/smsCompliance.js';
 import { parseNflInjuries } from './nflInjuries.js';
 import { validatePushSubscription, savePlayerSubscription, removePlayerSubscription, deliverPush, subscriptionsFor } from './pushService.js';
 import { randomInt } from 'node:crypto';
@@ -515,6 +516,7 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
   const phoneE164 = `+1${digits}`;
   const existing = await store.findPlayerByPhoneE164(phoneE164);
   if (existing) return response.status(409).json({ error: 'That phone number is already registered. Use Sign In instead.' });
+  const smsOptIn = request.body?.smsOptIn === true;
   if ((league.players ?? []).some((p) => p.name.toLowerCase() === name.toLowerCase())) {
     return response.status(409).json({ error: 'That name is taken in this league. Add a last initial or nickname.' });
   }
@@ -529,7 +531,13 @@ app.post('/api/leagues/:leagueId/players/register', asyncRoute(async (request, r
     phone: `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`,
     phoneE164,
     phoneVerifiedAt: otpVerified ? at : null,
-    messaging: { smsConsent: otpVerified ? 'opted_in' : 'pending', consentedAt: otpVerified ? at : null, resultsChannel: 'sms_and_in_app' },
+    messaging: {
+      smsConsent: smsOptIn ? 'opted_in' : 'opted_out',
+      consentedAt: smsOptIn ? at : null,
+      consentVersion: smsOptIn ? SMS_CONSENT_VERSION : null,
+      consentSource: smsOptIn ? `registration_checkbox_v${SMS_CONSENT_VERSION}` : 'registration_declined',
+      resultsChannel: smsOptIn ? 'sms_and_in_app' : 'in_app',
+    },
     trashTalk: {
       level: 'competitive', // maps to the league's explicit default
       updatedAt: at,
@@ -1638,7 +1646,7 @@ app.post('/api/leagues/:leagueId/group-text', auth.requireAdmin, asyncRoute(asyn
   const eligible = [];
   for (const summary of league.players ?? []) {
     const player = await store.getPlayer(summary.id);
-    if (player?.phoneVerifiedAt && player?.messaging?.smsConsent === 'opted_in' && player.phoneE164) {
+    if (hasCurrentSmsConsent(player) && player.phoneE164) {
       eligible.push({ id: player.id, name: player.name, phone: player.phoneE164 });
     }
   }

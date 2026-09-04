@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { WorkflowError } from './leagueService.js';
+import { compliantSmsText, hasCurrentSmsConsent } from '../src/smsCompliance.js';
 
 // Twilio is optional — loaded lazily only when TwilioSmsProvider is created
 let _twilio;
@@ -42,7 +43,7 @@ export class TwilioSmsProvider {
       throw error;
     }
     const client = await this._ensureClient();
-    const message = await client.messages.create({ to: player.phoneE164, messagingServiceSid: this.messagingServiceSid, body: text, statusCallback: this.statusCallback });
+    const message = await client.messages.create({ to: player.phoneE164, messagingServiceSid: this.messagingServiceSid, body: compliantSmsText(text), statusCallback: this.statusCallback });
     return { status: message.status ?? 'queued', id: message.sid };
   }
 }
@@ -64,7 +65,7 @@ export class TelnyxSmsProvider {
     const response = await this.fetch('https://api.telnyx.com/v2/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify({ from: this.fromNumber, to: player.phoneE164, text }),
+      body: JSON.stringify({ from: this.fromNumber, to: player.phoneE164, text: compliantSmsText(text) }),
       signal: AbortSignal.timeout(8_000),
     });
     const result = await response.json().catch(() => ({}));
@@ -89,7 +90,7 @@ export class TelnyxSmsProvider {
     if (players.length < 2 || players.length > 8) throw new Error('Group MMS requires 2–8 recipients. Use individual texts for larger groups.');
     const response = await this.fetch('https://api.telnyx.com/v2/messages/group_mms', {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify({ from: this.fromNumber, to: players.map((player) => normalizeE164(player.phoneE164)), text, subject: '405 BadGuys' }),
+      body: JSON.stringify({ from: this.fromNumber, to: players.map((player) => normalizeE164(player.phoneE164)), text: compliantSmsText(text), subject: '405 BadGuys' }),
       signal: AbortSignal.timeout(8_000),
     });
     const result = await response.json().catch(() => ({}));
@@ -123,6 +124,21 @@ export class TelnyxSmsProvider {
       const msgRes = await this.fetch(`https://api.telnyx.com/v2/messaging_phone_numbers/${encodeURIComponent(this.fromNumber)}`, { headers, signal: AbortSignal.timeout(8_000) });
       const msgJson = await msgRes.json().catch(() => ({}));
       out.messagingNumber = msgJson?.data ? { type: msgJson.data.type, features: msgJson.data.features?.sms ?? null, health: msgJson.data.health ?? null } : (msgJson?.errors?.[0]?.detail ?? 'not a messaging number');
+      if (this.fromNumber.startsWith('+1')) {
+        const registrationRes = await this.fetch(`https://api.telnyx.com/v2/10dlc/phone_number_campaigns/${encodeURIComponent(this.fromNumber)}`, { headers, signal: AbortSignal.timeout(8_000) });
+        const registrationJson = await registrationRes.json().catch(() => ({}));
+        if (registrationRes.ok) {
+          const assignment = registrationJson?.data ?? registrationJson;
+          out.tenDlcAssignmentStatus = assignment?.assignmentStatus ?? null;
+          out.tenDlcRegistered = assignment?.assignmentStatus === 'ASSIGNED';
+        } else if (registrationRes.status === 404) {
+          out.tenDlcRegistered = false;
+          out.tenDlcAssignmentStatus = 'NOT_ASSIGNED';
+        } else {
+          out.tenDlcRegistered = null;
+          out.tenDlcRegistrationError = registrationJson?.errors?.[0]?.detail ?? `HTTP ${registrationRes.status}`;
+        }
+      }
     } else if (!out.apiKeyValid) {
       out.error = numJson?.errors?.[0]?.detail ?? 'API key rejected';
     }
@@ -153,7 +169,7 @@ export class TextBeltSmsProvider {
     const response = await fetch('https://textbelt.com/text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: player.phoneE164, message: text, key: this.apiKey }),
+      body: JSON.stringify({ phone: player.phoneE164, message: compliantSmsText(text), key: this.apiKey }),
       signal: AbortSignal.timeout(8_000),
     });
     const result = await response.json();
@@ -171,7 +187,7 @@ export async function sendTextBeltRaw({ phone, text, apiKey }) {
   const response = await fetch('https://textbelt.com/text', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phone, message: text, key: apiKey }),
+    body: JSON.stringify({ phone, message: compliantSmsText(text), key: apiKey }),
     signal: AbortSignal.timeout(8_000),
   });
   const result = await response.json();
@@ -210,8 +226,8 @@ export async function sendApprovedRecap({ store, leagueId, recapId, provider, ac
       deliveries.push({ playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: 'phone_not_verified', fallback: { channel: 'in_app', status: 'available' } });
       continue;
     }
-    if (player.messaging.smsConsent !== 'opted_in') {
-      deliveries.push({ playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: 'sms_consent_not_active', fallback: { channel: 'in_app', status: 'available' } });
+    if (!hasCurrentSmsConsent(player)) {
+      deliveries.push({ playerId: player.id, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: player.messaging?.smsConsent === 'opted_in' ? 'sms_consent_reconfirmation_required' : 'sms_consent_not_active', fallback: { channel: 'in_app', status: 'available' } });
       continue;
     }
     let delivered = null;
@@ -244,8 +260,9 @@ export async function sendJackBroadcast({ store, leagueId, provider, messages, a
   const deliveries = [];
   for (const msg of messages) {
     const player = await store.getPlayer(msg.playerId);
-    if (!player?.phoneVerifiedAt || player.messaging?.smsConsent !== 'opted_in') {
-      deliveries.push({ playerId: msg.playerId, channel: 'sms', status: 'suppressed', providerAttempted: false, reason: !player?.phoneVerifiedAt ? 'phone_not_verified' : 'sms_consent_not_active', fallback: { channel: 'in_app', status: 'available' } });
+    if (!hasCurrentSmsConsent(player)) {
+      const reason = !player?.phoneVerifiedAt ? 'phone_not_verified' : player?.messaging?.smsConsent === 'opted_in' ? 'sms_consent_reconfirmation_required' : 'sms_consent_not_active';
+      deliveries.push({ playerId: msg.playerId, channel: 'sms', status: 'suppressed', providerAttempted: false, reason, fallback: { channel: 'in_app', status: 'available' } });
       continue;
     }
     let delivered = null;

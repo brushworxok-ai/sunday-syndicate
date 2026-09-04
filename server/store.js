@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DEMO_CHAT, DEMO_LEAGUE } from '../src/demoLeague.js';
+import { SMS_CONSENT_VERSION } from '../src/smsCompliance.js';
 import { hashPin, normalizeCredential } from './auth.js';
 
 const parse = (value, fallback = null) => {
@@ -319,7 +320,12 @@ export class LeagueStore {
     const trashTalk = { ...player.trashTalk };
     if (preferences.smsConsent) {
       messaging.smsConsent = preferences.smsConsent;
-      if (preferences.smsConsent === 'opted_in') { messaging.consentedAt = at; delete messaging.optedOutAt; }
+      if (preferences.smsConsent === 'opted_in') {
+        messaging.consentedAt = at;
+        messaging.consentVersion = SMS_CONSENT_VERSION;
+        messaging.consentSource = `player_settings_v${SMS_CONSENT_VERSION}`;
+        delete messaging.optedOutAt;
+      }
       else messaging.optedOutAt = at;
     }
     if (preferences.resultsChannel) messaging.resultsChannel = preferences.resultsChannel;
@@ -331,7 +337,7 @@ export class LeagueStore {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.prepare('UPDATE players SET messaging_json = ?, trash_talk_json = ?, payment_json = ?, avatar = ?, updated_at = ? WHERE id = ?').run(stringify(messaging), stringify(trashTalk), payment ? stringify(payment) : null, avatar ?? null, at, playerId);
-      if (preferences.smsConsent) this.db.prepare('INSERT INTO consent_records (id, league_id, player_id, channel, status, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), player.leagueId, playerId, 'sms_results', preferences.smsConsent, actor === 'twilio_webhook' ? 'sms_keyword' : 'player_settings', at);
+      if (preferences.smsConsent) this.db.prepare('INSERT INTO consent_records (id, league_id, player_id, channel, status, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), player.leagueId, playerId, 'sms_results', preferences.smsConsent, actor.endsWith('_webhook') ? 'sms_keyword' : `player_settings_v${SMS_CONSENT_VERSION}`, at);
       if (preferences.trashTalkLevel) this.db.prepare('INSERT INTO consent_records (id, league_id, player_id, channel, status, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), player.leagueId, playerId, 'trash_talk', preferences.trashTalkLevel, 'player_settings', at);
       this.writeAudit(player.leagueId, 'player.preferences_updated', `${player.name} updated communication preferences`, actor, { playerId, changes: preferences }, at, { inTransaction: true });
       this.db.exec('COMMIT');
@@ -478,7 +484,7 @@ export class LeagueStore {
       this.db.prepare('INSERT INTO player_credentials (player_id, pin_hash, updated_at) VALUES (?, ?, ?)').run(player.id, pinHash, at);
       if (player.messaging?.smsConsent) {
         this.db.prepare('INSERT INTO consent_records (id, league_id, player_id, channel, status, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(randomUUID(), leagueId, player.id, 'sms_results', player.messaging.smsConsent, 'registration', at);
+          .run(randomUUID(), leagueId, player.id, 'sms_results', player.messaging.smsConsent, player.messaging.consentSource ?? 'registration', at);
       }
       this.writeAudit(leagueId, 'player.registered', `${player.name} joined the league`, player.id, { playerId: player.id }, at, { inTransaction: true });
       this.db.exec('COMMIT');
