@@ -42,8 +42,9 @@ test('Communication routes authenticate callers and fail safely without real pro
   const base = `http://127.0.0.1:${port}`;
   const request = (route, options = {}) => fetch(`${base}${route}`, { ...options, signal: AbortSignal.timeout(5000) });
   const health = await (await request('/api/health')).json();
-  assert.equal(health.ttsConfigured, false);
-  assert.equal(health.pushConfigured, false);
+  assert.equal(health.ok, true);
+  assert.equal(Object.hasOwn(health, 'ttsConfigured'), false);
+  assert.equal(Object.hasOwn(health, 'pushConfigured'), false);
   assert.equal((await request('/api/push/vapid-public')).status, 503);
   assert.equal((await request('/api/tts', { method: 'POST' })).status, 401);
   assert.equal((await request('/api/push/test', { method: 'POST' })).status, 401);
@@ -52,6 +53,9 @@ test('Communication routes authenticate callers and fail safely without real pro
   const login = await request('/api/auth/admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'test-commissioner-password' }) });
   assert.equal(login.status, 200);
   const headers = { Cookie: login.headers.get('set-cookie').split(';')[0], 'Content-Type': 'application/json' };
+  const adminHealth = await (await request('/api/admin/health', { headers })).json();
+  assert.equal(adminHealth.ttsConfigured, false);
+  assert.equal(adminHealth.pushConfigured, false);
   const voice = await (await request('/api/tts/diagnose', { headers })).json();
   assert.equal(voice.provider, 'browser');
   assert.equal(voice.configured, false);

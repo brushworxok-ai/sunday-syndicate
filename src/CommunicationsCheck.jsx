@@ -22,7 +22,7 @@ export default function CommunicationsCheck({ request }) {
   };
   const check = () => run('check', async () => {
     const read = async (url) => { try { return await request(url); } catch (err) { return { error: err.message }; } };
-    const [sms, voice, health] = await Promise.all([read('/api/sms/diagnose'), read('/api/tts/diagnose'), read('/api/health')]);
+    const [sms, voice, health] = await Promise.all([read('/api/sms/diagnose'), read('/api/tts/diagnose'), read('/api/admin/health')]);
     setReport({ sms, voice, health });
   });
   const send = () => run('send', async () => {

@@ -148,7 +148,7 @@ function App() {
   const [playerSession, setPlayerSession] = useState({ authenticated: false, playerId: null, name: null });
   const [playerLogin, setPlayerLogin] = useState({ playerId: 'player-marcus', pin: '' });
   const [toast, setToast] = useState('');
-  const [aiStatus, setAiStatus] = useState({ checked: false, configured: false, model: '', jackModel: '', database: '', smsProvider: 'demo', twilioConfigured: false });
+  const [aiStatus, setAiStatus] = useState({ checked: false, configured: false, model: '', jackModel: '', database: '', smsProvider: 'demo', messagingEnabled: false, twilioConfigured: false });
   const [aiResult, setAiResult] = useState(() => ({ recap: IS_PRODUCTION_BUILD ? '' : DEMO_LEAGUE.recap.finalText, picks: '', trashTalk: '' }));
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
@@ -453,12 +453,19 @@ function App() {
 
   useEffect(() => {
     apiRequest('/api/health')
-      .then((data) => setAiStatus({ checked: true, configured: data.geminiConfigured, model: data.model, jackModel: data.jackModel || data.model, database: data.database, smsProvider: data.smsProvider, twilioConfigured: data.twilioConfigured }))
-      .catch(() => setAiStatus({ checked: true, configured: false, model: '', jackModel: '', database: '', smsProvider: 'offline', twilioConfigured: false }));
+      .then((data) => setAiStatus({ checked: true, configured: data.geminiConfigured, model: data.model, jackModel: data.jackModel || data.model, database: '', smsProvider: data.messagingEnabled ? 'configured' : 'demo', messagingEnabled: data.messagingEnabled === true, twilioConfigured: false }))
+      .catch(() => setAiStatus({ checked: true, configured: false, model: '', jackModel: '', database: '', smsProvider: 'offline', messagingEnabled: false, twilioConfigured: false }));
     apiRequest('/api/auth/status').then((status) => setIsComm(status.authenticated)).catch(() => {});
     apiRequest('/api/auth/player/status').then(setPlayerSession).catch(() => {});
     loadLeague();
   }, [loadLeague]);
+
+  useEffect(() => {
+    if (!isComm) return;
+    apiRequest('/api/admin/health')
+      .then((data) => setAiStatus((current) => ({ ...current, ...data, checked: true, configured: data.geminiConfigured, jackModel: data.jackModel || data.model, messagingEnabled: data.smsConfigured === true })))
+      .catch(() => {});
+  }, [isComm]);
 
   // Auto-fill chat name from player session
   useEffect(() => {
@@ -1760,7 +1767,7 @@ function App() {
 
   // SMS is only "live" when a real provider is wired; otherwise codes never
   // actually send, so we must not force a verification step.
-  const smsLive = () => ['telnyx', 'twilio', 'textbelt'].includes(aiStatus.smsProvider);
+  const smsLive = () => aiStatus.messagingEnabled === true;
 
   // Shared registration: create the account, sign in, greet. otpVerified marks
   // whether the phone was confirmed (drives SMS-consent status server-side).

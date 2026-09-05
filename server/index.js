@@ -186,9 +186,9 @@ app.get('/api/sms/trace', auth.requireAdmin, asyncRoute(async (request, response
   return response.json({ otpRecord: otp ? { sentAt: new Date(otp.sentAt).toISOString(), expired: otp.expiresAt < Date.now(), attempts: otp.attempts } : undefined, ...status });
 }));
 
-app.get('/api/health', asyncRoute(async (_request, response) => {
+const readHealthReport = async () => {
   const geminiKey = await getGeminiKey().catch(() => ({ value: null, source: 'none' }));
-  response.json({
+  return {
     ok: true,
     database: store.kind,
     geminiConfigured: Boolean(geminiKey.value),
@@ -212,7 +212,25 @@ app.get('/api/health', asyncRoute(async (_request, response) => {
       : false,
     pushConfigured: Boolean(webpush),
     smsWebhookVerificationConfigured: Boolean(process.env.TELNYX_PUBLIC_KEY),
+  };
+};
+
+/* Keep the public heartbeat useful to the client without advertising which
+   communications vendors, keys, or webhooks are configured. */
+app.get('/api/health', asyncRoute(async (_request, response) => {
+  const report = await readHealthReport();
+  response.json({
+    ok: report.ok,
+    geminiConfigured: report.geminiConfigured,
+    model: report.model,
+    jackModel: report.jackModel,
+    messagingEnabled: report.smsConfigured,
   });
+}));
+
+/* Provider configuration is operational data for the commissioner only. */
+app.get('/api/admin/health', auth.requireAdmin, asyncRoute(async (_request, response) => {
+  response.json(await readHealthReport());
 }));
 
 /* ── Admin config overrides — lets the commissioner fix a stale hosting env var
