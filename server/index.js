@@ -2367,7 +2367,9 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
   const amount = Number(request.body?.amount);
   if (!Number.isInteger(week) || week < 1 || week > 18) return response.status(422).json({ error: 'A valid week (1–18) is required.' });
   if (!Number.isFinite(amount) || amount <= 0) return response.status(422).json({ error: 'A positive payout amount is required.' });
-  if ((league.payouts ?? []).some((p) => p.week === week && p.pool === (request.body?.pool ?? 'weekly'))) {
+  // Credits are internal league bookkeeping, not confirmation that cash was
+  // sent outside the app. Permit the commissioner to record that later.
+  if ((league.payouts ?? []).some((p) => p.week === week && p.pool === (request.body?.pool ?? 'weekly') && !['credit', 'league_credit'].includes(p.method))) {
     return response.status(409).json({ error: `Week ${week} is already marked paid.` });
   }
   const payout = {
@@ -2397,6 +2399,7 @@ app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyn
   // Gather all payment events for this player
   const mySheets = (league.sheets ?? []).filter((s) => s.playerId === playerId);
   const myPayouts = (league.payouts ?? []).filter((p) => {
+    if (['credit', 'league_credit'].includes(p.method)) return false;
     // Match by playerId first (reliable), fall back to exact name match
     if ((p.winnerPlayerIds ?? []).includes(playerId)) return true;
     const player = (league.players ?? []).find((pl) => pl.id === playerId);
@@ -2435,19 +2438,17 @@ app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyn
     });
   }
 
-  // Credit transactions — but NOT the mirror entries of an entry fee paid from
-  // credit or a pot paid into credit; those are already shown as the entry_fee /
-  // payout rows above, and listing both reads as a double charge / double win.
+  // Credit transactions remain visible because a credit balance is not an
+  // external payout. Entry-fee debits are already represented above.
   for (const credit of myCredits) {
     const reason = String(credit.reason ?? '');
     if (credit.amount < 0 && /entry/i.test(reason)) continue;
-    if (credit.amount > 0 && /winnings|pot\b/i.test(reason)) continue;
     history.push({
       id: `credit-${credit.id}`,
-      type: 'credit',
+      type: credit.amount > 0 && /winnings|pot\b/i.test(reason) ? 'league_credit' : 'credit',
       amount: credit.amount,
       reason: credit.reason,
-      status: 'completed',
+      status: credit.amount > 0 && /winnings|pot\b/i.test(reason) ? 'credit_posted' : 'completed',
       at: credit.at,
     });
   }
@@ -2456,7 +2457,8 @@ app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyn
   history.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''));
 
   const totalPaid = mySheets.filter((s) => s.paid).length * entryFee;
-  const totalWon = myPayouts.reduce((sum, p) => sum + (p.amount ?? 0), 0);
+  const totalWon = myPayouts.reduce((sum, p) => sum + (p.amount ?? 0), 0)
+    + myCredits.filter((credit) => credit.amount > 0 && /winnings|pot\b/i.test(String(credit.reason ?? ''))).reduce((sum, credit) => sum + credit.amount, 0);
   const creditBalance = myCredits.reduce((sum, c) => sum + c.amount, 0);
 
   return response.json({
@@ -2506,7 +2508,7 @@ app.get('/api/leagues/:leagueId/payment-overview', auth.requireAdmin, asyncRoute
 
   const totalCollected = sheets.filter((s) => s.paid).length * entryFee;
   const totalOutstanding = sheets.filter((s) => !s.paid).length * entryFee;
-  const totalPaidOut = payouts.reduce((sum, p) => sum + (p.amount ?? 0), 0);
+  const totalPaidOut = payouts.filter((p) => !['credit', 'league_credit'].includes(p.method)).reduce((sum, p) => sum + (p.amount ?? 0), 0);
 
   return response.json({
     entryFee,
@@ -2803,8 +2805,8 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
         return r?.winner && r?.verifiedAt;
       });
       const weekSheets = (freshLeague.sheets ?? []).filter((s) => s.week === week);
-      const alreadyPaid = (freshLeague.payouts ?? []).some((p) => p.week === week && p.pool === 'weekly');
-      if (allVerified && weekSheets.length && !alreadyPaid) {
+      const externallyPaid = (freshLeague.payouts ?? []).some((p) => p.week === week && p.pool === 'weekly' && !['credit', 'league_credit'].includes(p.method));
+      if (allVerified && weekSheets.length && !externallyPaid) {
         const recognition = computeWinnerRecognition(freshLeague, week);
         // Atomic claim (only once a real winner is confirmed) so two concurrent
         // isolates can't both pay the weekly pot.
@@ -2831,11 +2833,6 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
                 await store.addCreditEntry(leagueId, { id: randomUUID(), playerId: winner.playerId, amount: verdict.value, reason: `Week ${week} winnings — auto payout`, by: 'auto-pilot', at: new Date().toISOString() });
                 credited += 1;
               }
-              await store.savePayout(leagueId, {
-                id: `payout-${randomUUID()}`, week, pool: 'weekly', amount: pot,
-                winnerNames: winners.map((w) => String(w.name ?? '').slice(0, 50)),
-                method: credited ? 'credit' : 'pending', note: 'Auto-pilot weekly payout', paidAt: new Date().toISOString(), paidBy: 'auto-pilot',
-              });
               const names = winners.map((w) => w.name.split(' ')[0]).join(' & ');
               await store.addChatMessage(leagueId, {
                 id: `chat-payout-w${week}`, playerId: null, name: 'Jack',
@@ -2845,8 +2842,8 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
               for (const winner of winners) {
                 if (winner.playerId) await saveNotification(leagueId, { playerId: winner.playerId, kind: 'payout', title: `You won Week ${week}!`, body: `$${share} credited to your balance. Nice work!`, metadata: { week, amount: share } });
               }
-              await saveNotification(leagueId, { kind: 'payout', title: `Week ${week} payout — $${pot}`, body: `${names} won the Week ${week} pot.`, metadata: { week, amount: pot } });
-              actions.push(`Paid Week ${week} pot ($${pot}) to ${names} via credit balance and announced it in chat.`);
+              await saveNotification(leagueId, { kind: 'payout', title: `Week ${week} league credit — $${pot}`, body: `${names} won the Week ${week} pot. League credit has been posted; external payout is recorded separately.`, metadata: { week, amount: pot } });
+              actions.push(`Posted $${pot} in Week ${week} league credit to ${names}; external payout remains pending.`);
             }
           } catch (error) {
             await store.releaseClaim(leagueId, `weekly-pot-${week}`).catch(() => {});

@@ -60,6 +60,22 @@ const MORE_ITEMS = [
 const PRESET_AVATARS = ['🏈', '🔥', '💰', '👑', '🦅', '🐻', '🐅', '🐬', '🐎', '🐺', '🦁', '⚡'];
 
 const LEAGUE_ID = 'league-sunday-syndicate-demo';
+const IS_PRODUCTION_BUILD = import.meta.env.PROD;
+const EMPTY_LEAGUE = {
+  id: LEAGUE_ID,
+  players: [],
+  sheets: [],
+  results: {},
+  chat: [],
+  settings: {},
+  recaps: [],
+  broadcasts: [],
+  payouts: [],
+  creditLedger: [],
+  sideBets: [],
+  survivorPicks: [],
+  cfbPools: [],
+};
 
 async function apiRequest(path, options = {}) {
   let response;
@@ -114,11 +130,14 @@ function App() {
   const [picks, setPicks] = useState({});
   const [tiebreaker, setTiebreaker] = useState('');
   const [paid, setPaid] = useState(false);
-  const [sheets, setSheets] = useState(DEMO_LEAGUE.sheets);
-  const [results, setResults] = useState(DEMO_LEAGUE.results);
-  const [chatMsgs, setChatMsgs] = useState(DEMO_CHAT);
+  // Production must never render the demo league while the real league is
+  // loading. Local development keeps the fixture for the documented demo.
+  const [sheets, setSheets] = useState(() => IS_PRODUCTION_BUILD ? [] : DEMO_LEAGUE.sheets);
+  const [results, setResults] = useState(() => IS_PRODUCTION_BUILD ? {} : DEMO_LEAGUE.results);
+  const [chatMsgs, setChatMsgs] = useState(() => IS_PRODUCTION_BUILD ? [] : DEMO_CHAT);
   const [rolloverPot, setRolloverPot] = useState(0);
   const [serverLeague, setServerLeague] = useState(null);
+  const [leagueHydrated, setLeagueHydrated] = useState(() => !IS_PRODUCTION_BUILD);
   const [serverBusy, setServerBusy] = useState('');
   const [serverError, setServerError] = useState('');
   const [chatInput, setChatInput] = useState('');
@@ -130,7 +149,7 @@ function App() {
   const [playerLogin, setPlayerLogin] = useState({ playerId: 'player-marcus', pin: '' });
   const [toast, setToast] = useState('');
   const [aiStatus, setAiStatus] = useState({ checked: false, configured: false, model: '', jackModel: '', database: '', smsProvider: 'demo', twilioConfigured: false });
-  const [aiResult, setAiResult] = useState({ recap: DEMO_LEAGUE.recap.finalText, picks: '', trashTalk: '' });
+  const [aiResult, setAiResult] = useState(() => ({ recap: IS_PRODUCTION_BUILD ? '' : DEMO_LEAGUE.recap.finalText, picks: '', trashTalk: '' }));
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -304,7 +323,7 @@ function App() {
     finally { setServerBusy(''); }
   };
   const [betForm, setBetForm] = useState({ creatorId: 'player-marcus', opponentId: 'player-taylor', event: `Week ${selectedWeek} final pick score`, terms: 'Higher verified weekly score wins', settlementRule: 'compare_weekly_score', stakeType: 'virtual_tokens', stakeAmount: 10, stakeLabel: '10 Syndicate tokens', optionalMessage: '' });
-  const [recapEdit, setRecapEdit] = useState(DEMO_LEAGUE.recap.finalText);
+  const [recapEdit, setRecapEdit] = useState(() => IS_PRODUCTION_BUILD ? '' : DEMO_LEAGUE.recap.finalText);
   const [recapShow, setRecapShow] = useState(null); // { slides, narration, week }
   const [recapShowLoading, setRecapShowLoading] = useState(false);
   const [recapSlideIndex, setRecapSlideIndex] = useState(0);
@@ -341,6 +360,7 @@ function App() {
       setSheets(league.sheets);
       setResults(league.results);
       setChatMsgs(league.chat);
+      setLeagueHydrated(true);
       if (league.latestRecap?.finalText) {
         setAiResult((current) => ({ ...current, recap: league.latestRecap.finalText }));
         setRecapEdit(league.latestRecap.finalText);
@@ -355,6 +375,7 @@ function App() {
     } catch (error) {
       if (requestVersion !== leagueRequestRef.current) return null;
       setServerError(error.message);
+      setLeagueHydrated(true);
       return null;
     }
   }, []);
@@ -593,7 +614,10 @@ function App() {
         : [];
       const weekPot = ws.filter((s) => s.paid).length * ENTRY_FEE;
       const payout = (serverLeague?.payouts ?? []).find((p) => p.week === week && (p.pool ?? 'weekly') === 'weekly');
-      weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
+      // A league-credit posting is not proof that money left the commissioner.
+      // Only an external payout record is shown as paid to players.
+      const externallyPaid = Boolean(payout?.paidAt) && !['credit', 'league_credit'].includes(payout?.method);
+      weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: externallyPaid, payout });
       for (const s of scored) {
         const key = s.playerId ?? s.name;
         if (!players.has(key)) players.set(key, { key, name: s.name, weeksPlayed: 0, totalCorrect: 0, totalPicks: 0, weeklyWins: 0, earnings: 0 });
@@ -633,7 +657,9 @@ function App() {
   });
 
   const gameContext = currentGames.map((game) => ({ ...game, ...results[game.id] }));
-  const proofLeague = serverLeague ?? { ...DEMO_LEAGUE, latestRecap: DEMO_LEAGUE.recap, latestBroadcast: DEMO_LEAGUE.broadcast, recaps: [DEMO_LEAGUE.recap], broadcasts: [DEMO_LEAGUE.broadcast], chat: DEMO_CHAT };
+  const proofLeague = serverLeague ?? (IS_PRODUCTION_BUILD
+    ? EMPTY_LEAGUE
+    : { ...DEMO_LEAGUE, latestRecap: DEMO_LEAGUE.recap, latestBroadcast: DEMO_LEAGUE.broadcast, recaps: [DEMO_LEAGUE.recap], broadcasts: [DEMO_LEAGUE.broadcast], chat: DEMO_CHAT });
   const demoPlayerName = (playerId) => proofLeague.players.find((player) => player.id === playerId)?.name ?? 'Unknown player';
 
   const notify = (message) => setToast(message);
@@ -2075,9 +2101,14 @@ function App() {
       )}
 
       <main>
-        {serverError && <div className="server-banner"><strong>Server connection unavailable.</strong><span>{serverError} The seeded read-only fixture remains visible.</span><button type="button" onClick={loadLeague}>Retry</button></div>}
+        {serverError && <div className="server-banner"><strong>Server connection unavailable.</strong><span>{serverError} League details will appear when the connection returns.</span><button type="button" onClick={loadLeague}>Retry</button></div>}
 
-        {view === 'home' && (
+        {view === 'home' && (!leagueHydrated && IS_PRODUCTION_BUILD ? (
+          <section className="league-loading" role="status" aria-live="polite" aria-label="Loading live league">
+            <span className="league-loading-mark" aria-hidden="true">405</span>
+            <div><span className="eyebrow dark">LIVE LEAGUE</span><h1>Loading the board…</h1><p>Fetching the current picks, standings, and pot.</p></div>
+          </section>
+        ) : (
           <div className="stack-lg">
             {(() => {
               const crew = proofLeague.players ?? [];
@@ -2277,7 +2308,7 @@ function App() {
             )}
 
           </div>
-        )}
+        ))}
 
         {view === 'picks' && (
           <div className="page-grid">
@@ -2403,7 +2434,7 @@ function App() {
                       </div>;
                     })}
                   </div>
-                  <p>Most total correct picks combined across all 18 weeks sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three cash out.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
+                  <p>Most total correct picks combined across all 18 weeks sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three earn league credit; the commissioner records the external payout separately.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
                 </div>
                 {isComm && <div className="season-pool-admin">
                   <small>SEASON ENTRIES PAID</small>
@@ -2706,7 +2737,7 @@ function App() {
         )}
 
         {view === 'payments' && (
-          <StandardPage eyebrow="FINANCES" title="My Payments" subtitle="Your entry fees, payouts, and credit balance — all in one place.">
+          <StandardPage eyebrow="FINANCES" title="My Payments" subtitle="Your entry fees, external payouts, and league-credit balance — all in one place.">
             {!playerSession.authenticated ? (
               <EmptyState icon="🔐" title="Sign in to view" text="Your payment history is available after signing in." action="Sign in" onAction={() => setShowWelcome(true)} />
             ) : !paymentHistory ? (
@@ -2784,7 +2815,7 @@ function App() {
                             {item.type === 'entry_fee' ? `Week ${item.week} entry` : item.type === 'payout' ? `Week ${item.week} winnings${item.pool && item.pool !== 'weekly' ? ` (${item.pool})` : ''}` : item.reason}
                           </strong>
                           <small>
-                            {item.status === 'confirmed' ? (item.method === 'credit' ? '✅ Paid from credit' : '✅ Paid') : item.status === 'claimed' ? '⏳ You said you sent it — waiting on commissioner' : item.status === 'unpaid' ? 'Due — not paid yet' : item.status === 'paid' ? '✅ Paid to you' : '✅ Done'}
+                            {item.status === 'confirmed' ? (item.method === 'credit' ? '✅ Paid from credit' : '✅ Paid') : item.status === 'claimed' ? '⏳ You said you sent it — waiting on commissioner' : item.status === 'unpaid' ? 'Due — not paid yet' : item.status === 'paid' ? '✅ External payout recorded' : item.status === 'credit_posted' ? '✅ League credit posted — not an external cash payout' : '✅ Done'}
                             {item.at ? ` · ${new Date(item.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
                           </small>
                         </div>
@@ -3489,7 +3520,7 @@ function App() {
         {view === 'rules' && (
           <StandardPage eyebrow="THE FINE PRINT" title="House rules" subtitle="Simple enough to explain before kickoff. Firm enough to settle Monday-night arguments.">
             <div className="rules-grid">
-              <Rule number="01" title="Entry" text={`Each weekly entry costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE cash out (60/30/10 unless the commissioner changes the split).`} />
+              <Rule number="01" title="Entry" text={`Each weekly entry costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE earn league credit (60/30/10 unless the commissioner changes the split). The commissioner records any external payout separately.`} />
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. You can change your picks anytime until the week locks — after that they're final.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
               <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess takes it. Identical guesses split the pot." />

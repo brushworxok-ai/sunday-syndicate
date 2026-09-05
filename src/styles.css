@@ -135,6 +135,10 @@ body.modal-open .app-shell, body.modal-open main { touch-action: none; }
 
 main { padding: 24px 0 40px; }
 .stack-lg { display: grid; gap: 20px; }
+.league-loading { min-height: 360px; display: grid; place-content: center; justify-items: center; gap: 18px; padding: 40px 24px; text-align: center; background: var(--card); border: 1px solid var(--glass-border); border-radius: 20px; }
+.league-loading-mark { width: 58px; height: 58px; display: grid; place-items: center; border-radius: 16px; background: var(--neon); color: #0a0a12; box-shadow: var(--glow-green); font-family: 'DM Mono', monospace; font-weight: 700; letter-spacing: -.04em; }
+.league-loading h1 { margin: 5px 0 6px; color: #fff; font-size: clamp(1.5rem, 4vw, 2rem); }
+.league-loading p { max-width: 28rem; margin: 0; color: var(--muted); }
 
 /* ── Hero ── */
 .hero { min-height: 380px; overflow: hidden; border-radius: 16px; padding: clamp(32px, 5vw, 60px); background: linear-gradient(135deg, #0f1a2e 0%, #0a0a12 50%, #0d1f12 100%); color: white; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, .6fr); align-items: center; gap: 50px; position: relative; border: 1px solid var(--glass-border); }
