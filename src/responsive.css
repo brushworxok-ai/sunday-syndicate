@@ -1,0 +1,46 @@
+/* Do not retain an animated transform on ancestors of fixed controls.
+   A transform makes the bottom bar relative to the page, not the viewport. */
+.standard-page, .page-grid { animation-name: page-fade; }
+@keyframes page-fade { from { opacity: 0; } to { opacity: 1; } }
+
+html { scroll-padding-bottom: calc(160px + env(safe-area-inset-bottom, 0px)); }
+:is(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--neon);
+  outline-offset: 3px;
+}
+main :is(input, select, textarea) { min-width: 0; max-width: 100%; }
+.panel-heading { flex-wrap: wrap; gap: 12px; }
+.panel-heading > div, .slip-identity > div, .messages article,
+.assistant-message, .message-input > *, .deposit-request > * { min-width: 0; }
+.slip-identity, .panel-heading, .messages article, .assistant-message,
+.error-text, .toast, .credit-chip { overflow-wrap: anywhere; }
+.button, .ai-mini-button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.credit-chip { max-width: 100%; flex-wrap: wrap; }
+.message-input { grid-template-columns: 42px minmax(0, 1fr) auto; }
+
+@media (max-width: 900px) {
+  .picks-sticky {
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    flex-wrap: wrap;
+  }
+  .picks-sticky-progress { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
+  .picks-sticky .button { flex: 0 1 auto; min-height: 44px; }
+  /* Chat remains available in the bottom navigation. Do not stack a floating
+     assistant over a second fixed action bar on small screens. */
+  .jack-fab.above-bar { display: none; }
+  .page-grid { padding-bottom: 80px; }
+  footer { margin-bottom: 0; }
+}
+
+@media (max-width: 650px) {
+  .slip-card { padding: 16px; }
+  .header-week select { font-size: 16px !important; }
+  .brand, .brand > div { min-width: 0; }
+  .brand strong { overflow-wrap: anywhere; }
+  .brand-mark { flex-shrink: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .standard-page, .page-grid { animation: none; }
+}
