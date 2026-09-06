@@ -560,6 +560,25 @@ export class LeagueStore {
     return entry;
   }
 
+  getDeposits(leagueId) {
+    const row = this.db.prepare('SELECT value FROM app_config WHERE key = ?').get(`deposits:${leagueId}`);
+    return row ? JSON.parse(row.value) : [];
+  }
+
+  updateDeposit(leagueId, action, input) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const state = { deposits: this.getDeposits(leagueId), creditLedger: [] };
+      const result = changeDeposit(state, action, input);
+      for (const entry of state.creditLedger) this.addCreditEntry(leagueId, entry);
+      for (const notification of state.notifications ?? []) this.saveNotification(leagueId, notification);
+      this.db.prepare('INSERT INTO app_config (key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at')
+        .run(`deposits:${leagueId}`, JSON.stringify(state.deposits), new Date().toISOString());
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
   // Atomically deduct entry fee from credit and mark the CFB pool entry paid.
   payCfbEntryWithCredit(leagueId, poolId, playerId, playerName) {
     this.db.exec('BEGIN IMMEDIATE');
@@ -669,3 +688,4 @@ export class LeagueStore {
 
   close() { this.db.close(); }
 }
+import { changeDeposit } from './deposits.js';

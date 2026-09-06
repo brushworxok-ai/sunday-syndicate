@@ -1,4 +1,5 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import DepositFunds from './DepositFunds.jsx';
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -2751,6 +2752,7 @@ function App() {
               <p className="muted" style={{ textAlign: 'center', padding: '2rem 0' }}>Loading payment history…</p>
             ) : (
               <div className="payment-history-view">
+                <DepositFunds key={playerSession.playerId} apiRequest={apiRequest} leagueId={LEAGUE_ID} cashAppUrl={serverLeague?.settings?.cashAppPool?.url} onUpdated={async () => { await loadLeague(); await loadPaymentHistory(); }} />
                 {/* The one question this page must answer: do I owe anything right now? */}
                 {mySheet && !mySheet.paid ? (
                   <section className="owe-card">
@@ -3674,6 +3676,7 @@ function App() {
             </section>
             <section className="cashapp-admin-section">
               <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Player Credits</h2></div></div>
+              <DepositFunds admin apiRequest={apiRequest} leagueId={LEAGUE_ID} players={serverLeague?.players ?? []} onUpdated={loadLeague} />
               <p>When a Cash App payment lands, add it here as credit — from then on that player pays entries with one tap and winnings can go straight back to their balance. The app only tracks the money; Cash App moves it.</p>
               <div className="credit-balances">
                 {(serverLeague?.players ?? []).map((player) => {

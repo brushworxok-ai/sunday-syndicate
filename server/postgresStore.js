@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { changeDeposit } from './deposits.js';
 import { neon } from '@neondatabase/serverless';
 import { DEMO_CHAT, DEMO_LEAGUE } from '../src/demoLeague.js';
 import { SMS_CONSENT_VERSION } from '../src/smsCompliance.js';
@@ -486,6 +487,14 @@ export class PostgresLeagueStore {
   async getCreditBalance(leagueId, playerId) {
     const state = await this.readState(leagueId);
     return ledgerBalance(state?.creditLedger, playerId);
+  }
+
+  async getDeposits(leagueId) {
+    return (await this.readState(leagueId))?.deposits ?? [];
+  }
+
+  async updateDeposit(leagueId, action, input) {
+    return this.mutateLeague(leagueId, draft => changeDeposit(draft, action, input));
   }
 
   async addCreditEntry(leagueId, entry) {

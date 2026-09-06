@@ -2294,6 +2294,32 @@ app.post('/api/leagues/:leagueId/cfb-pool/:poolId/sync-scores', auth.requireAdmi
 }));
 
 /* ── Player credits — the app tracks money between friends; it never moves real money ── */
+app.get('/api/leagues/:leagueId/deposits', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const deposits = await store.getDeposits(request.params.leagueId);
+  response.json({ deposits: deposits.filter(d => d.playerId === request.player.id) });
+}));
+
+app.get('/api/leagues/:leagueId/admin/deposits', auth.requireAdmin, asyncRoute(async (request, response) => {
+  response.json({ deposits: await store.getDeposits(request.params.leagueId) });
+}));
+
+app.post('/api/leagues/:leagueId/deposits', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league?.settings?.cashAppPool?.url) return response.status(422).json({ error: 'Ask the commissioner to configure the Cash App payment link first.' });
+  try {
+    const deposit = await store.updateDeposit(request.params.leagueId, 'request', { playerId: request.player.id, amount: request.body?.amount, requestId: request.body?.requestId });
+    response.status(201).json({ deposit });
+  } catch (error) { response.status(422).json({ error: error.message }); }
+}));
+
+app.post('/api/leagues/:leagueId/admin/deposits/:depositId', auth.requireAdmin, asyncRoute(async (request, response) => {
+  if (!['confirm', 'reject'].includes(request.body?.action)) return response.status(422).json({ error: 'Choose confirm or reject.' });
+  try {
+    const deposit = await store.updateDeposit(request.params.leagueId, request.body.action, { id: request.params.depositId });
+    response.json({ deposit });
+  } catch (error) { response.status(422).json({ error: error.message }); }
+}));
+
 app.post('/api/leagues/:leagueId/credits', auth.requireAdmin, asyncRoute(async (request, response) => {
   const league = await store.getLeague(request.params.leagueId);
   if (!league) return response.status(404).json({ error: 'League not found.' });

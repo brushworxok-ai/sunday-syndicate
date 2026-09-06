@@ -1999,3 +1999,7 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .communications-test { border-top: 1px solid #b8c9c0; padding-top: 16px; }
 .communications-check button { min-height: 44px; }
 .communications-check [role="alert"] { color: #ff9999; font-weight: 600; }
+.deposit-request { display: flex; flex-direction: column; gap: 10px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.deposit-request small { color: var(--muted); }
+[aria-label="Add funds"] .cashapp-admin-actions { flex-wrap: wrap; }
+[aria-label="Add funds"] button[aria-pressed="true"] { border-color: #00ff87; color: #00ff87; }
