@@ -1,5 +1,6 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DepositFunds from './DepositFunds.jsx';
+import WeeklyEntryCard from './WeeklyEntryCard.jsx';
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
@@ -1033,8 +1034,9 @@ function App() {
       await loadLeague();
       // Stay on the sheet in a confirmed state (picks + tiebreaker kept), and
       // bring the pay block into view if they still owe the entry.
-      notify(saved.paid ? `You're in for ${weekLabel}. Good luck.` : saved.paymentClaim ? 'Picks saved. Payment is awaiting commissioner confirmation.' : `You're in for ${weekLabel} — now pay your $${ENTRY_FEE} entry below.`);
-      setTimeout(() => slipRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+      notify(saved.paid ? `You're in for ${weekLabel}. Good luck.` : saved.paymentClaim ? 'Picks saved. Payment is awaiting commissioner confirmation.' : `Picks saved for ${weekLabel}. Finish by paying your $${ENTRY_FEE} entry.`);
+      if (playerSession.authenticated && !saved.paid) setView('payments');
+      else setTimeout(() => slipRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -2132,8 +2134,8 @@ function App() {
                       <h1>{weekLocked ? 'Watch the board.' : `${currentGames.length} games. Call every one.`}</h1>
                       <p>{weekLocked ? 'Picks are in — the pot is live and the trash talk is open.' : deadlineCountdown ? `Picks lock in ${deadlineCountdown}.` : 'Straight-up winners, no spreads. Highest score takes the pot.'}</p>
                       <div className="hero-actions">
-                        {openWeek && <button className="button button-light" type="button" onClick={() => setView('picks')}>{mySheet ? 'Update my picks' : 'Make my picks'} <span>→</span></button>}
-                        {weekLocked && <button className="button button-light" type="button" onClick={() => setView('results')}>See the board <span>→</span></button>}
+                        {openWeek && !playerSession.authenticated && <button className="button button-light" type="button" onClick={() => setView('picks')}>Make my picks <span>→</span></button>}
+                        {weekLocked && !playerSession.authenticated && <button className="button button-light" type="button" onClick={() => setView('results')}>See the board <span>→</span></button>}
                         {!playerSession.authenticated && <button className="button button-ghost" type="button" onClick={() => { setWelcomeMode('join'); setShowWelcome(true); }}>Join the league</button>}
                         <button className="button button-invite" type="button" onClick={shareInviteLink}>{shareCopied ? '✓ Copied!' : '📤 Invite friends'}</button>
                       </div>
@@ -2147,6 +2149,7 @@ function App() {
                   </section>
 
                   {/* ── Champions: who's winning ── */}
+                  {playerSession.authenticated && <WeeklyEntryCard sheet={mySheet} games={currentGames} weekLabel={weekLabel} locked={weekLocked} deadline={weekDeadline} balance={myCredit} fee={ENTRY_FEE} onNavigate={setView} />}
                   <section className="champ-row" aria-label="League leaders">
                     <button type="button" className={`champ-card ${lastWon ? 'lit' : ''}`} onClick={() => setView('season')}>
                       <span className="champ-label">🏆 Last week's winner</span>
@@ -2271,7 +2274,7 @@ function App() {
             )}
 
             {/* ── You this week: the one card a player actually wants ── */}
-            {(() => {
+            {!playerSession.authenticated && (() => {
               const nextGame = currentGames.find((g) => { const l = liveByGame[g.id]; return !(l?.state === 'post' || results[g.id]?.winner); }) ?? currentGames[0];
               const myRank = playerSession.playerId ? leaderboard.findIndex((e) => e.playerId === playerSession.playerId) + 1 : 0;
               return (
@@ -2344,8 +2347,9 @@ function App() {
             <aside className="slip-card" ref={slipRef}>
               {mySheet && (
                 <div className="slip-in-banner">
-                  <strong>✅ You're in for {weekLabel}</strong>
-                  <small>{weekLocked ? 'Locked — good luck.' : 'Change any pick below and tap Update anytime before lock.'}</small>
+                  <strong>{mySheet.paid ? `✅ You're in for ${weekLabel}` : `✓ Picks saved for ${weekLabel}`}</strong>
+                  <small>{Object.keys(mySheet.picks ?? {}).length}/{currentGames.length} picks saved · Tiebreaker: {mySheet.tiebreaker} · {mySheet.paid ? 'Entry paid' : mySheet.paymentClaim ? 'Payment pending confirmation' : `$${ENTRY_FEE} entry unpaid`}</small>
+                  <small>{weekLocked ? 'Picks are locked.' : 'Change a pick and tap Update before the deadline to save your changes.'}</small>
                 </div>
               )}
               <div className="slip-progress"><span>YOUR PICKS</span><strong>{Object.keys(picks).length}<small> / {currentGames.length}</small></strong></div>
@@ -2366,10 +2370,10 @@ function App() {
                 if (mySheet?.paid) return <div className="credit-paid-banner">✅ This week's entry is paid.</div>;
                 return (
                   <div className="credit-chip-row">
-                    <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
+                    <span className="credit-chip">💳 Available balance: <strong>${myCredit}</strong></span>
                     {mySheet && myCredit >= ENTRY_FEE && (
                       <button className="button button-primary" type="button" disabled={serverBusy === 'sheet-credit-pay'} onClick={() => paySheetWithCredit(mySheet.id)}>
-                        {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from my credit`}
+                        {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from balance`}
                       </button>
                     )}
                     {!mySheet && myCredit >= ENTRY_FEE && <small className="muted">Lock in your sheet, then pay from credit in one tap.</small>}
@@ -2745,7 +2749,7 @@ function App() {
         )}
 
         {view === 'payments' && (
-          <StandardPage eyebrow="FINANCES" title="My Payments" subtitle="Your entry fees, external payouts, and league-credit balance — all in one place.">
+          <StandardPage eyebrow="FINANCES" title="My Payments" subtitle="Your available balance, deposits, and entry payments.">
             {!playerSession.authenticated ? (
               <EmptyState icon="🔐" title="Sign in to view" text="Your payment history is available after signing in." action="Sign in" onAction={() => setShowWelcome(true)} />
             ) : !paymentHistory ? (
@@ -2758,10 +2762,10 @@ function App() {
                   <section className="owe-card">
                     <div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>You owe ${ENTRY_FEE} for {weekLabel}</h2><p>Your picks are in — pay the entry to be in the pot.</p></div>
                     <div className="credit-chip-row">
-                      <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
+                      <span className="credit-chip">💳 Available balance: <strong>${myCredit}</strong></span>
                       {myCredit >= ENTRY_FEE && (
                         <button className="button button-primary" type="button" disabled={serverBusy === 'sheet-credit-pay'} onClick={() => paySheetWithCredit(mySheet.id)}>
-                          {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from my credit`}
+                          {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from balance`}
                         </button>
                       )}
                       {myCredit < ENTRY_FEE && (
@@ -2795,7 +2799,7 @@ function App() {
                     <span className="payment-summary-value positive">${paymentHistory.summary.totalWon}</span>
                   </div>
                   <div className="payment-summary-card">
-                    <span className="payment-summary-label">Credit</span>
+                    <span className="payment-summary-label">Available balance</span>
                     <span className="payment-summary-value">${paymentHistory.summary.creditBalance}</span>
                   </div>
                   <div className="payment-summary-card accent">
@@ -3314,10 +3318,10 @@ function App() {
                 )}
                 {playerSession.authenticated && !cfbMyEntry?.paid && (
                   <div className="credit-chip-row">
-                    <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
+                    <span className="credit-chip">💳 Available balance: <strong>${myCredit}</strong></span>
                     {cfbMyEntry && myCredit >= (cfbPool.entryFee || 0) && (
                       <button className="button button-primary" type="button" disabled={serverBusy === 'cfb-credit-pay'} onClick={payCfbWithCredit}>
-                        {serverBusy === 'cfb-credit-pay' ? 'Paying…' : `Pay $${cfbPool.entryFee} from my credit`}
+                        {serverBusy === 'cfb-credit-pay' ? 'Paying…' : `Pay $${cfbPool.entryFee} from balance`}
                       </button>
                     )}
                     {!cfbMyEntry && <small className="muted">Lock in your picks below, then pay in one tap.</small>}
@@ -3802,8 +3806,8 @@ function App() {
       {/* ── Floating Ask Jack Button — hidden on Chat (its own surface) and
            behind overlays so it never covers a control the user is using ── */}
       {view !== 'chat' && !assistantOpen && !showWelcome && !showMore && !showOnboarding && (
-        <button className={`jack-fab ${view === 'picks' && !weekLocked ? 'above-bar' : ''}`} type="button" onClick={() => setAssistantOpen(true)} aria-label="Ask Jack">
-          <span className="jack-fab-icon">✦</span>
+        <button className={`jack-fab ${view === 'picks' && !weekLocked ? 'above-bar' : ''}`} type="button" onClick={() => setAssistantOpen(true)} aria-label={assistantSpeaking === 'playing' ? 'Jack is speaking. Open chat' : 'Ask Jack'}>
+          <JackAvatar state={jackAvatarState} settings={serverLeague?.settings} compact orb speaking={assistantSpeaking === 'playing'} caption={assistantSpeaking === 'playing' ? 'Speaking' : 'Ready'} />
           <span className="jack-fab-label">Ask Jack</span>
         </button>
       )}

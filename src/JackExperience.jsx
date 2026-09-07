@@ -25,7 +25,7 @@ const AVATAR_VIDEO_BY_STATE = {
   idle: '/jack-idle.mp4', listening: '/jack-idle.mp4', thinking: '/jack-idle.mp4', live: '/jack-idle.mp4', error: '/jack-idle.mp4',
 };
 
-export function JackAvatar({ state = 'idle', settings, compact = false, caption }) {
+export function JackAvatar({ state = 'idle', settings, compact = false, caption, orb = false, speaking = false }) {
   const jack = normalizeJackSettings(settings);
   const [videoFailed, setVideoFailed] = useState(false);
   const resolved = nextJackAvatarState(state, {
@@ -35,7 +35,7 @@ export function JackAvatar({ state = 'idle', settings, compact = false, caption 
   const label = caption || STATE_LABELS[resolved.state];
   const prefersStill = jack.animation.reducedMotion || !jack.animation.enabled;
   const videoSrc = !prefersStill && !videoFailed ? AVATAR_VIDEO_BY_STATE[resolved.state] : null;
-  return <figure className={`jack-avatar jack-avatar-${resolved.state} ${resolved.motion} ${compact ? 'compact' : ''}`} data-state={resolved.state} aria-label={`Jack is ${label.toLowerCase()}`}>
+  return <figure className={`jack-avatar jack-avatar-${resolved.state} ${resolved.motion} ${compact ? 'compact' : ''} ${orb ? 'orb' : ''} ${speaking ? 'is-speaking' : ''}`} data-state={resolved.state} aria-label={`Jack is ${label.toLowerCase()}`}>
     <div className="jack-avatar-frame">
       <span className="jack-avatar-aura" aria-hidden="true" />
       {videoSrc
@@ -44,9 +44,9 @@ export function JackAvatar({ state = 'idle', settings, compact = false, caption 
       <span className="jack-avatar-scan" aria-hidden="true" />
       <span className="jack-avatar-expression" aria-hidden="true">{resolved.state === 'winner' ? '♛' : resolved.state === 'shock' ? '!' : resolved.state === 'error' ? '×' : '●'}</span>
     </div>
-    <figcaption><i aria-hidden="true" />{label}</figcaption>
-    {['listening', 'talking', 'roast', 'winner', 'shock'].includes(resolved.state) && <span className="jack-avatar-wave" aria-hidden="true">{Array.from({ length: 7 }, (_, index) => <i key={index} />)}</span>}
-    {resolved.state === 'thinking' && <span className="jack-avatar-dots" aria-hidden="true"><i /><i /><i /></span>}
+    {!orb && <figcaption><i aria-hidden="true" />{label}</figcaption>}
+    {!orb && ['listening', 'talking', 'roast', 'winner', 'shock'].includes(resolved.state) && <span className="jack-avatar-wave" aria-hidden="true">{Array.from({ length: 7 }, (_, index) => <i key={index} />)}</span>}
+    {!orb && resolved.state === 'thinking' && <span className="jack-avatar-dots" aria-hidden="true"><i /><i /><i /></span>}
   </figure>;
 }
 

@@ -18,6 +18,14 @@ main :is(input, select, textarea) { min-width: 0; max-width: 100%; }
 .credit-chip { max-width: 100%; flex-wrap: wrap; }
 .message-input { grid-template-columns: 42px minmax(0, 1fr) auto; }
 
+/* The launcher is always Jack, never a generic sparkle. It grows only during
+   actual voice playback without increasing the button's tap target. */
+.jack-fab { padding: 6px 14px 6px 6px; min-height: 58px; }
+.jack-fab .jack-avatar.orb { display: block; margin: 0; flex: 0 0 auto; }
+.jack-fab .jack-avatar.orb .jack-avatar-frame { width: 46px; height: 46px; border-color: var(--neon); box-shadow: 0 0 12px rgba(57,255,20,.3); transition: transform .18s ease, box-shadow .18s ease; }
+.jack-fab .jack-avatar.orb .jack-avatar-expression { display: none; }
+.jack-fab .jack-avatar.orb.is-speaking .jack-avatar-frame { transform: scale(1.18); box-shadow: 0 0 22px rgba(57,255,20,.58); }
+
 @media (max-width: 900px) {
   .picks-sticky {
     padding-left: max(16px, env(safe-area-inset-left, 0px));
@@ -29,6 +37,8 @@ main :is(input, select, textarea) { min-width: 0; max-width: 100%; }
   /* Chat remains available in the bottom navigation. Do not stack a floating
      assistant over a second fixed action bar on small screens. */
   .jack-fab.above-bar { display: none; }
+  .jack-fab .jack-avatar.orb .jack-avatar-frame { width: 44px; height: 44px; }
+  .jack-fab .jack-avatar.orb.is-speaking .jack-avatar-frame { transform: scale(1.1); }
   .page-grid { padding-bottom: 80px; }
   footer { margin-bottom: 0; }
 }
@@ -43,4 +53,5 @@ main :is(input, select, textarea) { min-width: 0; max-width: 100%; }
 
 @media (prefers-reduced-motion: reduce) {
   .standard-page, .page-grid { animation: none; }
+  .jack-fab .jack-avatar.orb .jack-avatar-frame { transition: none; }
 }

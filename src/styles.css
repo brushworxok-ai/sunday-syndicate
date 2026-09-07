@@ -2003,3 +2003,10 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .deposit-request small { color: var(--muted); }
 [aria-label="Add funds"] .cashapp-admin-actions { flex-wrap: wrap; }
 [aria-label="Add funds"] button[aria-pressed="true"] { border-color: #00ff87; color: #00ff87; }
+.weekly-entry-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; list-style: none; padding: 0; margin: 20px 0; }
+.weekly-entry-steps li { display: flex; gap: 10px; align-items: flex-start; }
+.weekly-entry-steps li > span { display: grid; place-items: center; min-width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 50%; color: #00ff87; }
+.weekly-entry-steps small { display: block; color: var(--muted); margin-top: 5px; }
+.weekly-entry-card .panel-heading { flex-wrap: wrap; gap: 12px; }
+.weekly-entry-card > small { display: block; margin-top: 16px; }
+@media (max-width: 640px) { .weekly-entry-steps { grid-template-columns: 1fr; } .weekly-entry-card .you-week-actions { display: flex; flex-wrap: wrap; gap: 8px; } }
