@@ -56,7 +56,7 @@ import {
   respondToSideBet,
   settleSideBetFromLeague,
 } from './leagueService.js';
-import { applyDeliveryStatus, createSmsProvider, sendTextBeltRaw, sendApprovedRecap, sendJackBroadcast } from './messagingService.js';
+import { applyDeliveryStatus, createSmsProvider, sendTextBeltRaw } from './messagingService.js';
 import { verifyTelnyxWebhook, telnyxDeliveryEvent } from './telnyxWebhook.js';
 import { sendCommissionerSmsTest } from './smsTest.js';
 import { hasCurrentSmsConsent, SMS_CONSENT_VERSION } from '../src/smsCompliance.js';
@@ -70,6 +70,9 @@ const app = express();
 const port = Number(process.env.PORT) || 8787;
 const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 const jackModel = process.env.JACK_GEMINI_MODEL || DEFAULT_JACK_MODEL;
+// Paid pick'em messaging is not eligible for carrier delivery. Keep this
+// explicit so an old hosting variable can never reactivate SMS accidentally.
+const SMS_DISABLED = true;
 const databasePath = process.env.DATABASE_PATH || path.join(projectRoot, 'work', 'sunday-syndicate.sqlite');
 const store = await createLeagueStore({ databaseUrl: process.env.DATABASE_URL, databasePath });
 const { makeGeminiKeyResolver, invalidateGeminiKeyCache } = await import('./geminiKey.js');
@@ -104,7 +107,7 @@ async function saveNotification(lid, { playerId = 'all', kind, title, body = '',
     await store.saveNotification(lid, notification);
   } catch (error) { console.error('saveNotification failed (non-fatal):', error.message); return null; }
   try {
-    if (webpush && ['results', 'payout', 'payment_confirmed', 'jack_sms'].includes(kind)) {
+    if (webpush && ['results', 'payout', 'payment_confirmed', 'jack_sms', 'pick_reminder', 'league_recap', 'league_announcement'].includes(kind)) {
       const report = await deliverPush({ store, leagueId: lid, webpush, playerIds: playerId === 'all' ? undefined : [playerId], payload: { title, body, url: `/?view=${kind === 'results' ? 'results' : 'notifs'}`, tag: `${kind}-${metadata.week ?? playerId}` } });
       if (report.failed || report.expired) await store.writeAudit(lid, 'push.delivery_partial', 'Some notification subscriptions could not be reached.', 'system', { notificationId: notification.id, ...report });
     }
@@ -147,6 +150,7 @@ app.use('/api', rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draf
 
 /* Commissioner-only: live check of the SMS sending number (Telnyx). */
 app.get('/api/sms/diagnose', auth.requireAdmin, asyncRoute(async (_request, response) => {
+  if (SMS_DISABLED) return response.status(410).json({ error: 'SMS delivery has been removed. Use in-app and push notifications instead.' });
   try {
     const provider = createSmsProvider(process.env);
     if (typeof provider.diagnose !== 'function') return response.json({ provider: provider.name, note: 'No diagnostics for this provider.' });
@@ -158,6 +162,7 @@ app.get('/api/sms/diagnose', auth.requireAdmin, asyncRoute(async (_request, resp
 }));
 
 app.post('/api/sms/test', auth.requireAdmin, asyncRoute(async (request, response) => {
+  if (SMS_DISABLED) return response.status(410).json({ error: 'SMS delivery has been removed. Use a push test from My Profile instead.' });
   if (request.body?.confirm !== true) return response.status(422).json({ error: 'Confirm the test send with confirm:true.' });
   if (!process.env.ADMIN_PHONE_E164) return response.status(503).json({ error: 'Configure ADMIN_PHONE_E164 as the authorized test destination first.' });
   if (!['telnyx', 'twilio', 'textbelt'].includes(process.env.SMS_PROVIDER)) return response.status(503).json({ error: 'A real SMS provider is required for a delivery test.' });
@@ -171,6 +176,7 @@ app.post('/api/sms/test', auth.requireAdmin, asyncRoute(async (request, response
 /* Commissioner-only: what happened to the last verification text for a phone,
    or to any Telnyx message id. Shows carrier-side delivery status + errors. */
 app.get('/api/sms/trace', auth.requireAdmin, asyncRoute(async (request, response) => {
+  if (SMS_DISABLED) return response.status(410).json({ error: 'SMS delivery has been removed.' });
   const provider = createSmsProvider(process.env);
   if (typeof provider.messageStatus !== 'function') return response.json({ note: 'No tracing for this provider.' });
   let id = String(request.query.id ?? '').trim();
@@ -196,23 +202,15 @@ app.get('/api/health', asyncRoute(async (_request, response) => {
     geminiKeySource: geminiKey.source,
     model,
     jackModel,
-    smsProvider: ['telnyx', 'twilio', 'textbelt'].includes(process.env.SMS_PROVIDER) ? process.env.SMS_PROVIDER : 'demo',
-    telnyxConfigured: Boolean(process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER),
-    twilioConfigured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_MESSAGING_SERVICE_SID),
-    smsConfigured: process.env.SMS_PROVIDER === 'telnyx'
-      ? Boolean(process.env.TELNYX_API_KEY && process.env.TELNYX_FROM_NUMBER)
-      : process.env.SMS_PROVIDER === 'textbelt'
-        ? Boolean(process.env.TEXTBELT_API_KEY)
-        : process.env.SMS_PROVIDER === 'twilio'
-          ? Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_MESSAGING_SERVICE_SID)
-          : true,
+    smsProvider: 'disabled',
+    smsConfigured: false,
     adminConfigured: Boolean(process.env.ADMIN_PASSWORD || !isProduction),
     ttsProvider: String(process.env.JACK_TTS_PROVIDER ?? 'browser').toLowerCase(),
     ttsConfigured: String(process.env.JACK_TTS_PROVIDER ?? '').toLowerCase() === 'elevenlabs'
       ? Boolean(process.env.JACK_TTS_API_KEY && process.env.JACK_TTS_VOICE_ID)
       : false,
     pushConfigured: Boolean(webpush),
-    smsWebhookVerificationConfigured: Boolean(process.env.TELNYX_PUBLIC_KEY),
+    smsWebhookVerificationConfigured: false,
   });
 }));
 
@@ -318,7 +316,7 @@ app.post('/api/otp/send', asyncRoute(async (request, response) => {
 
   // Send through whichever real provider is configured (Telnyx / Twilio /
   // TextBelt) — the same path Jack's texts use. No provider = demo: log it.
-  const liveSms = ['telnyx', 'twilio', 'textbelt'].includes(process.env.SMS_PROVIDER);
+  const liveSms = false;
   if (liveSms) {
     try {
       const provider = createSmsProvider(process.env);
@@ -706,8 +704,15 @@ app.post('/api/recaps/:recapId/approve', auth.requireAdmin, asyncRoute(async (re
 }));
 
 app.post('/api/leagues/:leagueId/broadcasts', auth.requireAdmin, asyncRoute(async (request, response) => {
-  const provider = createSmsProvider(process.env);
-  const broadcast = await sendApprovedRecap({ store, leagueId: request.params.leagueId, recapId: request.body?.recapId, provider, actor: request.actor });
+  const recap = await store.getRecap(request.body?.recapId);
+  if (!recap || recap.leagueId !== request.params.leagueId) return response.status(404).json({ error: 'Recap not found.' });
+  if (recap.adminApproval?.status !== 'approved') return response.status(422).json({ error: 'Approve the recap before publishing it.' });
+  const notification = await saveNotification(request.params.leagueId, {
+    kind: 'league_recap', title: `Week ${recap.week} recap is live`, body: String(recap.editedText || recap.generatedText || 'Open the app for this week’s recap.').slice(0, 500), metadata: { week: recap.week, recapId: recap.id },
+  });
+  const broadcast = { id: `app-${randomUUID()}`, recapId: recap.id, status: 'published_in_app', deliveries: [], createdAt: new Date().toISOString(), notificationId: notification?.id };
+  await store.saveBroadcast(request.params.leagueId, broadcast);
+  await store.writeAudit(request.params.leagueId, 'recap.published_in_app', 'Published approved recap through in-app and push notifications.', request.actor, { recapId: recap.id, notificationId: notification?.id });
   return response.status(201).json(broadcast);
 }));
 
@@ -784,6 +789,7 @@ const requireTelnyxSignature = (request, response, next) => {
   return next();
 };
 app.post('/api/sms/inbound', requireTelnyxSignature, asyncRoute(async (request, response) => {
+  if (SMS_DISABLED) return response.status(410).json({ error: 'SMS delivery has been removed.' });
   // Telnyx sends JSON with data.event_type and data.payload
   const evt = request.body?.data;
   const deliveryEvent = telnyxDeliveryEvent(evt);
@@ -1577,16 +1583,10 @@ app.post('/api/leagues/:leagueId/reminders/picks', auth.requireAdmin, asyncRoute
   const deadline = getWeekDeadline(week);
   const hoursLeft = deadline ? Math.max(1, Math.round((deadline.getTime() - Date.now()) / 3_600_000)) : null;
   const when = deadline ? deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET' : 'first kickoff';
-  const messages = missing.map((p) => ({
-    playerId: p.id,
-    text: `🏈 405 BadGuys: Ayo, it's Jack. Week ${week} sheets lock at ${when}${hoursLeft ? ` (~${hoursLeft}h)` : ''}. Yours is blank, dawg. You trippin if you think I won't clown you for a no-show. Get your picks in.`,
-  }));
-  const provider = createSmsProvider(process.env);
-  const broadcast = await sendJackBroadcast({ store, leagueId: request.params.leagueId, provider, messages, actor: request.actor, kind: 'pick_reminder' });
   for (const p of missing) {
-    await saveNotification(request.params.leagueId, { playerId: p.id, kind: 'pick_reminder', title: `Week ${week} pick reminder`, body: `Your Week ${week} picks are due${hoursLeft ? ` in ~${hoursLeft}h` : ' soon'}. Don't miss the deadline!`, metadata: { week } });
+    await saveNotification(request.params.leagueId, { playerId: p.id, kind: 'pick_reminder', title: `Week ${week} pick reminder`, body: `Jack says your Week ${week} picks are due${hoursLeft ? ` in ~${hoursLeft}h` : ' soon'}. Open Picks before lock.`, metadata: { week } });
   }
-  return response.status(201).json({ week, missing: missing.map((p) => p.name), broadcast });
+  return response.status(201).json({ week, missing: missing.map((p) => p.name), sent: missing.length, channel: 'in_app_and_push' });
 }));
 
 /* ── Jack SMS Broadcast: results + roasts to every opted-in player ── */
@@ -1633,8 +1633,11 @@ app.post('/api/leagues/:leagueId/jack/broadcast', auth.requireAdmin, asyncRoute(
 
   if (!messages.length) return response.status(422).json({ error: 'No entries this week — nothing to broadcast.' });
 
-  const provider = createSmsProvider(process.env);
-  const broadcast = await sendJackBroadcast({ store, leagueId: request.params.leagueId, provider, messages, actor: request.actor, kind: 'jack_weekly_text' });
+  const notification = await saveNotification(request.params.leagueId, {
+    kind: 'league_announcement', title: `Jack’s Week ${currentWeek} final word`, body: messages[0].text.slice(0, 500), metadata: { week: currentWeek },
+  });
+  const broadcast = { id: `app-${randomUUID()}`, kind: 'jack_weekly_update', status: 'published_in_app', deliveries: [], createdAt: new Date().toISOString(), notificationId: notification?.id };
+  await store.saveBroadcast(request.params.leagueId, broadcast);
 
   // Jack also holds court in the GROUP CHAT — the in-app league chat is the
   // private, consent-aware space, so roasts land here at each player's FULL
@@ -1664,6 +1667,12 @@ app.post('/api/leagues/:leagueId/group-text', auth.requireAdmin, asyncRoute(asyn
   if (!league) return response.status(404).json({ error: 'League not found.' });
   const text = String(request.body?.text ?? '').trim();
   if (!text || text.length > 600) return response.status(422).json({ error: 'Message is required (max 600 chars).' });
+  if (SMS_DISABLED) {
+    const notification = await saveNotification(request.params.leagueId, { kind: 'league_announcement', title: 'Commissioner announcement', body: text.slice(0, 500), metadata: {} });
+    await store.addChatMessage(request.params.leagueId, { id: `chat-${randomUUID()}`, playerId: null, name: 'Commissioner 📢', msg: text.slice(0, 400), time: new Date().toISOString() });
+    await store.writeAudit(request.params.leagueId, 'announcement.published', 'Commissioner published an in-app announcement.', request.actor, { notificationId: notification?.id });
+    return response.json({ channel: 'in_app_and_push', published: true, recipients: (league.players ?? []).length });
+  }
   const mode = request.body?.mode ?? 'individual'; // 'group_mms' or 'individual'
 
   if (!process.env.TELNYX_API_KEY || !process.env.TELNYX_FROM_NUMBER) {
@@ -2953,16 +2962,8 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
             const pushReport = await deliverPush({ store, leagueId, webpush, playerIds: missing.map((player) => player.id), payload: { title: `Picks lock ${when}`, body: `Your Week ${week} sheet isn't in. ~${Math.max(1, Math.round(hoursLeft))}h left.`, url: '/?view=picks', tag: `deadline-w${week}` } });
             const pushed = pushReport.sent;
             for (const player of missing) await saveNotification(leagueId, { playerId: player.id, kind: 'pick_reminder', title: `Week ${week} picks due soon`, body: `Your picks lock ${when}. Open Picks to submit your sheet.`, metadata: { week } });
-            // SMS through Jack
-            let texted = 0;
-            try {
-              const provider = createSmsProvider(process.env);
-              const messages = missing.map((p) => ({ playerId: p.id, text: `🏈 405 BadGuys: Ayo, it's Jack. Week ${week} sheets lock at ${when} (~${Math.max(1, Math.round(hoursLeft))}h). Yours is blank, dawg. Get your picks in.` }));
-              const broadcast = await sendJackBroadcast({ store, leagueId, provider, messages, actor: 'auto-pilot', kind: 'pick_reminder' });
-              texted = (broadcast?.deliveries ?? []).filter((d) => d.status === 'delivered' || d.status === 'queued').length;
-            } catch (error) { console.error('Auto-pilot SMS reminder failed:', error.message); }
             await store.mergeLeagueSettings(leagueId, (s) => { s.autoPilotReminders = { ...(s.autoPilotReminders ?? {}), [windowKey]: new Date().toISOString() }; });
-            actions.push(`Reminded ${missing.length} player(s) missing Week ${week} sheets (${pushed} push, ${texted} text) — ${windowKey.endsWith('3h') ? '3-hour' : '24-hour'} warning.`);
+            actions.push(`Reminded ${missing.length} player(s) missing Week ${week} sheets (${pushed} push, in-app alerts) — ${windowKey.endsWith('3h') ? '3-hour' : '24-hour'} warning.`);
           }
         }
       }

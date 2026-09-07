@@ -28,8 +28,6 @@ import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle, messagesLink
 import { DEPOSIT_PRESETS, DEPOSIT_MIN, DEPOSIT_MAX, validateDepositAmount, pendingDeposits } from './deposits.js';
 import { createJackVoicePlayback } from './jackVoice.js';
 import { createJackSpeechInput } from './jackSpeechInput.js';
-import CommunicationsCheck from './CommunicationsCheck.jsx';
-import { hasCurrentSmsConsent, SMS_CONSENT_VERSION, SMS_DISCLOSURE } from './smsCompliance.js';
 
 /* ── Simplified 5-tab nav with More menu ── */
 const MAIN_NAV = [
@@ -1526,8 +1524,7 @@ function App() {
     setServerBusy('reminders');
     try {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/reminders/picks`, { method: 'POST', body: JSON.stringify({ week: selectedWeek }) });
-      const accepted = (data.broadcast?.deliveries ?? []).filter((delivery) => ['queued', 'sent', 'sending', 'delivered'].includes(delivery.status)).length;
-      notify(data.missing?.length ? `${accepted} reminder text${accepted === 1 ? '' : 's'} submitted; in-app reminders saved for ${data.missing.length} players. Delivery is tracked by the SMS provider.` : data.message);
+      notify(data.missing?.length ? `Published reminders for ${data.missing.length} player${data.missing.length === 1 ? '' : 's'} through the app and push alerts.` : data.message);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -1538,10 +1535,9 @@ function App() {
     if (!msg) return notify('Type a message first.');
     setServerBusy('group-text');
     try {
-      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/group-text`, { method: 'POST', body: JSON.stringify({ text: msg, mode: groupTextMode }) });
-      const sent = data.sent ?? data.results?.filter((r) => r.ok).length ?? 0;
-      notify(`${sent} text${sent === 1 ? '' : 's'} submitted to the carrier; ${data.failed ?? 0} failed. Submitted does not mean delivered.`);
-      if (sent) setGroupTextMsg('');
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/group-text`, { method: 'POST', body: JSON.stringify({ text: msg }) });
+      notify(`Announcement published to ${data.recipients ?? 0} player${data.recipients === 1 ? '' : 's'} in the app and push alerts.`);
+      if (data.published) setGroupTextMsg('');
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -1782,7 +1778,7 @@ function App() {
 
   // SMS is only "live" when a real provider is wired; otherwise codes never
   // actually send, so we must not force a verification step.
-  const smsLive = () => ['telnyx', 'twilio', 'textbelt'].includes(aiStatus.smsProvider);
+  const smsLive = () => false;
 
   // Shared registration: create the account, sign in, greet. otpVerified marks
   // whether the phone was confirmed (drives SMS-consent status server-side).
@@ -1791,7 +1787,7 @@ function App() {
     try {
       const registered = await apiRequest(`/api/leagues/${LEAGUE_ID}/players/register`, {
         method: 'POST',
-        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, otpVerified, smsOptIn: signupSmsOptIn, smsConsentVersion: SMS_CONSENT_VERSION, payment: parseQuickPay(signupPay) }),
+        body: JSON.stringify({ name: signupName.trim(), phone: signupPhone, pin: signupPin, favoriteTeam: signupTeam, avatar: signupAvatarFile || signupAvatar, payment: parseQuickPay(signupPay) }),
       });
       const session = await apiRequest('/api/auth/player', { method: 'POST', body: JSON.stringify({ playerId: registered.playerId, pin: signupPin }) });
       setPlayerSession(session);
@@ -2023,12 +2019,8 @@ function App() {
                     <label>Your name<input value={signupName} onChange={(e) => setSignupName(e.target.value)} placeholder="First and last" maxLength="50" autoFocus /></label>
                     <label>Phone <small style={{ float: 'right', fontWeight: 400 }}>account ID</small><input value={signupPhone} onChange={(e) => setSignupPhone(e.target.value)} placeholder="(555) 123-4567" maxLength="15" type="tel" /></label>
                     <label>Create a PIN<input value={signupPin} onChange={(e) => setSignupPin(e.target.value.replace(/\D/g, ''))} placeholder="4 digits" maxLength="4" type="password" inputMode="numeric" /></label>
-                    <div className="sms-consent-card">
-                      <label className="sms-consent-check"><input type="checkbox" checked={signupSmsOptIn} onChange={(event) => setSignupSmsOptIn(event.target.checked)} /><span>{SMS_DISCLOSURE}</span></label>
-                      <p><a href="/privacy.html" target="_blank" rel="noreferrer">Privacy Policy</a> · <a href="/terms.html" target="_blank" rel="noreferrer">SMS Terms</a></p>
-                    </div>
                     <button className="button button-primary full" style={{ marginTop: 16 }}>Next · Pick your team →</button>
-                    <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.45)', marginTop: 10 }}>Your phone identifies your account. Text updates are optional and off unless you check the consent box.</p>
+                    <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.45)', marginTop: 10 }}>Your phone identifies your account. League updates appear in the app; enable browser push alerts from your profile if you want them while the app is closed.</p>
                   </>)}
 
                   {signupStep === 2 && (<>
@@ -3086,17 +3078,8 @@ function App() {
             {currentPlayer ? (
               <div className="player-settings-grid">
                 <article className="player-settings-card current">
-                  <div className="player-card-head"><span>{currentPlayer.name.split(' ').map((word) => word[0]).join('')}</span><div><h2>{currentPlayer.name}</h2><p>{currentPlayer.phone} · {currentPlayer.phoneVerifiedAt ? 'verified' : 'unverified'}</p></div><StatusPill state={hasCurrentSmsConsent(currentPlayer) ? 'pass' : 'neutral'}>{hasCurrentSmsConsent(currentPlayer) ? 'SMS opted in' : currentPlayer.messaging?.smsConsent === 'opted_in' ? 'Re-confirm SMS' : 'SMS off'}</StatusPill></div>
-                  <label>Weekly results
-                    <select value={currentPlayer.messaging?.resultsChannel || 'sms_and_in_app'} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { resultsChannel: event.target.value })}>
-                      <option value="sms_and_in_app">SMS + in-app</option><option value="sms">SMS only</option><option value="in_app">In-app only</option>
-                    </select>
-                  </label>
-                  <div className="sms-preference-card">
-                    <label className="sms-consent-check"><input type="checkbox" checked={hasCurrentSmsConsent(currentPlayer)} disabled={serverBusy === `player-${currentPlayer.id}` || !currentPlayer.phoneVerifiedAt} onChange={(event) => updatePreferences(currentPlayer.id, { smsConsent: event.target.checked ? 'opted_in' : 'opted_out', ...(!event.target.checked ? { resultsChannel: 'in_app' } : {}) })} /><span>{SMS_DISCLOSURE}</span></label>
-                    {!currentPlayer.phoneVerifiedAt && <p>Verify your phone before enabling text updates.</p>}
-                    <p><a href="/privacy.html" target="_blank" rel="noreferrer">Privacy Policy</a> · <a href="/terms.html" target="_blank" rel="noreferrer">SMS Terms</a></p>
-                  </div>
+                  <div className="player-card-head"><span>{currentPlayer.name.split(' ').map((word) => word[0]).join('')}</span><div><h2>{currentPlayer.name}</h2><p>League updates are always available in Notifications.</p></div><StatusPill state="pass">In-app alerts on</StatusPill></div>
+                  <p className="muted">Enable browser push below if you also want deadline, result, and announcement alerts while the app is closed.</p>
                   <label>Trash-talk level <small>Maximum / unfiltered is ON by default — switch to "No trash talk" anytime to opt out</small>
                     <select value={currentPlayer.trashTalk?.level === 'maximum' ? 'competitive' : (currentPlayer.trashTalk?.level || 'competitive')} disabled={serverBusy === `player-${currentPlayer.id}`} onChange={(event) => updatePreferences(currentPlayer.id, { trashTalkLevel: event.target.value })}>
                       <option value="none">No trash talk (opted out)</option><option value="light">Light / PG-13</option><option value="competitive">Maximum / unfiltered (default)</option>
@@ -3599,7 +3582,6 @@ function App() {
         {view === 'admin' && isComm && (
           <StandardPage eyebrow="COMMISSIONER ACCESS" title="League operations" subtitle="Verify scores, generate and approve grounded recaps, send consent-aware broadcasts, and inspect delivery outcomes from one durable workflow.">
             <button className="button button-ghost-dark" type="button" onClick={logoutAdmin} disabled={serverBusy === 'admin-logout'}>{serverBusy === 'admin-logout' ? 'Signing out…' : 'Sign out commissioner'}</button>
-            <CommunicationsCheck request={apiRequest} />
             {(() => {
               const players = (proofLeague.players ?? []).length;
               const picksIn = weekSheets.length;
@@ -3631,20 +3613,16 @@ function App() {
               );
             })()}
             <section className="admin-command-grid">
-              <article><span className="eyebrow dark">PROVIDERS</span><h2>System readiness</h2><dl><div><dt>Database</dt><dd>{aiStatus.database === 'postgres' ? 'Neon Postgres · durable' : aiStatus.database === 'sqlite' ? 'SQLite · local' : 'Unavailable'}</dd></div><div><dt>Jack</dt><dd>{aiStatus.configured ? (aiStatus.jackModel || aiStatus.model) : 'Fallback mode'}</dd></div><div><dt>SMS</dt><dd>{({ telnyx: 'Telnyx configured', twilio: 'Twilio configured', textbelt: 'TextBelt configured', demo: 'Demo adapter' })[aiStatus.smsProvider] || 'Unavailable'}</dd></div></dl></article>
-              <article><span className="eyebrow dark">POLICY</span><h2>Send guardrails</h2><dl><div><dt>Recaps</dt><dd>Approval required</dd></div><div><dt>Reminders</dt><dd>Automatic · consent required</dd></div><div><dt>Tone cap</dt><dd>{proofLeague.settings.maximumTone}</dd></div></dl></article>
+              <article><span className="eyebrow dark">PROVIDERS</span><h2>System readiness</h2><dl><div><dt>Database</dt><dd>{aiStatus.database === 'postgres' ? 'Neon Postgres · durable' : aiStatus.database === 'sqlite' ? 'SQLite · local' : 'Unavailable'}</dd></div><div><dt>Jack</dt><dd>{aiStatus.configured ? (aiStatus.jackModel || aiStatus.model) : 'Fallback mode'}</dd></div><div><dt>Alerts</dt><dd>{aiStatus.pushConfigured ? 'Browser push + in-app' : 'In-app notifications'}</dd></div></dl></article>
+              <article><span className="eyebrow dark">POLICY</span><h2>Send guardrails</h2><dl><div><dt>Recaps</dt><dd>Approval required</dd></div><div><dt>Reminders</dt><dd>Automatic · app alerts</dd></div><div><dt>Tone cap</dt><dd>{proofLeague.settings.maximumTone}</dd></div></dl></article>
               <article><span className="eyebrow dark">CURRENT</span><h2>Latest delivery</h2><dl><div><dt>Status</dt><dd>{proofLeague.latestBroadcast?.status?.replaceAll('_', ' ') ?? 'Not sent'}</dd></div><div><dt>Failures</dt><dd>{proofLeague.latestBroadcast?.deliveries?.filter((item) => item.status === 'failed').length ?? 0}</dd></div><div><dt>Suppressed</dt><dd>{proofLeague.latestBroadcast?.deliveries?.filter((item) => item.status === 'suppressed').length ?? 0}</dd></div></dl></article>
             </section>
             <section className="recap-workbench">
               <div className="panel-heading"><div><span className="eyebrow dark">WEEKLY WORKFLOW</span><h2>Recap review & send</h2></div><StatusPill state={proofLeague.latestRecap?.adminApproval?.status === 'approved' ? 'pass' : 'warn'}>{proofLeague.latestRecap?.adminApproval?.status ?? 'no draft'}</StatusPill></div>
               <div className="workflow-steps"><span className="done">1 · Results verified</span><span className={proofLeague.latestRecap ? 'done' : ''}>2 · Draft generated</span><span className={proofLeague.latestRecap?.adminApproval?.status === 'approved' ? 'done' : ''}>3 · Admin approved</span><span className={proofLeague.latestBroadcast?.recapId === proofLeague.latestRecap?.id ? 'done' : ''}>4 · Broadcast sent</span></div>
               <textarea value={recapEdit} onChange={(event) => setRecapEdit(event.target.value)} maxLength="3200" aria-label="Recap copy" />
-              <div className="workflow-actions"><button className="button button-ghost-dark" type="button" onClick={generateAdminRecap} disabled={serverBusy === 'generate-recap'}>{serverBusy === 'generate-recap' ? 'Generating…' : 'Generate grounded draft'}</button><button className="button button-primary" type="button" onClick={approveAdminRecap} disabled={!proofLeague.latestRecap || serverBusy === 'approve-recap'}>{serverBusy === 'approve-recap' ? 'Approving…' : 'Approve edited copy'}</button><button className="button button-send" type="button" onClick={sendAdminBroadcast} disabled={proofLeague.latestRecap?.adminApproval?.status !== 'approved' || serverBusy === 'send-broadcast'}>{serverBusy === 'send-broadcast' ? 'Sending…' : `Send via ${({ telnyx: 'Telnyx', twilio: 'Twilio', textbelt: 'TextBelt' })[aiStatus.smsProvider] || 'demo adapter'}`}</button></div>
-              <p>Only verified, opted-in recipients reach the provider. Failures retry once and then receive an in-app fallback.</p>
-              <div className="jack-text-row">
-                <div><strong>📱 Jack's weekly text</strong><p>Texts every opted-in player their results, the reigning champ shoutout, and a personal (PG-13 over SMS) jab. Full-strength roasts stay in the app.</p></div>
-                <button className="button button-send" type="button" onClick={sendJackText} disabled={serverBusy === 'jack-text'}>{serverBusy === 'jack-text' ? 'Texting…' : 'Send Jack\'s texts'}</button>
-              </div>
+              <div className="workflow-actions"><button className="button button-ghost-dark" type="button" onClick={generateAdminRecap} disabled={serverBusy === 'generate-recap'}>{serverBusy === 'generate-recap' ? 'Generating…' : 'Generate grounded draft'}</button><button className="button button-primary" type="button" onClick={approveAdminRecap} disabled={!proofLeague.latestRecap || serverBusy === 'approve-recap'}>{serverBusy === 'approve-recap' ? 'Approving…' : 'Approve edited copy'}</button><button className="button button-send" type="button" onClick={sendAdminBroadcast} disabled={proofLeague.latestRecap?.adminApproval?.status !== 'approved' || serverBusy === 'send-broadcast'}>{serverBusy === 'send-broadcast' ? 'Publishing…' : 'Publish to the app'}</button></div>
+              <p>Players always see the recap in the app. Those who enable browser push will also receive an alert.</p>
               <div className="jack-text-row">
                 <div><strong>🎬 Jack's Weekly Recap Show</strong><p>Full-screen animated slideshow with standings, winner spotlight, movers, roasts, and Jack's AI commentary. Auto-advances with manual controls.</p></div>
                 <button className="button button-primary" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading show…' : '▶ Launch Recap Show'}</button>
@@ -3829,21 +3807,17 @@ function App() {
               <label>Rollover pot ($)<input type="number" min="0" value={rolloverPot} onChange={(event) => setRolloverPot(Number(event.target.value || 0))} /></label>
               <p>{completedGames} results posted</p>
               <button className="button button-ghost-dark" type="button" onClick={syncFinals} disabled={serverBusy === 'sync-finals'}>{serverBusy === 'sync-finals' ? 'Syncing…' : '⚡ Sync finals from live feed'}</button>
-              <button className="button button-ghost-dark" type="button" onClick={sendPickReminders} disabled={serverBusy === 'reminders' || weekLocked}>{serverBusy === 'reminders' ? 'Sending…' : '⏰ Text pick reminders'}</button>
+              <button className="button button-ghost-dark" type="button" onClick={sendPickReminders} disabled={serverBusy === 'reminders' || weekLocked}>{serverBusy === 'reminders' ? 'Publishing…' : '⏰ Send pick reminders'}</button>
             </div>
             <section className="group-text-section">
-              <div className="panel-heading"><div><span className="eyebrow dark">MESSAGING</span><h2>📢 Group Text</h2></div></div>
-              <p className="muted">Text players with verified phones and SMS consent. Group MMS creates a shared thread (2–8 players) and exposes participants’ phone numbers to each other; Individual keeps numbers private.</p>
+              <div className="panel-heading"><div><span className="eyebrow dark">ANNOUNCEMENTS</span><h2>📢 League announcement</h2></div></div>
+              <p className="muted">Publish directly to the league feed and Notifications. Players with browser push enabled will get an alert too.</p>
               <div className="group-text-controls">
-                <div className="group-text-mode-toggle">
-                  <button type="button" className={`mode-btn ${groupTextMode === 'individual' ? 'active' : ''}`} onClick={() => setGroupTextMode('individual')}>📱 Individual</button>
-                  <button type="button" className={`mode-btn ${groupTextMode === 'group_mms' ? 'active' : ''}`} onClick={() => setGroupTextMode('group_mms')}>👥 Group MMS</button>
-                </div>
-                <textarea className="group-text-input" rows="3" maxLength={500} placeholder="Type your message to the league…" value={groupTextMsg} onChange={(e) => setGroupTextMsg(e.target.value)} />
+                <textarea className="group-text-input" rows="3" maxLength={500} placeholder="Write an announcement for the league…" value={groupTextMsg} onChange={(e) => setGroupTextMsg(e.target.value)} />
                 <div className="group-text-footer">
                   <span className="char-count">{groupTextMsg.length}/500</span>
                   <button className="button button-primary" type="button" disabled={serverBusy === 'group-text' || !groupTextMsg.trim()} onClick={sendGroupText}>
-                    {serverBusy === 'group-text' ? 'Sending…' : groupTextMode === 'group_mms' ? '📤 Send Group MMS' : '📤 Send to All'}
+                    {serverBusy === 'group-text' ? 'Publishing…' : '📤 Publish announcement'}
                   </button>
                 </div>
               </div>

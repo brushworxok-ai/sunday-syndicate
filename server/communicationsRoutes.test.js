@@ -55,8 +55,8 @@ test('Communication routes authenticate callers and fail safely without real pro
   const voice = await (await request('/api/tts/diagnose', { headers })).json();
   assert.equal(voice.provider, 'browser');
   assert.equal(voice.configured, false);
-  assert.equal((await request('/api/sms/test', { method: 'POST', headers, body: '{}' })).status, 422);
-  assert.equal((await request('/api/sms/test', { method: 'POST', headers, body: '{"confirm":true}' })).status, 503);
+  assert.equal((await request('/api/sms/test', { method: 'POST', headers, body: '{}' })).status, 410);
+  assert.equal((await request('/api/sms/test', { method: 'POST', headers, body: '{"confirm":true}' })).status, 410);
   assert.equal((await request('/api/cron/auto-pilot', { headers: { 'x-vercel-cron': '1' } })).status, 401);
   const post = (route, body, extraHeaders = {}) => request(route, { method: 'POST', headers: { 'Content-Type': 'application/json', ...extraHeaders }, body: JSON.stringify(body) });
   assert.equal((await post('/api/auth/player', { playerId: 'player-marcus', pin: '0142' })).status, 403);
