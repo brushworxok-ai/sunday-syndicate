@@ -25,6 +25,7 @@ import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebrea
 import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
 import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle, messagesLink } from './payment.js';
+import { DEPOSIT_PRESETS, DEPOSIT_MIN, DEPOSIT_MAX, validateDepositAmount, pendingDeposits } from './deposits.js';
 import { createJackVoicePlayback } from './jackVoice.js';
 import { createJackSpeechInput } from './jackSpeechInput.js';
 import CommunicationsCheck from './CommunicationsCheck.jsx';
@@ -100,6 +101,9 @@ function App() {
   const [payDraft, setPayDraft] = useState({ cashApp: '', venmo: '', paypal: '', appleCash: false, preferred: 'cashapp' });
   const [payDraftFor, setPayDraftFor] = useState(null);
   const [payMethodUsed, setPayMethodUsed] = useState('');
+  const [fundOpen, setFundOpen] = useState(false);
+  const [fundAmount, setFundAmount] = useState(20);
+  const [fundCustom, setFundCustom] = useState('');
   const [payInDraft, setPayInDraft] = useState({ venmo: '', paypal: '', appleCashPhone: '' });
   const [signupStep, setSignupStep] = useState(1); // 1: info, 2: team+avatar, 3: OTP verify
   const [signupOtp, setSignupOtp] = useState('');
@@ -959,6 +963,41 @@ function App() {
       await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/claim-payment`, { method: 'POST', body: JSON.stringify({ method: payMethodUsed || undefined }) });
       await loadLeague();
       notify('Got it — the commissioner sees your payment claim and will confirm it. ⏳');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  // ── Account funding (deposits) ──
+  const claimDeposit = async () => {
+    const amount = fundAmount === 'custom' ? Number(fundCustom) : fundAmount;
+    const verdict = validateDepositAmount(amount);
+    if (!verdict.ok) { notify(verdict.error); return; }
+    setServerBusy('deposit-claim');
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/deposits`, { method: 'POST', body: JSON.stringify({ amount: verdict.value, method: payMethodUsed || undefined }) });
+      await loadLeague();
+      setFundOpen(false);
+      notify(`Got it — $${verdict.value} lands in your account as soon as the commissioner confirms. ⏳`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const cancelDeposit = async (depositId) => {
+    setServerBusy(`deposit-${depositId}`);
+    try {
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/deposits/${depositId}/cancel`, { method: 'POST' });
+      await loadLeague();
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const resolveDeposit = async (depositId, action) => {
+    if (!(await ensureAdmin())) return;
+    setServerBusy(`deposit-${depositId}`);
+    try {
+      const result = await apiRequest(`/api/leagues/${LEAGUE_ID}/deposits/${depositId}/${action}`, { method: 'POST', body: JSON.stringify({}) });
+      await loadLeague();
+      notify(action === 'confirm' ? `Confirmed — ${result.deposit.playerName} now has $${result.balance} in credit.` : `Marked ${result.deposit.playerName}'s $${result.deposit.amount} as not received.`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -2739,6 +2778,60 @@ function App() {
                 ) : (
                   <section className="owe-card"><div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>No picks in for {weekLabel} yet</h2><p>Get your picks in, then pay the ${ENTRY_FEE} entry here.</p></div><button className="button button-primary" type="button" onClick={() => setView('picks')}>Make my picks →</button></section>
                 )}
+
+                {/* Fund the account ahead of time → entries pay from credit in one tap */}
+                {(() => {
+                  const myPending = pendingDeposits(serverLeague?.settings?.deposits, playerSession.playerId);
+                  const chosenAmount = fundAmount === 'custom' ? Number(fundCustom) : fundAmount;
+                  const amountOk = validateDepositAmount(chosenAmount).ok;
+                  return (
+                    <section className={`fund-card ${fundOpen ? 'open' : ''}`}>
+                      <div className="fund-head">
+                        <div>
+                          <span className="eyebrow dark">ACCOUNT</span>
+                          <h2>💳 Credit: ${myCredit}</h2>
+                          <p>{myCredit >= ENTRY_FEE ? `Covers ${Math.floor(myCredit / ENTRY_FEE)} more ${Math.floor(myCredit / ENTRY_FEE) === 1 ? 'week' : 'weeks'} — entries pay from here in one tap.` : 'Add funds once and skip the weekly pay step — every entry pays from your credit in one tap.'}</p>
+                        </div>
+                        {!fundOpen && <button className="button button-primary" type="button" onClick={() => setFundOpen(true)}>+ Add funds</button>}
+                      </div>
+                      {myPending.length > 0 && (
+                        <ul className="fund-pending">
+                          {myPending.map((d) => (
+                            <li key={d.id}>
+                              <span>⏳ <strong>${d.amount}</strong> via {PAY_METHODS[d.method]?.label ?? d.method} — waiting on commissioner</span>
+                              <button type="button" className="link-button" disabled={serverBusy === `deposit-${d.id}`} onClick={() => cancelDeposit(d.id)}>Cancel</button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {fundOpen && (
+                        <div className="fund-body">
+                          <div className="fund-amounts">
+                            {DEPOSIT_PRESETS.map((amt) => (
+                              <button key={amt} type="button" className={`fund-amount ${fundAmount === amt ? 'picked' : ''}`} onClick={() => setFundAmount(amt)}>${amt}</button>
+                            ))}
+                            <button type="button" className={`fund-amount ${fundAmount === 'custom' ? 'picked' : ''}`} onClick={() => setFundAmount('custom')}>Other</button>
+                          </div>
+                          {fundAmount === 'custom' && (
+                            <label className="fund-custom">Amount (${DEPOSIT_MIN}–${DEPOSIT_MAX}, whole dollars)
+                              <input type="number" inputMode="numeric" min={DEPOSIT_MIN} max={DEPOSIT_MAX} step="1" value={fundCustom} onChange={(e) => setFundCustom(e.target.value)} placeholder="40" />
+                            </label>
+                          )}
+                          {amountOk
+                            ? <PayOptions settings={serverLeague?.settings} amount={chosenAmount} note={`405 BadGuys — add $${chosenAmount} to my account`} picked={payMethodUsed} onPick={setPayMethodUsed} />
+                            : <p className="muted">Pick an amount to see where to send it.</p>}
+                          <div className="fund-actions">
+                            <button className="button button-primary" type="button" disabled={!amountOk || serverBusy === 'deposit-claim'} onClick={claimDeposit}>
+                              {serverBusy === 'deposit-claim' ? 'Sending…' : amountOk ? `✋ I sent $${chosenAmount}` : 'I sent it'}
+                            </button>
+                            <button className="button button-ghost-dark" type="button" onClick={() => setFundOpen(false)}>Not now</button>
+                          </div>
+                          <small className="muted">The commissioner confirms it landed, then it shows as credit here. The app tracks the money — it never moves it.</small>
+                        </div>
+                      )}
+                    </section>
+                  );
+                })()}
                 <div className="payment-summary-cards">
                   <div className="payment-summary-card">
                     <span className="payment-summary-label">Paid in</span>
@@ -3687,8 +3780,25 @@ function App() {
                 const unpaidSheets = (sheets ?? []).filter((s) => !s.paid && s.week === selectedWeek);
                 const submittedIds = new Set(weekSheets.map((s) => s.playerId).filter(Boolean));
                 const missing = (serverLeague?.players ?? []).filter((p) => !submittedIds.has(p.id));
+                const deposits = pendingDeposits(serverLeague?.settings?.deposits);
                 return (
                   <div className="payment-center">
+                    {deposits.length > 0 && (
+                      <div className="deposit-inbox">
+                        <strong>💳 Account funding to confirm ({deposits.length})</strong>
+                        {deposits.map((d) => (
+                          <div className="payment-row claimed" key={d.id}>
+                            <span className="payment-name">{d.playerName}<PayHandle player={(serverLeague?.players ?? []).find((p) => p.id === d.playerId)} compact /></span>
+                            <span className="payment-week">${d.amount}</span>
+                            <span className="payment-status">⏳ says sent via {PAY_METHODS[d.method]?.label ?? d.method} {new Date(d.claimedAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>
+                            <span className="deposit-actions">
+                              <button className="button button-primary" type="button" disabled={serverBusy === `deposit-${d.id}`} onClick={() => resolveDeposit(d.id, 'confirm')}>{serverBusy === `deposit-${d.id}` ? '…' : `✓ Add $${d.amount}`}</button>
+                              <button className="link-button" type="button" disabled={serverBusy === `deposit-${d.id}`} onClick={() => resolveDeposit(d.id, 'reject')}>Not received</button>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {unpaidSheets.length === 0 && <p className="muted">✅ Every submitted sheet is paid.</p>}
                     {unpaidSheets.map((s) => (
                       <div className={`payment-row ${s.paymentClaim ? 'claimed' : ''}`} key={s.id}>

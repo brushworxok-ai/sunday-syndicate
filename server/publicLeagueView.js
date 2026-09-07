@@ -38,6 +38,7 @@ export function buildLeagueView(league, { playerId = null, isAdmin = false, lock
     };
   };
   const { autoPilotLog, autoPilotReminders, ...settings } = view.settings;
+  settings.deposits = (settings.deposits ?? []).filter(owns);
   if (settings.propPicks) settings.propPicks = Object.fromEntries(Object.entries(settings.propPicks).map(([week, entries]) => [week,
     Object.fromEntries(Object.entries(entries).map(([id, picks]) => [id, locked(Number(week)) || id === playerId ? picks : { savedAt: picks.savedAt }]))]));
   const recaps = (league.recaps ?? []).filter((recap) => recap.adminApproval?.status === 'approved');

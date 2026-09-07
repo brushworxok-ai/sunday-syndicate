@@ -14,7 +14,8 @@ async function getTwilioModule() {
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { normalizePayment, preferredHandle } from '../src/payment.js';
+import { normalizePayment, preferredHandle, PAY_METHODS } from '../src/payment.js';
+import { creditBalance } from '../src/credits.js';
 
 /* Profile pictures: a short emoji or a small data-URL image (the client
    downsizes to 256px JPEG, ~30 KB). Never silently truncate a data URL —
@@ -2357,6 +2358,68 @@ app.post('/api/leagues/:leagueId/cfb-pool/:poolId/claim-payment', playerAuth.req
   await store.saveCfbPoolEntry(request.params.leagueId, request.params.poolId, entry);
   await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${entry.paymentClaim.amount} for CFB Week ${pool.week}`, request.player.id, { poolId: pool.id });
   return response.json({ entry });
+}));
+
+/* ── Account funding — player sends $10/$20/… ahead of time, commissioner confirms, credit lands ── */
+app.post('/api/leagues/:leagueId/deposits', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const { validateDepositAmount, pendingDeposits, DEPOSIT_METHODS, MAX_PENDING_DEPOSITS } = await import('../src/deposits.js');
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const verdict = validateDepositAmount(request.body?.amount);
+  if (!verdict.ok) return response.status(422).json({ error: verdict.error });
+  const method = DEPOSIT_METHODS.includes(request.body?.method) ? request.body.method : (preferredHandle(request.player)?.key ?? 'cashapp');
+  if (pendingDeposits(league.settings?.deposits, request.player.id).length >= MAX_PENDING_DEPOSITS) {
+    return response.status(422).json({ error: `You already have ${MAX_PENDING_DEPOSITS} deposits waiting on the commissioner. Hang tight.` });
+  }
+  const deposit = { id: `dep-${randomUUID()}`, playerId: request.player.id, playerName: request.player.name, amount: verdict.value, method, status: 'pending', claimedAt: new Date().toISOString() };
+  await store.mergeLeagueSettings(request.params.leagueId, (s) => { s.deposits = [...(s.deposits ?? []), deposit].slice(-400); });
+  await store.writeAudit(request.params.leagueId, 'deposit.claimed', `${request.player.name} says they sent $${deposit.amount} to fund their account`, request.player.id, { depositId: deposit.id, method });
+  await saveNotification(request.params.leagueId, { playerId: request.player.id, kind: 'deposit_claimed', title: `Funding claimed — $${deposit.amount}`, body: `You said you sent $${deposit.amount}. It becomes credit as soon as the commissioner confirms.`, metadata: { depositId: deposit.id, amount: deposit.amount } });
+  return response.status(201).json({ deposit });
+}));
+
+app.post('/api/leagues/:leagueId/deposits/:depositId/cancel', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  let found = null;
+  await store.mergeLeagueSettings(request.params.leagueId, (s) => {
+    found = (s.deposits ?? []).find((d) => d.id === request.params.depositId && d.playerId === request.player.id) ?? null;
+    if (found && found.status === 'pending') { found.status = 'cancelled'; found.resolvedAt = new Date().toISOString(); }
+  });
+  if (!found) return response.status(404).json({ error: 'Deposit not found.' });
+  return response.json({ deposit: found });
+}));
+
+app.post('/api/leagues/:leagueId/deposits/:depositId/confirm', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const deposit = (league.settings?.deposits ?? []).find((d) => d.id === request.params.depositId);
+  if (!deposit) return response.status(404).json({ error: 'Deposit not found.' });
+  if (deposit.status !== 'pending') return response.status(409).json({ error: `That deposit was already ${deposit.status}.` });
+  if (!await store.claimOnce(request.params.leagueId, `deposit-${deposit.id}`)) return response.status(409).json({ error: 'That deposit is already being confirmed.' });
+  const { depositReason } = await import('../src/deposits.js');
+  const label = PAY_METHODS[deposit.method]?.label ?? (deposit.method === 'cash' ? 'cash' : deposit.method);
+  const at = new Date().toISOString();
+  const entry = { id: randomUUID(), playerId: deposit.playerId, amount: deposit.amount, reason: depositReason(deposit, label), by: request.actor ?? 'admin', at };
+  await store.addCreditEntry(request.params.leagueId, entry);
+  let updated = null;
+  await store.mergeLeagueSettings(request.params.leagueId, (s) => {
+    updated = (s.deposits ?? []).find((d) => d.id === deposit.id);
+    if (updated) { updated.status = 'confirmed'; updated.resolvedAt = at; updated.creditEntryId = entry.id; }
+  });
+  const balance = creditBalance((league.creditLedger ?? []).concat(entry), deposit.playerId);
+  await saveNotification(request.params.leagueId, { playerId: deposit.playerId, kind: 'deposit_confirmed', title: `+$${deposit.amount} added to your account`, body: `Commissioner confirmed your $${deposit.amount} via ${label}. Your credit is now $${balance}.`, metadata: { depositId: deposit.id, amount: deposit.amount, balance } });
+  return response.json({ deposit: updated ?? deposit, entry, balance });
+}));
+
+app.post('/api/leagues/:leagueId/deposits/:depositId/reject', auth.requireAdmin, asyncRoute(async (request, response) => {
+  let found = null;
+  const note = String(request.body?.note ?? '').trim().slice(0, 160);
+  await store.mergeLeagueSettings(request.params.leagueId, (s) => {
+    found = (s.deposits ?? []).find((d) => d.id === request.params.depositId) ?? null;
+    if (found && found.status === 'pending') { found.status = 'rejected'; found.resolvedAt = new Date().toISOString(); if (note) found.note = note; }
+  });
+  if (!found) return response.status(404).json({ error: 'Deposit not found.' });
+  await saveNotification(request.params.leagueId, { playerId: found.playerId, kind: 'deposit_rejected', title: `$${found.amount} deposit not found`, body: note || `Commissioner couldn't find your $${found.amount} payment. Check it went through, then try again.`, metadata: { depositId: found.id } });
+  return response.json({ deposit: found });
 }));
 
 app.delete('/api/leagues/:leagueId/sheets/:sheetId', auth.requireAdmin, asyncRoute(async (request, response) => {
