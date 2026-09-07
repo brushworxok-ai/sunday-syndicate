@@ -3101,7 +3101,7 @@ function App() {
               <section className="push-toggle-section">
                 <div className="panel">
                   <div className="panel-heading"><div><span className="eyebrow dark">NOTIFICATIONS</span><h2>Push alerts</h2></div></div>
-                  <p className="muted">Get notified when the deadline is approaching, when results post, and when the commissioner has announcements.</p>
+                  <p className="muted">League updates are delivered here by default. Enable browser push to receive every update on this device while the app is closed; disable it anytime to opt out.</p>
                   <button className={`button ${pushEnabled ? 'button-ghost' : 'button-primary'}`} type="button" disabled={pushBusy} onClick={togglePushNotifications}>{pushBusy ? 'Working…' : pushEnabled ? 'Disable push notifications' : 'Enable push notifications'}</button>
                   {pushEnabled && <><button className="button button-ghost" type="button" disabled={pushBusy} onClick={testDevicePush}>Send test notification</button><p className="push-status-on">This device is subscribed. Use the test button to confirm it displays alerts.</p></>}
                 </div>

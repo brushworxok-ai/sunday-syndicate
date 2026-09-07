@@ -101,13 +101,16 @@ const asyncRoute = (handler) => (request, response, next) => Promise.resolve(han
 const leagueId = 'league-sunday-syndicate-demo';
 
 /** Save a notification for the in-app notification history. */
-async function saveNotification(lid, { playerId = 'all', kind, title, body = '', metadata = {} }) {
+async function saveNotification(lid, { playerId = 'all', kind, title, body = '', metadata = {}, push = true }) {
   const notification = { id: `notif-${randomUUID()}`, playerId, kind, title, body, metadata, at: new Date().toISOString() };
   try {
     await store.saveNotification(lid, notification);
   } catch (error) { console.error('saveNotification failed (non-fatal):', error.message); return null; }
   try {
-    if (webpush && ['results', 'payout', 'payment_confirmed', 'jack_sms', 'pick_reminder', 'league_recap', 'league_announcement'].includes(kind)) {
+    // Every app update is delivered to each currently subscribed device. A
+    // player opts out by disabling push for that device; the in-app copy is
+    // always retained regardless of browser permission or delivery outcome.
+    if (push && webpush) {
       const report = await deliverPush({ store, leagueId: lid, webpush, playerIds: playerId === 'all' ? undefined : [playerId], payload: { title, body, url: `/?view=${kind === 'results' ? 'results' : 'notifs'}`, tag: `${kind}-${metadata.week ?? playerId}` } });
       if (report.failed || report.expired) await store.writeAudit(lid, 'push.delivery_partial', 'Some notification subscriptions could not be reached.', 'system', { notificationId: notification.id, ...report });
     }
@@ -2722,7 +2725,7 @@ app.post('/api/push/broadcast', auth.requireAdmin, asyncRoute(async (request, re
   const { title, body, url, tag } = request.body ?? {};
   if (!body) return response.status(400).json({ error: 'Message body required.' });
   const report = await deliverPush({ store, leagueId, webpush, payload: { title: String(title || '405 Bad Guys Parlays').slice(0, 100), body: String(body).slice(0, 500), url: url || '/?view=notifs', tag: tag || 'broadcast' } });
-  await saveNotification(leagueId, { kind: 'announcement', title: String(title || 'Commissioner announcement').slice(0, 100), body: String(body).slice(0, 500) });
+  await saveNotification(leagueId, { kind: 'announcement', title: String(title || 'Commissioner announcement').slice(0, 100), body: String(body).slice(0, 500), push: false });
   response.json(report);
 }));
 
@@ -2737,6 +2740,7 @@ app.post('/api/push/deadline-reminder', auth.requireAdmin, asyncRoute(async (req
   const deadline = getWeekDeadline(week);
   const deadlineStr = deadline ? deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' ET' : 'soon';
   const report = await deliverPush({ store, leagueId, webpush, playerIds: missing.map((player) => player.id), payload: { title: 'Picks due ' + deadlineStr, body: `Your Week ${week} sheet isn't in yet. Open the app to submit your picks.`, url: '/?view=picks', tag: `deadline-w${week}` } });
+  for (const player of missing) await saveNotification(leagueId, { playerId: player.id, kind: 'pick_reminder', title: `Week ${week} picks due`, body: `Your sheet isn't in yet. Open Picks before the deadline.`, metadata: { week }, push: false });
   response.json({ ...report, missing: missing.length, week });
 }));
 
