@@ -1995,3 +1995,25 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .communications-test { border-top: 1px solid #b8c9c0; padding-top: 16px; }
 .communications-check button { min-height: 44px; }
 .communications-check [role="alert"] { color: #ff9999; font-weight: 600; }
+
+/* ── Pay-in options (how players pay the commissioner) ── */
+.pay-options { margin: 12px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.pay-options-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.pay-options-head strong { font-size: 15px; color: #fff; }
+.pay-options-head small { font-size: 12px; color: var(--muted); }
+.pay-options-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.pay-option { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass); color: var(--ink); text-decoration: none; min-height: 52px; }
+.pay-option-icon { grid-row: 1 / span 2; font-size: 20px; width: 24px; text-align: center; }
+.pay-option-label { font-weight: 800; font-size: 14px; color: #fff; }
+.pay-option small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pay-option em { grid-column: 2; font-style: normal; font-size: 11px; color: var(--neon); font-weight: 700; }
+.pay-option.cashapp { border-color: rgba(0,213,75,.4); }
+.pay-option.venmo { border-color: rgba(61,149,206,.45); }
+.pay-option.paypal { border-color: rgba(255,196,57,.45); }
+.pay-option.applecash { border-color: rgba(255,255,255,.25); }
+.pay-option.picked { outline: 2px solid var(--neon); outline-offset: 1px; }
+.pay-handle.applecash { color: #fff; border-color: rgba(255,255,255,.3); background: rgba(255,255,255,.06); }
+.pay-field.toggle { grid-template-columns: 84px 1fr auto; }
+.pay-toggle { text-align: left; border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 10px; padding: 10px 12px; font-size: 13px; min-height: 42px; }
+.pay-toggle.on { color: #fff; border-color: rgba(57,255,20,.45); background: rgba(57,255,20,.08); }
+@media (max-width: 480px) { .pay-field.toggle { grid-template-columns: 1fr auto; } }

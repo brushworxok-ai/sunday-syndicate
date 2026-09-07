@@ -24,7 +24,7 @@ import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
 import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebreaker.js';
 import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
-import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle } from './payment.js';
+import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle, messagesLink } from './payment.js';
 import { createJackVoicePlayback } from './jackVoice.js';
 import { createJackSpeechInput } from './jackSpeechInput.js';
 import CommunicationsCheck from './CommunicationsCheck.jsx';
@@ -97,8 +97,10 @@ function App() {
   const [signupAvatar, setSignupAvatar] = useState('');
   const [signupAvatarFile, setSignupAvatarFile] = useState(null);
   const [signupPay, setSignupPay] = useState('');
-  const [payDraft, setPayDraft] = useState({ cashApp: '', venmo: '', paypal: '', preferred: 'cashapp' });
+  const [payDraft, setPayDraft] = useState({ cashApp: '', venmo: '', paypal: '', appleCash: false, preferred: 'cashapp' });
   const [payDraftFor, setPayDraftFor] = useState(null);
+  const [payMethodUsed, setPayMethodUsed] = useState('');
+  const [payInDraft, setPayInDraft] = useState({ venmo: '', paypal: '', appleCashPhone: '' });
   const [signupStep, setSignupStep] = useState(1); // 1: info, 2: team+avatar, 3: OTP verify
   const [signupOtp, setSignupOtp] = useState('');
   const [otpSending, setOtpSending] = useState(false);
@@ -697,9 +699,16 @@ function App() {
     const label = (labelOverride ?? (cashAppPoolLabel || serverLeague?.settings?.cashAppPool?.label || '')).trim();
     setServerBusy('cashapp-pool');
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/cashapp-pool`, { method: 'PATCH', body: JSON.stringify({ url, label }) });
+      const current = serverLeague?.settings?.payIn ?? {};
+      const payIn = {
+        venmo: (payInDraft.venmo || current.venmo || '').trim(),
+        paypal: (payInDraft.paypal || current.paypal || '').trim(),
+        appleCashPhone: (payInDraft.appleCashPhone || current.appleCashPhone || '').trim(),
+      };
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cashapp-pool`, { method: 'PATCH', body: JSON.stringify({ url, label, payIn }) });
       await loadLeague();
-      notify(url ? 'Cash App Pool link saved — players will see the pay button now.' : 'Cash App Pool link cleared.');
+      setPayInDraft({ venmo: '', paypal: '', appleCashPhone: '' });
+      notify(url || payIn.venmo || payIn.paypal || payIn.appleCashPhone ? 'Pay-in options saved — players can pick how to pay.' : 'Pay-in options cleared.');
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -882,7 +891,7 @@ function App() {
     if (key === payDraftFor) return;
     setPayDraftFor(key);
     const pay = currentPlayer?.payment ?? {};
-    setPayDraft({ cashApp: pay.cashApp ?? '', venmo: pay.venmo ?? '', paypal: pay.paypal ?? '', preferred: pay.preferred ?? 'cashapp' });
+    setPayDraft({ cashApp: pay.cashApp ?? '', venmo: pay.venmo ?? '', paypal: pay.paypal ?? '', appleCash: Boolean(pay.appleCash), preferred: pay.preferred ?? 'cashapp' });
   }, [currentPlayer, payDraftFor]);
 
   const payCfbWithCredit = async () => {
@@ -936,7 +945,7 @@ function App() {
   const claimSheetPayment = async (sheetId) => {
     setServerBusy('claim-sheet');
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/claim-payment`, { method: 'POST' });
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/claim-payment`, { method: 'POST', body: JSON.stringify({ method: payMethodUsed || undefined }) });
       await loadLeague();
       notify('Got it — the commissioner sees your payment claim and will confirm it. ⏳');
     } catch (error) { notify(error.message); }
@@ -947,7 +956,7 @@ function App() {
     if (!cfbPool) return;
     setServerBusy('claim-cfb');
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/claim-payment`, { method: 'POST' });
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/claim-payment`, { method: 'POST', body: JSON.stringify({ method: payMethodUsed || undefined }) });
       await loadLeague();
       notify('Got it — the commissioner sees your payment claim and will confirm it. ⏳');
     } catch (error) { notify(error.message); }
@@ -2344,16 +2353,7 @@ function App() {
                   </div>
                 );
               })()}
-              {serverLeague?.settings?.cashAppPool?.url && !mySheet?.paid && (
-                <div className="cashapp-steps">
-                  <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
-                    <span className="cashapp-icon">💵</span>
-                    <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App'}</strong><small>{'1. Tap here → 2. Send $'}{ENTRY_FEE}{' → 3. Come back & tap "I sent it"'}</small></div>
-                    <span className="cashapp-arrow">↗</span>
-                  </a>
-                  <small className="muted">Opens Cash App to send your entry fee directly to the commissioner.</small>
-                </div>
-              )}
+              {!mySheet?.paid && <PayOptions settings={serverLeague?.settings} amount={ENTRY_FEE} note={`405 BadGuys ${weekLabel}`} picked={payMethodUsed} onPick={setPayMethodUsed} />}
               <button className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Saving…' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
               <button className="ai-mini-button" type="button" onClick={analyzePicks} disabled={aiLoading === 'picks'}><span>✦</span>{aiLoading === 'picks' ? 'Reviewing…' : 'Ask Jack to check my picks'}</button>
               {aiResult.picks && <div className="ai-slip-result">{aiResult.picks}</div>}
@@ -2732,13 +2732,7 @@ function App() {
                             </button>
                       )}
                     </div>
-                    {serverLeague?.settings?.cashAppPool?.url && myCredit < ENTRY_FEE && !mySheet.paymentClaim && (
-                      <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
-                        <span className="cashapp-icon">💵</span>
-                        <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay via Cash App'}</strong><small>{'1. Tap here → 2. Send $'}{ENTRY_FEE}{' → 3. Come back & tap "I sent it"'}</small></div>
-                        <span className="cashapp-arrow">↗</span>
-                      </a>
-                    )}
+                    {myCredit < ENTRY_FEE && !mySheet.paymentClaim && <PayOptions settings={serverLeague?.settings} amount={ENTRY_FEE} note={`405 BadGuys ${weekLabel}`} picked={payMethodUsed} onPick={setPayMethodUsed} />}
                   </section>
                 ) : mySheet?.paid ? (
                   <section className="owe-card paid"><div className="owe-head"><span className="eyebrow dark">THIS WEEK</span><h2>✅ You're paid up for {weekLabel}</h2><p>Nothing owed. Good luck.</p></div></section>
@@ -2936,6 +2930,16 @@ function App() {
                 <div className="pay-fields">
                   {PAY_ORDER.map((key) => {
                     const method = PAY_METHODS[key];
+                    if (method.toggle) {
+                      const on = Boolean(payDraft[method.field]);
+                      return (
+                        <label key={key} className={`pay-field toggle ${payDraft.preferred === key && on ? 'preferred' : ''}`}>
+                          <span className="pay-field-label">{method.label}</span>
+                          <button type="button" className={`pay-toggle ${on ? 'on' : ''}`} onClick={() => setPayDraft((d) => ({ ...d, [method.field]: !on, preferred: !on ? d.preferred : (d.preferred === key ? 'cashapp' : d.preferred) }))} aria-pressed={on}>{on ? `On · uses ${currentPlayer.phone}` : 'Off — tap to accept Apple Cash at your phone number'}</button>
+                          <button type="button" className={`pay-pref ${payDraft.preferred === key ? 'on' : ''}`} disabled={!on} onClick={() => setPayDraft((d) => ({ ...d, preferred: key }))} aria-pressed={payDraft.preferred === key}>{payDraft.preferred === key && on ? '★ Preferred' : 'Prefer'}</button>
+                        </label>
+                      );
+                    }
                     const value = payDraft[method.field] ?? '';
                     return (
                       <label key={key} className={`pay-field ${payDraft.preferred === key && value ? 'preferred' : ''}`}>
@@ -2948,7 +2952,7 @@ function App() {
                 </div>
                 <div className="pay-actions">
                   <button type="button" className="button button-primary" disabled={serverBusy === `player-${currentPlayer.id}`} onClick={savePaymentHandles}>{serverBusy === `player-${currentPlayer.id}` ? 'Saving…' : 'Save pay handles'}</button>
-                  <small className="muted">Zelle? The commissioner already has your phone number on file.</small>
+                  <small className="muted">Zelle? The commissioner already has your phone on file.</small>
                 </div>
               </section>
             )}
@@ -3290,16 +3294,7 @@ function App() {
                     )}
                   </div>
                 )}
-                {serverLeague?.settings?.cashAppPool?.url && !cfbMyEntry?.paid && (
-                  <div className="cashapp-steps">
-                    <a className="cashapp-pool-link" href={serverLeague.settings.cashAppPool.url} target="_blank" rel="noreferrer">
-                      <span className="cashapp-icon">💵</span>
-                      <div><strong>{serverLeague.settings.cashAppPool.label || 'Pay Entry Fee'}</strong><small>{'Step 1: Tap here · Step 2: Send $'}{cfbPool.entryFee}{' · Step 3: Tap "I sent it"'}</small></div>
-                      <span className="cashapp-arrow">↗</span>
-                    </a>
-                    <small className="muted">Opens Cash App to send your entry fee. The commissioner confirms once it lands.</small>
-                  </div>
-                )}
+                {!cfbMyEntry?.paid && <PayOptions settings={serverLeague?.settings} amount={cfbPool.entryFee} note={`405 BadGuys CFB Week ${cfbPool.week}`} picked={payMethodUsed} onPick={setPayMethodUsed} />}
 
                 {/* Player pick flow */}
                 {cfbPool.status === 'open' && (
@@ -3625,8 +3620,11 @@ function App() {
               <div className="cashapp-admin-form">
                 <label>Cash App URL<input type="url" value={cashAppPoolUrl || serverLeague?.settings?.cashAppPool?.url || ''} onChange={(e) => setCashAppPoolUrl(e.target.value)} placeholder="https://cash.app/$Tique" /></label>
                 <label>Button label <small>optional</small><input type="text" value={cashAppPoolLabel || serverLeague?.settings?.cashAppPool?.label || ''} onChange={(e) => setCashAppPoolLabel(e.target.value)} placeholder="Pay $20 Entry Fee" maxLength="80" /></label>
+                <label>Venmo <small>optional</small><input type="text" value={payInDraft.venmo || serverLeague?.settings?.payIn?.venmo || ''} onChange={(e) => setPayInDraft((d) => ({ ...d, venmo: e.target.value }))} placeholder="@your-venmo" maxLength="42" autoCapitalize="none" /></label>
+                <label>PayPal <small>optional</small><input type="text" value={payInDraft.paypal || serverLeague?.settings?.payIn?.paypal || ''} onChange={(e) => setPayInDraft((d) => ({ ...d, paypal: e.target.value }))} placeholder="paypal.me name" maxLength="42" autoCapitalize="none" /></label>
+                <label>Apple Cash phone <small>optional · players get a Messages link</small><input type="tel" value={payInDraft.appleCashPhone || serverLeague?.settings?.payIn?.appleCashPhone || ''} onChange={(e) => setPayInDraft((d) => ({ ...d, appleCashPhone: e.target.value }))} placeholder="(405) 555-1234" maxLength="16" /></label>
                 <div className="cashapp-admin-actions">
-                  <button className="button button-primary" type="button" onClick={() => saveCashAppPool()} disabled={serverBusy === 'cashapp-pool'}>{serverBusy === 'cashapp-pool' ? 'Saving…' : 'Save Pool Link'}</button>
+                  <button className="button button-primary" type="button" onClick={() => saveCashAppPool()} disabled={serverBusy === 'cashapp-pool'}>{serverBusy === 'cashapp-pool' ? 'Saving…' : 'Save pay-in options'}</button>
                   {serverLeague?.settings?.cashAppPool?.url && <button className="button button-ghost-dark" type="button" onClick={() => { setCashAppPoolUrl(''); setCashAppPoolLabel(''); saveCashAppPool('', ''); }}>Clear Link</button>}
                 </div>
                 {serverLeague?.settings?.cashAppPool?.url && (
@@ -3927,11 +3925,41 @@ function parseQuickPay(text) {
   return { cashApp: value, preferred: 'cashapp' };
 }
 
+/* How to PAY the commissioner: every method they've set up, as one-tap
+   buttons. Tapping remembers the method so "I sent it" records it. */
+function PayOptions({ settings, amount, note, picked, onPick }) {
+  const pool = settings?.cashAppPool;
+  const payIn = settings?.payIn ?? {};
+  const options = [];
+  if (pool?.url) options.push({ key: 'cashapp', label: 'Cash App', icon: '💵', href: pool.url, hint: pool.label && pool.label !== 'Pay Entry Fee' ? pool.label : null });
+  if (payIn.venmo) options.push({ key: 'venmo', label: 'Venmo', icon: '💙', href: `https://venmo.com/u/${payIn.venmo}?txn=pay&amount=${amount}&note=${encodeURIComponent(note)}`, hint: `@${payIn.venmo}` });
+  if (payIn.paypal) options.push({ key: 'paypal', label: 'PayPal', icon: '🅿️', href: `https://paypal.me/${payIn.paypal}/${amount}`, hint: `paypal.me/${payIn.paypal}` });
+  if (payIn.appleCashPhone) options.push({ key: 'applecash', label: 'Apple Cash', icon: '🍎', href: messagesLink(payIn.appleCashPhone, `$${amount} — ${note}`), hint: 'Opens Messages · send Apple Cash there' });
+  if (!options.length) return null;
+  return (
+    <div className="pay-options">
+      <div className="pay-options-head"><strong>Pay your ${amount}</strong><small>Tap one → send → come back and tap "I sent it"</small></div>
+      <div className="pay-options-grid">
+        {options.map((o) => (
+          <a key={o.key} className={`pay-option ${o.key} ${picked === o.key ? 'picked' : ''}`} href={o.href} target={o.key === 'applecash' ? '_self' : '_blank'} rel="noreferrer" onClick={() => onPick?.(o.key)}>
+            <span className="pay-option-icon">{o.icon}</span>
+            <span className="pay-option-label">{o.label}</span>
+            {o.hint && <small>{o.hint}</small>}
+            {picked === o.key && <em>✓ chosen</em>}
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* Small pill showing where a player gets paid, linking out to the app. */
 function PayHandle({ player, compact = false }) {
   const pay = preferredHandle(player);
   if (!pay) return compact ? null : <span className="pay-handle missing">No pay handle</span>;
-  return <a className={`pay-handle ${pay.key}`} href={pay.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title={`Pay ${player.name} on ${pay.label}`}>{compact ? pay.display : `${pay.label} ${pay.display}`}</a>;
+  const text = pay.key === 'applecash' ? 'Apple Cash' : compact ? pay.display : `${pay.label} ${pay.display}`;
+  if (!pay.url) return <span className={`pay-handle ${pay.key}`}>{text}</span>;
+  return <a className={`pay-handle ${pay.key}`} href={pay.url} target={pay.key === 'applecash' ? '_self' : '_blank'} rel="noreferrer" onClick={(e) => e.stopPropagation()} title={`Pay ${player.name} on ${pay.label}`}>{text}</a>;
 }
 
 function PlayerAvatar({ player, size = 44 }) {

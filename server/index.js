@@ -1925,8 +1925,21 @@ app.patch('/api/leagues/:leagueId/cashapp-pool', auth.requireAdmin, asyncRoute(a
   const label = typeof request.body?.label === 'string' ? request.body.label.trim().slice(0, 80) : '';
   // Allow clearing by sending empty url
   const cashAppPool = url ? { url, label: label || 'Pay Entry Fee', updatedAt: new Date().toISOString() } : null;
-  await store.updateLeagueSettings(request.params.leagueId, { ...(league.settings ?? {}), cashAppPool });
-  return response.json({ cashAppPool });
+  // Other ways players can pay the commissioner: Venmo / PayPal handles and
+  // Apple Cash (a phone number Messages can open). All optional.
+  const payInInput = request.body?.payIn && typeof request.body.payIn === 'object' ? request.body.payIn : null;
+  let payIn = league.settings?.payIn ?? null;
+  if (payInInput) {
+    const { payment, error } = normalizePayment({ venmo: payInInput.venmo, paypal: payInInput.paypal });
+    if (error) return response.status(422).json({ error });
+    let appleCashPhone = String(payInInput.appleCashPhone ?? '').replace(/\D/g, '');
+    if (appleCashPhone.length === 11 && appleCashPhone.startsWith('1')) appleCashPhone = appleCashPhone.slice(1);
+    if (appleCashPhone && appleCashPhone.length !== 10) return response.status(422).json({ error: 'Apple Cash needs a 10-digit US phone number.' });
+    payIn = { venmo: payment.venmo ?? null, paypal: payment.paypal ?? null, appleCashPhone: appleCashPhone ? `+1${appleCashPhone}` : null, updatedAt: new Date().toISOString() };
+    if (!payIn.venmo && !payIn.paypal && !payIn.appleCashPhone) payIn = null;
+  }
+  await store.updateLeagueSettings(request.params.leagueId, { ...(league.settings ?? {}), cashAppPool, payIn });
+  return response.json({ cashAppPool, payIn });
 }));
 
 /* Toggle weekly College Pick-Em autopilot (open/lock/finalize hands-free) */
@@ -2324,7 +2337,9 @@ app.post('/api/leagues/:leagueId/sheets/:sheetId/claim-payment', playerAuth.requ
   if (!sheet) return response.status(404).json({ error: 'Sheet not found.' });
   if (sheet.playerId !== request.player.id) return response.status(403).json({ error: 'You can only claim payment for your own sheet.' });
   if (sheet.paid) return response.status(422).json({ error: 'This sheet is already marked paid.' });
-  const paymentClaim = { claimedAt: new Date().toISOString(), method: preferredHandle(request.player)?.key ?? 'cashapp', amount: Number(league.settings?.entryFee) || 20 };
+  const CLAIM_METHODS = ['cashapp', 'venmo', 'paypal', 'applecash', 'cash'];
+  const chosen = CLAIM_METHODS.includes(request.body?.method) ? request.body.method : null;
+  const paymentClaim = { claimedAt: new Date().toISOString(), method: chosen ?? preferredHandle(request.player)?.key ?? 'cashapp', amount: Number(league.settings?.entryFee) || 20 };
   const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paymentClaim });
   await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${paymentClaim.amount} for Week ${sheet.week}`, request.player.id, { sheetId: sheet.id });
   await saveNotification(request.params.leagueId, { playerId: request.player.id, kind: 'payment_claimed', title: `Payment claimed — Week ${sheet.week}`, body: `You claimed $${paymentClaim.amount} sent for Week ${sheet.week}. Waiting for commissioner to confirm.`, metadata: { week: sheet.week, amount: paymentClaim.amount } });
@@ -2337,7 +2352,8 @@ app.post('/api/leagues/:leagueId/cfb-pool/:poolId/claim-payment', playerAuth.req
   const entry = pool.entries?.[request.player.id];
   if (!entry) return response.status(422).json({ error: 'Submit your picks first, then claim your payment.' });
   if (entry.paid) return response.status(422).json({ error: 'This entry is already marked paid.' });
-  entry.paymentClaim = { claimedAt: new Date().toISOString(), method: preferredHandle(request.player)?.key ?? 'cashapp', amount: Number(pool.entryFee) || 0 };
+  const chosenCfb = ['cashapp', 'venmo', 'paypal', 'applecash', 'cash'].includes(request.body?.method) ? request.body.method : null;
+  entry.paymentClaim = { claimedAt: new Date().toISOString(), method: chosenCfb ?? preferredHandle(request.player)?.key ?? 'cashapp', amount: Number(pool.entryFee) || 0 };
   await store.saveCfbPoolEntry(request.params.leagueId, request.params.poolId, entry);
   await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${entry.paymentClaim.amount} for CFB Week ${pool.week}`, request.player.id, { poolId: pool.id });
   return response.json({ entry });
