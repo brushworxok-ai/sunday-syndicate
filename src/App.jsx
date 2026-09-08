@@ -2832,6 +2832,32 @@ function App() {
                     </section>
                   );
                 })()}
+                {/* Who's got money on the books — everybody can see everybody */}
+                {(() => {
+                  const rows = (serverLeague?.players ?? [])
+                    .map((p) => ({ id: p.id, name: p.name, player: p, balance: serverLeague?.creditBalances?.[p.id] ?? 0 }))
+                    .sort((a, b) => b.balance - a.balance || a.name.localeCompare(b.name));
+                  if (rows.length < 2) return null;
+                  const total = rows.reduce((sum, r) => sum + r.balance, 0);
+                  return (
+                    <section className="bank-card">
+                      <div className="bank-head">
+                        <div><span className="eyebrow dark">THE CREW</span><h2>Who's funded up</h2></div>
+                        <span className="bank-total">${total} on the books</span>
+                      </div>
+                      <div className="bank-rows">
+                        {rows.map((row) => (
+                          <div className={`bank-row ${row.id === playerSession.playerId ? 'me' : ''}`} key={row.id}>
+                            <PlayerAvatar player={row.player} size={34} />
+                            <span className="bank-name">{row.name}{row.id === playerSession.playerId ? ' (you)' : ''}</span>
+                            <span className={`bank-amount ${row.balance > 0 ? 'positive' : 'zero'}`}>${row.balance}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <small className="muted">Credit is money already sent to the commissioner. Entry fees come out of it automatically.</small>
+                    </section>
+                  );
+                })()}
                 <div className="payment-summary-cards">
                   <div className="payment-summary-card">
                     <span className="payment-summary-label">Paid in</span>
@@ -3072,6 +3098,9 @@ function App() {
                       <div className="crew-card-info">
                         <strong>{player.name}{player.id === playerSession.playerId ? ' (you)' : ''}</strong>
                         <small>{player.trashTalk?.jackPolicy?.favoriteTeam ? TEAMS[player.trashTalk.jackPolicy.favoriteTeam] : 'No team set'}</small>
+                        {playerSession.authenticated && (
+                          <span className={`crew-credit ${(serverLeague?.creditBalances?.[player.id] ?? 0) > 0 ? 'funded' : ''}`}>💳 ${serverLeague?.creditBalances?.[player.id] ?? 0}</span>
+                        )}
                         {playerSession.authenticated && <PayHandle player={player} compact />}
                       </div>
                       {player.trashTalk?.jackPolicy?.favoriteTeam && <img className="crew-card-team" src={getTeamLogoUrl(player.trashTalk.jackPolicy.favoriteTeam)} alt="" />}

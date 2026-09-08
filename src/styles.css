@@ -1725,7 +1725,7 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .crew-card.me { border-color: rgba(57,255,20,.45); box-shadow: 0 0 0 1px rgba(57,255,20,.2); }
 .crew-card-info { min-width: 0; flex: 1; }
 .crew-card-info strong { display: block; font-size: 13px; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.crew-card-info small { font-size: 11px; color: var(--muted); }
+.crew-card-info small { font-size: 11px; color: var(--muted); display: block; }
 .crew-card-team { width: 22px; height: 22px; object-fit: contain; opacity: .85; flex-shrink: 0; }
 .section-divider-label { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 8px 0 12px; padding-top: 8px; border-top: 1px solid var(--line); }
 
@@ -2038,3 +2038,18 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .deposit-inbox { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed #2a2a2a; }
 .deposit-actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 @media (max-width: 420px) { .fund-amounts { grid-template-columns: repeat(3, 1fr); } }
+
+/* ── Credit visible to the whole crew ── */
+.crew-credit { display: inline-block; margin-right: 4px; font-size: 0.72rem; font-weight: 800; color: var(--muted); background: rgba(255,255,255,.04); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; margin-top: 2px; }
+.crew-credit.funded { color: var(--neon); border-color: rgba(57,255,20,.4); background: rgba(57,255,20,.08); }
+.bank-card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 16px; margin-bottom: 18px; display: flex; flex-direction: column; gap: 12px; }
+.bank-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.bank-head h2 { margin: 4px 0 0; font-size: 1.1rem; }
+.bank-total { font-size: 0.78rem; font-weight: 800; color: var(--neon); white-space: nowrap; padding-top: 18px; }
+.bank-rows { display: flex; flex-direction: column; gap: 6px; }
+.bank-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
+.bank-row.me { border-color: rgba(57,255,20,.4); }
+.bank-name { flex: 1; font-size: 0.86rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bank-amount { font-size: 0.95rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.bank-amount.positive { color: var(--neon); }
+.bank-amount.zero { color: var(--muted); }

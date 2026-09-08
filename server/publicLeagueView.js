@@ -1,4 +1,5 @@
 import { isWeekLocked } from '../src/data.js';
+import { creditBalances } from '../src/credits.js';
 
 function scoreSheet(sheet, results = {}) {
   return Object.entries(sheet.picks ?? {}).reduce(
@@ -26,7 +27,10 @@ export function buildPublicLeagueView(league) {
 /** Viewer-aware HTTP projection. Internal services always use the full store. */
 export function buildLeagueView(league, { playerId = null, isAdmin = false, locked = isWeekLocked, now = Date.now() } = {}) {
   const view = withoutPushCredentials(league);
-  if (isAdmin) return view;
+  /* Every player can see what everyone has on the books — balances only, never
+     each other's ledger entries (those stay owner-only below). */
+  const balances = creditBalances(league.creditLedger ?? [], league.players ?? []);
+  if (isAdmin) return { ...view, creditBalances: balances };
   const owns = (item) => Boolean(playerId) && item.playerId === playerId;
   const entryView = (entry, revealed) => {
     const { handle, paymentClaim, ...safe } = entry;
@@ -57,6 +61,7 @@ export function buildLeagueView(league, { playerId = null, isAdmin = false, lock
     }),
     survivorPicks: (league.survivorPicks ?? []).map((pick) => locked(pick.week) || owns(pick) ? pick : { playerId: pick.playerId, week: pick.week, pickedAt: pick.pickedAt, team: null }),
     creditLedger: (league.creditLedger ?? []).filter(owns),
+    creditBalances: balances,
     sideBets: (league.sideBets ?? []).filter((bet) => playerId && [bet.creatorId, bet.opponentId].includes(playerId)),
     auditLog: [], consentRecords: [], broadcasts: [], latestBroadcast: null,
     recaps, latestRecap: recaps[0] ?? null,
