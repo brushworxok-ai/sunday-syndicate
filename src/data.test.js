@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SCHEDULE, TEAM_COLORS, TEAMS, getGamesForWeek, getTeamColors, getTeamLogoUrl, hasGameStarted } from './data.js';
+import { SCHEDULE, TEAM_COLORS, TEAMS, getGamesForWeek, getTeamColors, getTeamLogoUrl, hasGameStarted, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, getWeekDeadline, getGames, isWeekLocked } from './data.js';
 import { getWeekTiebreakerGame } from './tiebreaker.js';
 
 test('2026 schedule is structurally complete and timezone-safe', () => {
@@ -38,4 +38,37 @@ test('all teams have logo URLs, color identity, and safe fallbacks', () => {
     assert.equal(getTeamColors(team).length, 2);
   }
   assert.deepEqual(getTeamColors('UNKNOWN'), ['#0c2c1c', '#c8f75a']);
+});
+
+test('the weekly deadline is one hour before the first kickoff of that week', () => {
+  assert.equal(DEADLINE_HOURS_BEFORE_KICKOFF, 1);
+  assert.equal(DEADLINE_LABEL, '1 hour'); // never "1 hours"
+
+  /* Kickoff strings are ET wall-clock with no offset, so compare wall clock to
+     wall clock: deadline + 1h, rendered in ET, must equal the first kickoff. */
+  const inEasternWallClock = (date) => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(date).reduce((acc, part) => ({ ...acc, [part.type]: part.value }), {});
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour === '24' ? '00' : parts.hour}:${parts.minute}`;
+  };
+
+  for (const week of [1, 5, 12]) {
+    const firm = getGames(week).filter((game) => !game.time.includes('TBA'));
+    if (!firm.length) continue;
+    const firstKickoff = firm.map((game) => game.kickoff).sort()[0].slice(0, 16);
+    const deadline = getWeekDeadline(week);
+    assert.equal(inEasternWallClock(new Date(deadline.getTime() + 3_600_000)), firstKickoff,
+      `week ${week} should lock exactly 1h before ${firstKickoff}`);
+    assert.equal(isWeekLocked(week, new Date(deadline.getTime() + 60_000)), true);
+    assert.equal(isWeekLocked(week, new Date(deadline.getTime() - 60_000)), false);
+  }
+});
+
+test('Week 1 locks at 7:20 PM ET, one hour before NE at SEA', () => {
+  const shown = getWeekDeadline(1).toLocaleString('en-US', {
+    timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: '2-digit',
+  });
+  assert.equal(shown, 'Wed 7:20 PM');
 });

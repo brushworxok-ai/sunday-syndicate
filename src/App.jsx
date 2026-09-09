@@ -15,7 +15,7 @@ class ErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import { EMOJIS, ENTRY_FEE, DEADLINE_HOURS_BEFORE_KICKOFF, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, formatCountdown, TEAMS, TEAM_COLORS, getTeamLogoUrl } from './data.js';
+import { EMOJIS, ENTRY_FEE, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, formatCountdown, TEAMS, TEAM_COLORS, getTeamLogoUrl } from './data.js';
 import { DEMO_CHAT, DEMO_LEAGUE } from './demoLeague.js';
 import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
@@ -1047,7 +1047,7 @@ function App() {
   };
 
   const submit = async () => {
-    if (weekLocked) return notify(`${weekLabel} is locked — picks were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first game.`);
+    if (weekLocked) return notify(`${weekLabel} is locked — picks were due ${DEADLINE_LABEL} before the first game.`);
     if (selectedWeek !== getCurrentWeek()) return notify(`Picks are only open for Week ${getCurrentWeek()} right now — switch the week at the top to lock in.`);
     // Signed-in players are identified by their session — the server uses that,
     // not this field — so only guests need to type a name.
@@ -1830,7 +1830,7 @@ function App() {
       setAssistantMessages((prev) => [...prev, {
         id: `jack-onboard-${Date.now()}`,
         role: 'assistant',
-        text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Picks lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours BEFORE the week's first game — the exact time is on the Picks page — so don't be that guy texting me at kickoff. Ask me anything — rules, standings, your picks. I got you.`,
+        text: `Ayy ${registered.name}, welcome to the league! Let me put you up on game real quick. Every week: drop $${ENTRY_FEE} in the pot, pick a winner for every game — straight up, no spreads, no excuses. Each correct pick is a point, most points takes the whole pot. Tiebreaker is total points in the tiebreaker game — closest WITHOUT going over. Go over, you bust. Picks lock ${DEADLINE_LABEL} BEFORE the week's first game — the exact time is on the Picks page — so don't be that guy texting me at kickoff. Ask me anything — rules, standings, your picks. I got you.`,
       }]);
       // Don't slam a full-screen Jack drawer over the app the second someone
       // joins — on a phone it hides the tab bar and reads as a freeze. Jack's
@@ -2354,7 +2354,7 @@ function App() {
               <div className="page-title"><span className="eyebrow dark">{weekLabel.toUpperCase()}</span><h1>Make your picks</h1><p>Pick one winner in every matchup. Your choices stay private on this device until you lock them in.</p>{currentByeTeams.length > 0 && <p className="bye-notice"><strong>Bye teams:</strong> {currentByeTeams.map(t => TEAMS[t]).join(', ')}</p>}</div>
               <div className={`deadline-banner ${weekLocked ? 'locked' : ''}`}>
                 {weekLocked
-                  ? <><span className="deadline-icon">🔒</span><div><strong>Picks are locked for {weekLabel}.</strong><p>Deadline passed — {DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff. See you next week.</p></div></>
+                  ? <><span className="deadline-icon">🔒</span><div><strong>Picks are locked for {weekLabel}.</strong><p>Deadline passed — {DEADLINE_LABEL} before the first kickoff. See you next week.</p></div></>
                   : <><span className="deadline-icon">⏱</span><div><strong>Picks lock in {deadlineCountdown || 'less than a minute'}.</strong><p>Deadline: {weekDeadline ? weekDeadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + ` ET (${DEADLINE_HOURS_BEFORE_KICKOFF}h before kickoff)` : `${DEADLINE_HOURS_BEFORE_KICKOFF}h before first kickoff`}.</p></div></>}
               </div>
               <div className="games-list">
@@ -3640,7 +3640,7 @@ function App() {
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. You can change your picks anytime until the week locks — after that they're final.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
               <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess takes it. Identical guesses split the pot." />
-              <Rule number="05" title="Deadline" text={`Picks lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the week's first game (not at kickoff). Late picks are rejected — no exceptions. The exact time and a countdown are always on the Picks page.`} />
+              <Rule number="05" title="Deadline" text={`Picks lock ${DEADLINE_LABEL} before the week's first game (not at kickoff). Late picks are rejected — no exceptions. The exact time and a countdown are always on the Picks page.`} />
             </div>
           </StandardPage>
         )}

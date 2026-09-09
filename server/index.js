@@ -33,7 +33,7 @@ function validateAvatar(value) {
   if (text.length <= 8 && !/[<>"'&]/.test(text)) return { avatar: text };
   return { error: 'Invalid profile picture.' };
 }
-import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
+import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
 import { buildLeagueView } from './publicLeagueView.js';
 import { ModerationError } from './moderation.js';
@@ -617,7 +617,7 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   }
   if (isWeekLocked(submittedWeek)) {
     const deadline = getWeekDeadline(submittedWeek);
-    return response.status(422).json({ error: `Week ${submittedWeek} is locked. Sheets were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff${deadline ? ` (${deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET)` : ''}. See you next week.` });
+    return response.status(422).json({ error: `Week ${submittedWeek} is locked. Sheets were due ${DEADLINE_LABEL} before the first kickoff${deadline ? ` (${deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET)` : ''}. See you next week.` });
   }
   const everyPickValid = weekGames.every((game) => picks[game.id] === game.away || picks[game.id] === game.home);
   if (!everyPickValid || Object.keys(picks).length !== weekGames.length) return response.status(422).json({ error: `Exactly ${weekGames.length} valid picks are required for Week ${submittedWeek}.` });
@@ -1000,7 +1000,7 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
       `Pick one winner for every game (straight up, no spread).`,
       `One point per correct pick. Highest total wins the weekly pot. A game that ends in a TIE counts as no point for anyone.`,
       `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess wins. Identical guesses split the pot.`,
-      `DEADLINE: sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
+      `DEADLINE: sheets lock ${DEADLINE_LABEL} before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
       `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. Standings are the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week. Pays THREE places: ${(league.settings?.seasonPool?.payoutSplit ?? [60, 30, 10]).map((pct, i) => `${['1st', '2nd', '3rd'][i]} gets ${pct}%`).join(', ')} of the pot. Paid out after Week 18.`,
       `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you; a TIE counts as surviving. Last one standing wins.`,
       `CFB PICK-EM POOLS: separate college football pools where players pick every game AGAINST THE SPREAD. A weekly pool needs at least 3 paid players to count. Best ATS record wins that pool's pot; tiebreaker is closest to the total points of the last game.`,
@@ -1819,7 +1819,7 @@ app.post('/api/leagues/:leagueId/props', playerAuth.requirePlayer, asyncRoute(as
   if (!league) return response.status(404).json({ error: 'League not found.' });
   const week = Number(request.body?.week) || getCurrentWeek();
   if (isWeekLocked(week)) {
-    return response.status(422).json({ error: `Week ${week} is locked. Prop picks were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff.` });
+    return response.status(422).json({ error: `Week ${week} is locked. Prop picks were due ${DEADLINE_LABEL} before the first kickoff.` });
   }
   const input = request.body?.picks ?? {};
   const picks = {};
