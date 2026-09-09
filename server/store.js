@@ -174,6 +174,9 @@ export class LeagueStore {
     if (!sheetCols.some((col) => col.name === 'claim_json')) {
       this.db.exec('ALTER TABLE sheets ADD COLUMN claim_json TEXT');
     }
+    if (!sheetCols.some((col) => col.name === 'payment_meta_json')) {
+      this.db.exec('ALTER TABLE sheets ADD COLUMN payment_meta_json TEXT');
+    }
     // Player payment handles (Cash App / Venmo / PayPal) live in payment_json.
     const playerCols = this.db.prepare('PRAGMA table_info(players)').all();
     if (!playerCols.some((col) => col.name === 'payment_json')) {
@@ -271,7 +274,7 @@ export class LeagueStore {
       avatar: row.avatar ?? null,
     }));
     const sheets = this.db.prepare('SELECT * FROM sheets WHERE league_id = ? ORDER BY submitted_at').all(leagueId).map((row) => ({
-      id: row.id, playerId: row.player_id, name: row.name, handle: row.handle, picks: parse(row.picks_json, {}), tiebreaker: row.tiebreaker, paid: Boolean(row.paid), week: row.week, submittedAt: row.submitted_at, paymentClaim: parse(row.claim_json, null),
+      id: row.id, playerId: row.player_id, name: row.name, handle: row.handle, picks: parse(row.picks_json, {}), tiebreaker: row.tiebreaker, paid: Boolean(row.paid), week: row.week, submittedAt: row.submitted_at, paymentClaim: parse(row.claim_json, null), paymentReview: parse(row.payment_meta_json, null),
     }));
     const results = Object.fromEntries(this.db.prepare('SELECT * FROM results WHERE league_id = ? ORDER BY game_id').all(leagueId).map((row) => [row.game_id, { ...parse(row.result_json, {}), verifiedAt: row.verified_at, verifiedBy: row.verified_by }]));
     const recaps = this.db.prepare('SELECT data_json FROM recaps WHERE league_id = ? ORDER BY created_at DESC').all(leagueId).map((row) => parse(row.data_json, {}));
@@ -380,17 +383,18 @@ export class LeagueStore {
     // old sheet (keeping paid status if the old one was already paid).
     let replaced = false;
     if (sheet.playerId) {
-      const existing = this.db.prepare('SELECT id, paid, claim_json FROM sheets WHERE league_id = ? AND player_id = ? AND week = ?').get(leagueId, sheet.playerId, sheet.week);
+      const existing = this.db.prepare('SELECT id, paid, claim_json, payment_meta_json FROM sheets WHERE league_id = ? AND player_id = ? AND week = ?').get(leagueId, sheet.playerId, sheet.week);
       if (existing) {
         sheet.id = existing.id;
         sheet.paymentClaim = parse(existing.claim_json, null);
+        sheet.paymentReview = parse(existing.payment_meta_json, null);
         if (existing.paid) sheet.paid = true;
         replaced = true;
       }
     }
-    this.db.prepare(`INSERT INTO sheets (id, league_id, player_id, name, handle, picks_json, tiebreaker, paid, week, submitted_at, claim_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    this.db.prepare(`INSERT INTO sheets (id, league_id, player_id, name, handle, picks_json, tiebreaker, paid, week, submitted_at, claim_json, payment_meta_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, handle = excluded.handle, picks_json = excluded.picks_json, tiebreaker = excluded.tiebreaker, submitted_at = excluded.submitted_at`)
-      .run(sheet.id, leagueId, sheet.playerId ?? null, sheet.name, sheet.handle ?? '', stringify(sheet.picks), sheet.tiebreaker, sheet.paid ? 1 : 0, sheet.week, sheet.submittedAt, sheet.paymentClaim ? stringify(sheet.paymentClaim) : null);
+      .run(sheet.id, leagueId, sheet.playerId ?? null, sheet.name, sheet.handle ?? '', stringify(sheet.picks), sheet.tiebreaker, sheet.paid ? 1 : 0, sheet.week, sheet.submittedAt, sheet.paymentClaim ? stringify(sheet.paymentClaim) : null, sheet.paymentReview ? stringify(sheet.paymentReview) : null);
     this.writeAudit(leagueId, 'sheet.submitted', `${sheet.name} ${replaced ? 'updated their' : 'locked a'} Week ${sheet.week} sheet`, sheet.playerId ?? sheet.name, { sheetId: sheet.id, replaced });
     return sheet;
   }
@@ -400,8 +404,9 @@ export class LeagueStore {
     if (!row) return null;
     if ('paid' in fields) this.db.prepare('UPDATE sheets SET paid = ? WHERE id = ?').run(fields.paid ? 1 : 0, sheetId);
     if ('paymentClaim' in fields) this.db.prepare('UPDATE sheets SET claim_json = ? WHERE id = ?').run(fields.paymentClaim ? stringify(fields.paymentClaim) : null, sheetId);
+    if ('paymentReview' in fields) this.db.prepare('UPDATE sheets SET payment_meta_json = ? WHERE id = ?').run(fields.paymentReview ? stringify(fields.paymentReview) : null, sheetId);
     const updated = this.db.prepare('SELECT * FROM sheets WHERE id = ?').get(sheetId);
-    return { id: sheetId, playerId: updated.player_id, week: updated.week, name: updated.name, paid: Boolean(updated.paid), paymentClaim: parse(updated.claim_json, null) };
+    return { id: sheetId, playerId: updated.player_id, week: updated.week, name: updated.name, paid: Boolean(updated.paid), paymentClaim: parse(updated.claim_json, null), paymentReview: parse(updated.payment_meta_json, null) };
   }
 
   deleteSheet(leagueId, sheetId, actor = 'commissioner') {
@@ -603,7 +608,8 @@ export class LeagueStore {
         this.db.prepare('INSERT INTO credit_ledger (id, league_id, player_id, amount, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(randomUUID(), leagueId, playerId, -fee, `Week ${row.week} entry fee`, playerId, at);
       }
-      this.db.prepare('UPDATE sheets SET paid = 1 WHERE league_id = ? AND id = ?').run(leagueId, sheetId);
+      const paymentReview = { status: 'confirmed', method: 'credit', note: 'Paid from account credit', reviewedAt: at, reviewedBy: playerId };
+      this.db.prepare('UPDATE sheets SET paid = 1, payment_meta_json = ? WHERE league_id = ? AND id = ?').run(stringify(paymentReview), leagueId, sheetId);
       this.writeAudit(leagueId, 'credit.entry', `-$${fee} debited from ${playerName} for Week ${row.week} sheet (paid from credit)`, playerId, { playerId, amount: -fee, sheetId }, at, { inTransaction: true });
       this.db.exec('COMMIT');
       return { ok: true, balance: balance - fee };

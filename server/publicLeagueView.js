@@ -33,10 +33,10 @@ export function buildLeagueView(league, { playerId = null, isAdmin = false, lock
   if (isAdmin) return { ...view, creditBalances: balances };
   const owns = (item) => Boolean(playerId) && item.playerId === playerId;
   const entryView = (entry, revealed) => {
-    const { handle, paymentClaim, ...safe } = entry;
+    const { handle, paymentClaim, paymentReview, paidVia, ...safe } = entry;
     return {
       ...safe,
-      ...(owns(entry) ? { handle, paymentClaim } : {}),
+      ...(owns(entry) ? { handle, paymentClaim, paymentReview, paidVia } : {}),
       pickCount: Object.keys(entry.picks ?? {}).length,
       ...(!revealed && !owns(entry) ? { picks: {}, tiebreaker: null, picksHidden: true } : {}),
     };

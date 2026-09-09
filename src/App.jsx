@@ -1018,12 +1018,13 @@ function App() {
     finally { setServerBusy(''); }
   };
 
-  const confirmSheetPaid = async (sheetId, nextPaid) => {
+  const confirmSheetPaid = async (sheetId, nextPaid, { method, note } = {}) => {
     if (!(await ensureAdmin())) return;
     setServerBusy(`sheet-paid-${sheetId}`);
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/paid`, { method: 'PATCH', body: JSON.stringify({ paid: nextPaid }) });
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/paid`, { method: 'PATCH', body: JSON.stringify({ paid: nextPaid, method, note }) });
       await loadLeague();
+      notify(nextPaid ? 'Payment confirmed.' : 'Entry marked unpaid. The player status has been corrected.');
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -1644,6 +1645,14 @@ function App() {
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Push setup took too long. Close and reopen the app from your Home Screen, then try again.')), 8000); }),
       ]);
     } finally { clearTimeout(timer); }
+  };
+
+  const correctSheetPayment = async (sheet) => {
+    const note = window.prompt(`Why should ${sheet.name}'s Week ${sheet.week} entry be marked unpaid?`, 'Payment not received');
+    if (note === null) return;
+    if (!note.trim()) { notify('Add a short correction note so this change is traceable.'); return; }
+    if (!window.confirm(`Mark ${sheet.name}'s Week ${sheet.week} entry unpaid?`)) return;
+    await confirmSheetPaid(sheet.id, false, { method: sheet.paymentReview?.method ?? sheet.paymentClaim?.method, note });
   };
   const disableDevicePush = async () => {
     if (!pushSupported) return;
@@ -2974,13 +2983,31 @@ function App() {
                     <p className="muted">Use the Week picker at the top to review another week.</p>
                     {currentWeekSheets.length === 0 ? <p className="muted">No picks submitted for this week yet.</p> : (
                       <div className="payment-center">
-                        {currentWeekSheets.map((sheet) => (
-                          <div className={`payment-row ${sheet.paymentClaim && !sheet.paid ? 'claimed' : ''}`} key={sheet.id}>
-                            <span className="payment-name">{sheet.name}</span>
-                            <span className="payment-status">{sheet.paid ? `✓ Paid${sheet.paidVia === 'credit' ? ' from credit' : ''}` : sheet.paymentClaim ? `⏳ Says paid via ${PAY_METHODS[sheet.paymentClaim.method]?.label ?? sheet.paymentClaim.method ?? 'payment link'}` : 'Not paid yet'}</span>
-                            {sheet.paid ? <span className="payment-confirmed">Paid</span> : <button className="button button-primary" type="button" disabled={serverBusy === `sheet-paid-${sheet.id}`} onClick={() => confirmSheetPaid(sheet.id, true)}>{serverBusy === `sheet-paid-${sheet.id}` ? 'Saving…' : 'Confirm paid'}</button>}
-                          </div>
-                        ))}
+                        {currentWeekSheets.map((sheet) => {
+                          const review = sheet.paymentReview;
+                          const methodLabel = review?.method === 'manual' ? 'manual payment' : (PAY_METHODS[review?.method]?.label ?? review?.method);
+                          const status = review?.status === 'corrected_unpaid'
+                            ? `↩ Correction: ${review.note}`
+                            : sheet.paid
+                              ? review?.method === 'credit'
+                                ? '✓ Paid from account credit'
+                                : review?.method
+                                  ? `✓ Confirmed via ${methodLabel}${review.note ? ` · ${review.note}` : ''}`
+                                  : '⚠ Marked paid manually — no payment method or proof logged'
+                              : sheet.paymentClaim
+                                ? `⏳ Says paid via ${PAY_METHODS[sheet.paymentClaim.method]?.label ?? sheet.paymentClaim.method ?? 'payment link'}`
+                                : 'Not paid yet';
+                          return (
+                            <div className={`payment-row ${sheet.paymentClaim && !sheet.paid ? 'claimed' : ''}`} key={sheet.id}>
+                              <span className="payment-name">{sheet.name}</span>
+                              <span className="payment-status">{status}</span>
+                              {sheet.paid ? <>
+                                <span className="payment-confirmed">{review?.method === 'credit' ? 'Credit' : 'Paid'}</span>
+                                <button className="button button-ghost-dark payment-correct-button" type="button" disabled={serverBusy === `sheet-paid-${sheet.id}`} onClick={() => correctSheetPayment(sheet)}>Mark unpaid</button>
+                              </> : <button className="button button-primary" type="button" disabled={serverBusy === `sheet-paid-${sheet.id}`} onClick={() => confirmSheetPaid(sheet.id, true, { method: sheet.paymentClaim?.method ?? 'manual', note: sheet.paymentClaim ? 'Confirmed player payment claim' : 'Confirmed by commissioner' })}>{serverBusy === `sheet-paid-${sheet.id}` ? 'Saving…' : 'Confirm paid'}</button>}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </section>

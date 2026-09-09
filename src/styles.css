@@ -1529,6 +1529,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .payment-row.claimed .payment-status { color: #ffd700; }
 .payment-missing { font-size: 0.8rem; color: #b06a6a; margin: 8px 0 0; }
 .payment-confirmed { color: var(--neon); font-size: 0.76rem; font-weight: 800; white-space: nowrap; }
+.payment-correct-button { min-height: 44px; padding: 8px 12px; white-space: nowrap; }
 .payment-tracker { display: flex; flex-direction: column; gap: 14px; }
 .payment-tracker-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .payment-tracker-summary > div { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }

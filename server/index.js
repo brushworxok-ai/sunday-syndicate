@@ -2493,9 +2493,27 @@ app.delete('/api/leagues/:leagueId/sheets/:sheetId', auth.requireAdmin, asyncRou
 }));
 
 app.patch('/api/leagues/:leagueId/sheets/:sheetId/paid', auth.requireAdmin, asyncRoute(async (request, response) => {
-  const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paid: Boolean(request.body?.paid) });
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const existing = (league.sheets ?? []).find((sheet) => sheet.id === request.params.sheetId);
+  if (!existing) return response.status(404).json({ error: 'Sheet not found.' });
+  const paid = Boolean(request.body?.paid);
+  const allowedMethods = new Set(['cashapp', 'venmo', 'paypal', 'applecash', 'cash', 'credit', 'manual']);
+  const requestedMethod = String(request.body?.method ?? '').toLowerCase();
+  const method = allowedMethods.has(requestedMethod)
+    ? requestedMethod
+    : existing.paymentReview?.method ?? existing.paymentClaim?.method ?? (paid ? 'manual' : null);
+  const submittedNote = String(request.body?.note ?? '').trim().slice(0, 160);
+  const paymentReview = {
+    status: paid ? 'confirmed' : 'corrected_unpaid',
+    method,
+    note: submittedNote || (paid ? 'Confirmed by commissioner' : 'Marked unpaid by commissioner'),
+    reviewedAt: new Date().toISOString(),
+    reviewedBy: request.actor ?? 'admin',
+  };
+  const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paid, paymentReview });
   if (!updated) return response.status(404).json({ error: 'Sheet not found.' });
-  await store.writeAudit(request.params.leagueId, 'sheet.paid_updated', `${updated.name}'s Week ${updated.week} sheet marked ${updated.paid ? 'PAID' : 'unpaid'}`, 'admin', { sheetId: updated.id });
+  await store.writeAudit(request.params.leagueId, 'sheet.paid_updated', `${updated.name}'s Week ${updated.week} sheet marked ${updated.paid ? 'PAID' : 'unpaid'}`, request.actor ?? 'admin', { sheetId: updated.id, previousPaid: existing.paid, method, note: paymentReview.note });
   if (updated.paid) {
     await saveNotification(request.params.leagueId, { playerId: updated.playerId, kind: 'payment_confirmed', title: `Payment confirmed — Week ${updated.week}`, body: `Commissioner confirmed your Week ${updated.week} entry fee is paid.`, metadata: { week: updated.week } });
   }

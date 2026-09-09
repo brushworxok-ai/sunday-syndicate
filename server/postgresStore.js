@@ -304,6 +304,7 @@ export class PostgresLeagueStore {
           if (draft.sheets[index].paid) sheet.paid = true;
           sheet.paymentClaim = draft.sheets[index].paymentClaim;
           sheet.paidVia = draft.sheets[index].paidVia;
+          sheet.paymentReview = draft.sheets[index].paymentReview;
           draft.sheets.splice(index, 1);
           replaced = true;
         }
@@ -320,7 +321,8 @@ export class PostgresLeagueStore {
       if (!sheet) return null;
       if ('paid' in fields) sheet.paid = Boolean(fields.paid);
       if ('paymentClaim' in fields) sheet.paymentClaim = fields.paymentClaim ? clone(fields.paymentClaim) : null;
-      return { id: sheet.id, playerId: sheet.playerId, week: sheet.week, name: sheet.name, paid: sheet.paid, paymentClaim: clone(sheet.paymentClaim ?? null) };
+      if ('paymentReview' in fields) sheet.paymentReview = fields.paymentReview ? clone(fields.paymentReview) : null;
+      return { id: sheet.id, playerId: sheet.playerId, week: sheet.week, name: sheet.name, paid: sheet.paid, paymentClaim: clone(sheet.paymentClaim ?? null), paymentReview: clone(sheet.paymentReview ?? null), paidVia: sheet.paidVia ?? null };
     });
   }
 
@@ -529,6 +531,8 @@ export class PostgresLeagueStore {
       draft.creditLedger ??= [];
       if (fee > 0) draft.creditLedger.push({ id: randomUUID(), playerId, amount: -fee, reason: `Week ${sheet.week} entry fee`, by: playerId, at });
       sheet.paid = true;
+      sheet.paidVia = 'credit';
+      sheet.paymentReview = { status: 'confirmed', method: 'credit', note: 'Paid from account credit', reviewedAt: at, reviewedBy: playerId };
       draft.auditLog.push(auditEntry('credit.entry', `-$${fee} debited from ${playerName} for Week ${sheet.week} sheet (paid from credit)`, playerId, { playerId, amount: -fee, sheetId }, at));
       return { ok: true, balance: Math.round((balance - fee) * 100) / 100 };
     });
