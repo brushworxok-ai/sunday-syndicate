@@ -1592,6 +1592,61 @@ app.post('/api/leagues/:leagueId/reminders/picks', auth.requireAdmin, asyncRoute
   return response.status(201).json({ week, missing: missing.map((p) => p.name), sent: missing.length, channel: 'in_app_and_push' });
 }));
 
+/* ── Jack's money check: who still owes the entry fee before lock ── */
+app.post('/api/leagues/:leagueId/reminders/payment', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const week = Number(request.body?.week) || getCurrentWeek();
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const fee = Number(league.settings?.entryFee) || 20;
+  const deadline = getWeekDeadline(week);
+  const hoursLeft = deadline ? Math.max(1, Math.round((deadline.getTime() - Date.now()) / 3_600_000)) : null;
+  const dueBy = deadline
+    ? `${deadline.toLocaleString('en-US', { timeZone: 'America/Chicago', weekday: 'short', hour: 'numeric', minute: '2-digit' })} CT`
+    : 'first kickoff';
+
+  /* Three ways a player can be short: nothing in at all, picks in but unpaid,
+     or picks in with enough credit sitting there to cover it in one tap. */
+  const owing = [];
+  for (const player of league.players ?? []) {
+    const sheet = (league.sheets ?? []).find((s) => s.week === week && s.playerId === player.id);
+    const credit = creditBalance(league.creditLedger ?? [], player.id);
+    if (sheet?.paid) continue;
+    if (sheet?.paymentClaim) { owing.push({ player, state: 'awaiting_confirmation', credit }); continue; }
+    if (!sheet) { owing.push({ player, state: credit >= fee ? 'no_picks_funded' : 'no_picks', credit }); continue; }
+    owing.push({ player, state: credit >= fee ? 'unpaid_has_credit' : 'unpaid', credit });
+  }
+
+  const notifiable = owing.filter((row) => row.state !== 'awaiting_confirmation');
+  if (!notifiable.length) {
+    return response.json({ week, sent: 0, owing: [], message: 'Everybody is square for this week. Nothing to chase.' });
+  }
+
+  const bodyFor = ({ state, credit }) => {
+    const clock = hoursLeft ? `~${hoursLeft}h left (locks ${dueBy})` : `Locks ${dueBy}`;
+    if (state === 'unpaid_has_credit') return `You've got $${credit} on your account — one tap covers your $${fee} Week ${week} entry. ${clock}.`;
+    if (state === 'no_picks_funded') return `Your $${credit} is on the books but your Week ${week} picks aren't in. Get them in and the entry pays itself. ${clock}.`;
+    if (state === 'no_picks') return `No picks and no $${fee} in for Week ${week} yet. Jack's counting — don't be the one holding up the pot. ${clock}.`;
+    return `Your Week ${week} picks are in but the $${fee} isn't. Send it and tap "I sent it" so you're locked in the pot. ${clock}.`;
+  };
+
+  for (const row of notifiable) {
+    await saveNotification(request.params.leagueId, {
+      playerId: row.player.id,
+      kind: 'payment_reminder',
+      title: `Week ${week} — $${fee} entry still owed`,
+      body: bodyFor(row),
+      metadata: { week, amount: fee, state: row.state },
+    });
+  }
+  await store.writeAudit(request.params.leagueId, 'payment.reminded', `Jack nudged ${notifiable.length} player(s) about the Week ${week} entry fee`, request.actor ?? 'admin', { week, players: notifiable.map((r) => r.player.name) });
+  return response.status(201).json({
+    week,
+    sent: notifiable.length,
+    owing: owing.map((row) => ({ playerId: row.player.id, name: row.player.name, state: row.state, credit: row.credit, notified: row.state !== 'awaiting_confirmation' })),
+    channel: 'in_app_and_push',
+  });
+}));
+
 /* ── Jack SMS Broadcast: results + roasts to every opted-in player ── */
 app.post('/api/leagues/:leagueId/jack/broadcast', auth.requireAdmin, asyncRoute(async (request, response) => {
   const league = await store.getLeague(request.params.leagueId);

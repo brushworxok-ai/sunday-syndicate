@@ -39,3 +39,4 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
     for (const client of windows) client.postMessage({ type: 'league-notification' });
   }));
+});

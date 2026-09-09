@@ -1546,6 +1546,18 @@ function App() {
     finally { setServerBusy(''); }
   };
 
+  const sendPaymentReminders = async () => {
+    if (!(await ensureAdmin())) return;
+    setServerBusy('pay-reminders');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/reminders/payment`, { method: 'POST', body: JSON.stringify({ week: selectedWeek }) });
+      if (!data.sent) { notify(data.message || 'Everybody is square this week.'); return; }
+      const names = (data.owing ?? []).filter((o) => o.notified).map((o) => o.name.split(' ')[0]);
+      notify(`Jack nudged ${data.sent} player${data.sent === 1 ? '' : 's'}: ${names.join(', ')}.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
   const sendGroupText = async () => {
     if (!(await ensureAdmin())) return;
     const msg = groupTextMsg.trim();
@@ -3818,6 +3830,9 @@ function App() {
             <section className="cashapp-admin-section">
               <div className="panel-heading"><div><span className="eyebrow dark">PAYMENTS</span><h2>Payment Center — {weekLabel}</h2></div></div>
               <p>Who's in, who says they paid, and who's missing before the deadline{deadlineCountdown ? ` (${deadlineCountdown})` : ''}. One tap confirms a claim.</p>
+              <button className="button button-primary chase-money" type="button" disabled={serverBusy === 'pay-reminders'} onClick={sendPaymentReminders}>
+                {serverBusy === 'pay-reminders' ? 'Sending…' : '💸 Jack, chase the money'}
+              </button>
               {(() => {
                 const unpaidSheets = (sheets ?? []).filter((s) => !s.paid && s.week === selectedWeek);
                 const submittedIds = new Set(weekSheets.map((s) => s.playerId).filter(Boolean));
