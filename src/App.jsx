@@ -536,9 +536,11 @@ function App() {
     return map;
   }, [currentGames, results, liveByGame]);
 
+  const paidWeekSheets = useMemo(() => weekSheets.filter((sheet) => sheet.paid), [weekSheets]);
+
   // "If games ended now" standings for the selected week
   const liveStandings = useMemo(() => {
-    const rows = weekSheets.map((sheet) => {
+    const rows = paidWeekSheets.map((sheet) => {
       let locked = 0; let leading = 0;
       for (const game of currentGames) {
         const prov = liveProvisional[game.id];
@@ -548,7 +550,7 @@ function App() {
       return { id: sheet.id, name: sheet.name, playerId: sheet.playerId, locked, leading, projected: locked + leading, tiebreaker: sheet.tiebreaker };
     });
     return rows.sort((a, b) => b.projected - a.projected || b.locked - a.locked || a.name.localeCompare(b.name));
-  }, [weekSheets, currentGames, liveProvisional]);
+  }, [paidWeekSheets, currentGames, liveProvisional]);
   // Count only finals for the games actually on this week's slate — results from
   // other weeks (e.g. leftover demo data) must not inflate the "X of Y final" label.
   const completedGames = currentGames.filter((game) => results[game.id]?.winner).length;
@@ -563,24 +565,24 @@ function App() {
   // Tiebreaker: closest to the tiebreaker game's actual total WITHOUT going
   // over — going over busts. Until that game's score is final, ties stand.
   const weekTiebreaker = useMemo(() => getTiebreakerActual(currentGames, results), [currentGames, results]);
-  const leaderboard = useMemo(() => weekSheets
+  const leaderboard = useMemo(() => paidWeekSheets
     .map((sheet) => ({
       ...sheet,
       score: calcScore(sheet),
       tiebreakerBusted: tiebreakerBusted(sheet.tiebreaker, weekTiebreaker.total),
     }))
     .sort((a, b) => b.score - a.score
-      || tiebreakerRank(a.tiebreaker, weekTiebreaker.total) - tiebreakerRank(b.tiebreaker, weekTiebreaker.total)), [weekSheets, results, weekTiebreaker]);
+      || tiebreakerRank(a.tiebreaker, weekTiebreaker.total) - tiebreakerRank(b.tiebreaker, weekTiebreaker.total)), [paidWeekSheets, results, weekTiebreaker]);
 
   // Exact clinch / alive / eliminated math for the current week
   const winPathsByEntry = useMemo(() => {
-    if (!weekSheets.length) return {};
+    if (!paidWeekSheets.length) return {};
     const snapshot = buildWinningPaths(
-      { players: serverLeague?.players ?? DEMO_LEAGUE.players, sheets: weekSheets, results },
+      { players: serverLeague?.players ?? DEMO_LEAGUE.players, sheets: paidWeekSheets, results },
       { week: selectedWeek, games: currentGames },
     );
     return Object.fromEntries(snapshot.paths.map((p) => [p.entryId ?? p.playerId ?? p.name, p]));
-  }, [weekSheets, results, selectedWeek, currentGames, serverLeague]);
+  }, [paidWeekSheets, results, selectedWeek, currentGames, serverLeague]);
 
   // Season-long stats: weekly wins, totals, earnings, payout status
   const seasonStats = useMemo(() => {
@@ -588,7 +590,7 @@ function App() {
     const players = new Map();
     const weekSummaries = [];
     for (const week of weeks) {
-      const ws = sheets.filter((s) => s.week === week);
+      const ws = sheets.filter((s) => s.week === week && s.paid);
       const games = getGames(week);
       const complete = games.length > 0 && games.every((g) => results[g.id]?.winner);
       const tbTotal = getTiebreakerActual(games, results).total;
@@ -1013,7 +1015,11 @@ function App() {
     try {
       const result = await apiRequest(`/api/leagues/${LEAGUE_ID}/deposits/${depositId}/${action}`, { method: 'POST', body: JSON.stringify({}) });
       await loadLeague();
-      notify(action === 'confirm' ? `Confirmed — ${result.deposit.playerName} now has $${result.balance} in credit.` : `Marked ${result.deposit.playerName}'s $${result.deposit.amount} as not received.`);
+      notify(action === 'confirm'
+        ? result.appliedToSheet
+          ? `Confirmed — $${result.deposit.amount} paid ${result.deposit.playerName}'s Week ${selectedWeek} entry. Credit: $${result.balance}.`
+          : `Confirmed — ${result.deposit.playerName} now has $${result.balance} in credit.`
+        : `Marked ${result.deposit.playerName}'s $${result.deposit.amount} as not received.`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -3107,7 +3113,7 @@ function App() {
                 </div>
               </section>
             )}
-            {weekSheets.length ? <div className="standings-table">
+            {paidWeekSheets.length ? <div className="standings-table">
               {weekTiebreaker.game && (
                 <p className="tb-status">
                   ★ Tiebreaker: total points in {weekTiebreaker.game.away} @ {weekTiebreaker.game.home} — closest without going over wins ties.
@@ -3124,7 +3130,7 @@ function App() {
                   <b>{entry.score}<small> / {completedGames || '—'}</small></b>
                 </div>;
               })}
-            </div> : <EmptyState icon="↗" title="No standings yet" text="Locked entries will appear here as soon as the league joins." action="Make picks" onAction={() => setView('picks')} />}
+            </div> : <EmptyState icon="↗" title="No paid entries yet" text="Standings include confirmed, paid entries only. Submit your picks, then pay your entry to join the board." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}
 
