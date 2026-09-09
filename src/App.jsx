@@ -1997,7 +1997,7 @@ function App() {
       {showOnboarding && (() => {
         const slides = [
           { icon: '🏈', title: 'Welcome to 405 BADGUYS', body: 'A pick’em league for the crew. Every week you call the winner of every NFL game — straight up, no spreads. Most right wins the pot.' },
-          { icon: '💰', title: 'Pick. Pay. Cash out.', body: 'Get your picks in early — they lock 5 hours before the week’s first game (the Picks page shows the exact time). Pay through Cash App or your credit balance, then watch the live leaderboard. Win the week, the pot hits your balance automatically.' },
+          { icon: '💰', title: 'Pick. Pay. Cash out.', body: `Get your picks in early — they lock ${DEADLINE_LABEL} before the week’s first game (the Picks page shows the exact time). Pay through Cash App or your credit balance, then watch the live leaderboard. Win the week, the pot hits your balance automatically.` },
           { icon: '🔥', title: 'Meet Jack', body: 'Jack is your AI commissioner. He tracks the standings, runs the recaps, and talks all the trash — tap the 🔊 to hear him. There’s also a season-long pool, survivor, props, and college pick’em when you’re ready.' },
         ];
         const last = onboardStep >= slides.length - 1;
