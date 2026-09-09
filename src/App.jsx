@@ -46,6 +46,7 @@ const MORE_ITEMS = [
   ['props',    'Prop Picks',       '🎯', 'Passing, rushing, first TD & more'],
   ['cfb',      'College FB',       '🏟️', 'CFB rankings, games & pick-em pools'],
   ['payments', 'My Payments',      '💰', 'Payment history & balance'],
+  ['payment-center', 'Payment Center', '✓', 'Confirm player payments'],
   ['notifs',   'Notifications',    '🔔', 'Reminders, payouts & messages'],
   ['entries',  "Who's In",         '📋', 'Who has picks in & who paid'],
   ['players',  'My Profile',       '👤', 'Your pic, the crew & settings'],
@@ -535,9 +536,11 @@ function App() {
     return map;
   }, [currentGames, results, liveByGame]);
 
+  const paidWeekSheets = useMemo(() => weekSheets.filter((sheet) => sheet.paid), [weekSheets]);
+
   // "If games ended now" standings for the selected week
   const liveStandings = useMemo(() => {
-    const rows = weekSheets.map((sheet) => {
+    const rows = paidWeekSheets.map((sheet) => {
       let locked = 0; let leading = 0;
       for (const game of currentGames) {
         const prov = liveProvisional[game.id];
@@ -547,7 +550,7 @@ function App() {
       return { id: sheet.id, name: sheet.name, playerId: sheet.playerId, locked, leading, projected: locked + leading, tiebreaker: sheet.tiebreaker };
     });
     return rows.sort((a, b) => b.projected - a.projected || b.locked - a.locked || a.name.localeCompare(b.name));
-  }, [weekSheets, currentGames, liveProvisional]);
+  }, [paidWeekSheets, currentGames, liveProvisional]);
   // Count only finals for the games actually on this week's slate — results from
   // other weeks (e.g. leftover demo data) must not inflate the "X of Y final" label.
   const completedGames = currentGames.filter((game) => results[game.id]?.winner).length;
@@ -562,24 +565,24 @@ function App() {
   // Tiebreaker: closest to the tiebreaker game's actual total WITHOUT going
   // over — going over busts. Until that game's score is final, ties stand.
   const weekTiebreaker = useMemo(() => getTiebreakerActual(currentGames, results), [currentGames, results]);
-  const leaderboard = useMemo(() => weekSheets
+  const leaderboard = useMemo(() => paidWeekSheets
     .map((sheet) => ({
       ...sheet,
       score: calcScore(sheet),
       tiebreakerBusted: tiebreakerBusted(sheet.tiebreaker, weekTiebreaker.total),
     }))
     .sort((a, b) => b.score - a.score
-      || tiebreakerRank(a.tiebreaker, weekTiebreaker.total) - tiebreakerRank(b.tiebreaker, weekTiebreaker.total)), [weekSheets, results, weekTiebreaker]);
+      || tiebreakerRank(a.tiebreaker, weekTiebreaker.total) - tiebreakerRank(b.tiebreaker, weekTiebreaker.total)), [paidWeekSheets, results, weekTiebreaker]);
 
   // Exact clinch / alive / eliminated math for the current week
   const winPathsByEntry = useMemo(() => {
-    if (!weekSheets.length) return {};
+    if (!paidWeekSheets.length) return {};
     const snapshot = buildWinningPaths(
-      { players: serverLeague?.players ?? DEMO_LEAGUE.players, sheets: weekSheets, results },
+      { players: serverLeague?.players ?? DEMO_LEAGUE.players, sheets: paidWeekSheets, results },
       { week: selectedWeek, games: currentGames },
     );
     return Object.fromEntries(snapshot.paths.map((p) => [p.entryId ?? p.playerId ?? p.name, p]));
-  }, [weekSheets, results, selectedWeek, currentGames, serverLeague]);
+  }, [paidWeekSheets, results, selectedWeek, currentGames, serverLeague]);
 
   // Season-long stats: weekly wins, totals, earnings, payout status
   const seasonStats = useMemo(() => {
@@ -587,7 +590,7 @@ function App() {
     const players = new Map();
     const weekSummaries = [];
     for (const week of weeks) {
-      const ws = sheets.filter((s) => s.week === week);
+      const ws = sheets.filter((s) => s.week === week && s.paid);
       const games = getGames(week);
       const complete = games.length > 0 && games.every((g) => results[g.id]?.winner);
       const tbTotal = getTiebreakerActual(games, results).total;
@@ -1012,17 +1015,22 @@ function App() {
     try {
       const result = await apiRequest(`/api/leagues/${LEAGUE_ID}/deposits/${depositId}/${action}`, { method: 'POST', body: JSON.stringify({}) });
       await loadLeague();
-      notify(action === 'confirm' ? `Confirmed — ${result.deposit.playerName} now has $${result.balance} in credit.` : `Marked ${result.deposit.playerName}'s $${result.deposit.amount} as not received.`);
+      notify(action === 'confirm'
+        ? result.appliedToSheet
+          ? `Confirmed — $${result.deposit.amount} paid ${result.deposit.playerName}'s Week ${selectedWeek} entry. Credit: $${result.balance}.`
+          : `Confirmed — ${result.deposit.playerName} now has $${result.balance} in credit.`
+        : `Marked ${result.deposit.playerName}'s $${result.deposit.amount} as not received.`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
 
-  const confirmSheetPaid = async (sheetId, nextPaid) => {
+  const confirmSheetPaid = async (sheetId, nextPaid, { method, note } = {}) => {
     if (!(await ensureAdmin())) return;
     setServerBusy(`sheet-paid-${sheetId}`);
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/paid`, { method: 'PATCH', body: JSON.stringify({ paid: nextPaid }) });
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/paid`, { method: 'PATCH', body: JSON.stringify({ paid: nextPaid, method, note }) });
       await loadLeague();
+      notify(nextPaid ? 'Payment confirmed.' : 'Entry marked unpaid. The player status has been corrected.');
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -1645,11 +1653,24 @@ function App() {
   const devicePushRegistration = async () => {
     let timer;
     try {
+      // Register on the button tap as well as on page load. iOS can suspend the
+      // background registration while a standalone app is opening, leaving
+      // serviceWorker.ready pending even though this device supports push.
+      const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      if (registration.active) return registration;
       return await Promise.race([
         navigator.serviceWorker.ready,
-        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Notification setup is not ready. Reload the app and try again.')), 8000); }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Push setup took too long. Close and reopen the app from your Home Screen, then try again.')), 8000); }),
       ]);
     } finally { clearTimeout(timer); }
+  };
+
+  const correctSheetPayment = async (sheet) => {
+    const note = window.prompt(`Why should ${sheet.name}'s Week ${sheet.week} entry be marked unpaid?`, 'Payment not received');
+    if (note === null) return;
+    if (!note.trim()) { notify('Add a short correction note so this change is traceable.'); return; }
+    if (!window.confirm(`Mark ${sheet.name}'s Week ${sheet.week} entry unpaid?`)) return;
+    await confirmSheetPaid(sheet.id, false, { method: sheet.paymentReview?.method ?? sheet.paymentClaim?.method, note });
   };
   const disableDevicePush = async () => {
     if (!pushSupported) return;
@@ -1935,7 +1956,7 @@ function App() {
   };
 
   // Determine active tab (map sub-views to parent)
-  const activeTab = ['live', 'stats', 'season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin', 'payments', 'notifs'].includes(view) ? 'more' : view;
+  const activeTab = ['live', 'stats', 'season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin', 'payments', 'payment-center', 'notifs'].includes(view) ? 'more' : view;
 
   return (
     <div className="app-shell">
@@ -1981,7 +2002,7 @@ function App() {
               <button className="more-menu-close" type="button" onClick={() => setShowMore(false)}>×</button>
             </div>
             <div className="more-menu-items">
-              {MORE_ITEMS.filter(([id]) => isComm || !['demo', 'ai'].includes(id)).map(([id, label, icon, desc]) => (
+              {MORE_ITEMS.filter(([id]) => isComm || !['demo', 'ai', 'payment-center'].includes(id)).map(([id, label, icon, desc]) => (
                 <button className="more-menu-item" type="button" key={id} onClick={() => { setView(id); setShowMore(false); }}>
                   <span className="menu-icon">{icon}</span>
                   {label}{id === 'notifs' && unreadNotifs > 0 && <i className="menu-badge">{unreadNotifs > 9 ? '9+' : unreadNotifs}</i>}
@@ -2431,10 +2452,15 @@ function App() {
         )}
 
         {view === 'season' && (
-          <StandardPage eyebrow={`${SEASON} SEASON`} title="Season standings" subtitle="Weekly crowns, cumulative accuracy, and who has actually been paid.">
+          <StandardPage eyebrow={`${SEASON} SEASON`} title="Season Pool & standings" subtitle="Enter the one-time season pool, see who is paid in, and follow the eligible leaderboard.">
             {(() => {
               const pool = serverLeague?.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
               const paidSet = new Set(pool.paidPlayerIds ?? []);
+              const seasonEntrants = proofLeague.players.filter((player) => paidSet.has(player.id));
+              const seasonLeaderboard = seasonEntrants.map((player) => {
+                const stats = seasonStats.table.find((row) => row.key === player.id);
+                return stats ?? { key: player.id, name: player.name, weeklyWins: 0, totalCorrect: 0, totalPicks: 0, winPct: 0, earnings: 0 };
+              }).sort((a, b) => b.totalCorrect - a.totalCorrect || b.winPct - a.winPct || a.name.localeCompare(b.name));
               const seasonPot = paidSet.size * (pool.entryFee ?? 25);
               const split = Array.isArray(pool.payoutSplit) && pool.payoutSplit.length === 3 ? pool.payoutSplit : [60, 30, 10];
               const seasonPaidOut = (serverLeague?.payouts ?? []).some((p) => p.pool === 'season');
@@ -2445,7 +2471,8 @@ function App() {
               const third = Math.floor(seasonPot * split[2] / 100);
               const first = seasonPot - second - third;
               const payouts = [first, second, third];
-              return <section className="season-pool-card">
+              return <>
+              <section className="season-pool-card">
                 <div className="season-pool-main">
                   <span className="eyebrow dark">SEASON POOL · ${pool.entryFee ?? 25}/PLAYER · PAYS THREE PLACES</span>
                   <div className="season-pool-figures">
@@ -2454,7 +2481,7 @@ function App() {
                   </div>
                   <div className="season-podium">
                     {payouts.map((amount, index) => {
-                      const row = seasonStats.table[index];
+                      const row = seasonLeaderboard[index];
                       return <div className={`season-podium-place p${index + 1}`} key={places[index]}>
                         <span className="podium-medal">{medals[index]}</span>
                         <small>{places[index]} · {split[index]}%</small>
@@ -2465,17 +2492,28 @@ function App() {
                   </div>
                   <p>Most total correct picks combined across all 18 weeks sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three cash out.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
                 </div>
-                {playerSession.authenticated && !isComm && (() => {
+                {playerSession.authenticated && (() => {
                   const entered = paidSet.has(playerSession.playerId);
                   const fee = Number(pool.entryFee) || 25;
                   return <div className="season-pool-player-action">
-                    <strong>{entered ? '✅ You are entered in the season pool' : `Join the season pool · $${fee}`}</strong>
-                    <small>{entered ? 'Your full-season record is now eligible for the three-place payout.' : `Use your confirmed credit balance. You have $${myCredit}.`}</small>
-                    {!entered && <button className="button button-primary" type="button" disabled={myCredit < fee || serverBusy === 'season-credit-pay'} onClick={paySeasonWithCredit}>
-                      {serverBusy === 'season-credit-pay' ? 'Joining…' : myCredit >= fee ? `Join with $${fee} credit` : `Add $${fee - myCredit} more credit`}
+                    <span className="eyebrow dark">YOUR SEASON ENTRY</span>
+                    <strong>{entered ? '✅ You are entered in the season pool' : `Enter the season pool · $${fee}`}</strong>
+                    <small>{entered ? `$${fee} paid in · your full-season record is eligible for the three-place payout.` : `One-time $${fee} entry. You have $${myCredit} in credit.`}</small>
+                    {!entered && <button className="button button-primary" type="button" disabled={serverBusy === 'season-credit-pay'} onClick={myCredit >= fee ? paySeasonWithCredit : () => setView('payments')}>
+                      {serverBusy === 'season-credit-pay' ? 'Joining…' : myCredit >= fee ? `Pay $${fee} from credit` : `Add $${fee - myCredit} credit to enter`}
                     </button>}
                   </div>;
                 })()}
+                {!playerSession.authenticated && <div className="season-pool-player-action"><span className="eyebrow dark">YOUR SEASON ENTRY</span><strong>Want in for $${pool.entryFee ?? 25}?</strong><small>Sign in, add credit, then enter in one tap.</small><button className="button button-primary" type="button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in to enter</button></div>}
+                <aside className="season-pool-entry">
+                  <span className="eyebrow dark">WHO'S IN</span>
+                  <h2>{seasonEntrants.length} {seasonEntrants.length === 1 ? 'player' : 'players'} entered</h2>
+                  {seasonEntrants.length ? (
+                    <div className="season-entrants" aria-label="Season pool entrants">
+                      {seasonEntrants.map((player) => <div className="season-entrant" key={player.id}><PlayerAvatar player={player} size={32} /><span>{player.name}</span><b>Paid</b></div>)}
+                    </div>
+                  ) : <p className="muted">No entries yet — be the first one in.</p>}
+                </aside>
                 {isComm && <div className="season-pool-admin">
                   <small>SEASON ENTRIES PAID</small>
                   {proofLeague.players.map((player) => (
@@ -2501,7 +2539,18 @@ function App() {
                     }}>{serverBusy === 'season-split' ? 'Saving…' : 'Save split'}</button>
                   </div>
                 </div>}
-              </section>;
+              </section>
+              <section className="season-pool-leaderboard" aria-labelledby="season-pool-leaderboard-title">
+                <div className="proof-heading"><div><span className="proof-step">SEASON POOL</span><h2 id="season-pool-leaderboard-title">Eligible leaderboard</h2></div><StatusPill state="pass">{seasonLeaderboard.length} paid in</StatusPill></div>
+                <p className="muted">Only players who paid the season entry are ranked here. Weekly picks count after their weekly entry is paid.</p>
+                {seasonLeaderboard.length ? <div className="season-table season-pool-table">
+                  <div className="season-head"><span>Rank · Player</span><span>Wins</span><span>Correct</span><span>Acc %</span><span>Season entry</span></div>
+                  {seasonLeaderboard.map((row, index) => <div className={`season-row ${index === 0 && row.totalCorrect > 0 ? 'leader' : ''}`} key={row.key}>
+                    <strong>#{index + 1} · {row.name}</strong><span>{row.weeklyWins}</span><span>{row.totalCorrect}<small>/{row.totalPicks}</small></span><span>{row.winPct}%</span><b>Paid</b>
+                  </div>)}
+                </div> : <p className="season-pool-empty">No one has paid into the season pool yet. The first paid entry will appear here.</p>}
+              </section>
+              </>;
             })()}
             {seasonStats.table.length ? <>
               <div className="season-table">
@@ -2945,6 +2994,92 @@ function App() {
           </StandardPage>
         )}
 
+        {view === 'payment-center' && (
+          <StandardPage eyebrow="COMMISSIONER" title="Payment Center" subtitle="Review player entries, payment claims, and account funding in one place.">
+            {!isComm ? (
+              <EmptyState icon="🔒" title="Commissioner sign-in required" text="Sign in as commissioner to review and confirm player payments." action="Commissioner sign-in" onAction={() => setView('admin')} />
+            ) : (() => {
+              const currentWeekSheets = weekSheets;
+              const paidSheets = currentWeekSheets.filter((sheet) => sheet.paid);
+              const pendingSheets = currentWeekSheets.filter((sheet) => !sheet.paid);
+              const deposits = pendingDeposits(serverLeague?.settings?.deposits);
+              const ledger = [...(serverLeague?.creditLedger ?? [])].reverse().slice(0, 20);
+              const cfbEntries = Object.values(cfbPool?.entries ?? {});
+              return (
+                <div className="payment-tracker">
+                  <section className="payment-tracker-summary" aria-label="Payment overview">
+                    <div><span>Paid entries</span><strong>{paidSheets.length}/{currentWeekSheets.length}</strong></div>
+                    <div><span>Waiting on you</span><strong className={deposits.length + pendingSheets.filter((sheet) => sheet.paymentClaim).length > 0 ? 'warn' : ''}>{deposits.length + pendingSheets.filter((sheet) => sheet.paymentClaim).length}</strong></div>
+                    <div><span>Credit on books</span><strong>${Object.values(serverLeague?.creditBalances ?? {}).reduce((sum, amount) => sum + Number(amount || 0), 0)}</strong></div>
+                  </section>
+
+                  <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">NFL {weekLabel.toUpperCase()}</span><h2>Weekly entry payments</h2></div><button className="text-button" type="button" onClick={() => setView('picks')}>View picks →</button></div>
+                    <p className="muted">Use the Week picker at the top to review another week.</p>
+                    {currentWeekSheets.length === 0 ? <p className="muted">No picks submitted for this week yet.</p> : (
+                      <div className="payment-center">
+                        {currentWeekSheets.map((sheet) => {
+                          const review = sheet.paymentReview;
+                          const methodLabel = review?.method === 'manual' ? 'manual payment' : (PAY_METHODS[review?.method]?.label ?? review?.method);
+                          const status = review?.status === 'corrected_unpaid'
+                            ? `↩ Correction: ${review.note}`
+                            : sheet.paid
+                              ? review?.method === 'credit'
+                                ? '✓ Paid from account credit'
+                                : review?.method
+                                  ? `✓ Confirmed via ${methodLabel}${review.note ? ` · ${review.note}` : ''}`
+                                  : '⚠ Marked paid manually — no payment method or proof logged'
+                              : sheet.paymentClaim
+                                ? `⏳ Says paid via ${PAY_METHODS[sheet.paymentClaim.method]?.label ?? sheet.paymentClaim.method ?? 'payment link'}`
+                                : 'Not paid yet';
+                          return (
+                            <div className={`payment-row ${sheet.paymentClaim && !sheet.paid ? 'claimed' : ''}`} key={sheet.id}>
+                              <span className="payment-name">{sheet.name}</span>
+                              <span className="payment-status">{status}</span>
+                              {sheet.paid ? <>
+                                <span className="payment-confirmed">{review?.method === 'credit' ? 'Credit' : 'Paid'}</span>
+                                <button className="button button-ghost-dark payment-correct-button" type="button" disabled={serverBusy === `sheet-paid-${sheet.id}`} onClick={() => correctSheetPayment(sheet)}>Mark unpaid</button>
+                              </> : <button className="button button-primary" type="button" disabled={serverBusy === `sheet-paid-${sheet.id}`} onClick={() => confirmSheetPaid(sheet.id, true, { method: sheet.paymentClaim?.method ?? 'manual', note: sheet.paymentClaim ? 'Confirmed player payment claim' : 'Confirmed by commissioner' })}>{serverBusy === `sheet-paid-${sheet.id}` ? 'Saving…' : 'Confirm paid'}</button>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">ACCOUNT FUNDING</span><h2>Credit deposits</h2></div></div>
+                    {deposits.length === 0 ? <p className="muted">No account-funding payments are waiting for confirmation.</p> : (
+                      <div className="payment-center">
+                        {deposits.map((deposit) => (
+                          <div className="payment-row claimed" key={deposit.id}>
+                            <span className="payment-name">{deposit.playerName}</span>
+                            <span className="payment-status">⏳ ${deposit.amount} via {PAY_METHODS[deposit.method]?.label ?? deposit.method}</span>
+                            <span className="deposit-actions">
+                              <button className="button button-primary" type="button" disabled={serverBusy === `deposit-${deposit.id}`} onClick={() => resolveDeposit(deposit.id, 'confirm')}>{serverBusy === `deposit-${deposit.id}` ? 'Saving…' : `Add $${deposit.amount}`}</button>
+                              <button className="link-button" type="button" disabled={serverBusy === `deposit-${deposit.id}`} onClick={() => resolveDeposit(deposit.id, 'reject')}>Not received</button>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">COLLEGE</span><h2>College Pick-Em</h2></div>{cfbPool && <button className="text-button" type="button" onClick={() => setView('cfb')}>Open College FB →</button>}</div>
+                    {cfbPool ? <p className="muted">Week {cfbPool.week}: {cfbEntries.filter((entry) => entry.paid).length}/{cfbEntries.length} entered players paid. Confirm individual College payments on the College FB page.</p> : <p className="muted">No College Pick-Em pool is open for the selected week.</p>}
+                  </section>
+
+                  <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">LEDGER</span><h2>Recent credit activity</h2></div></div>
+                    {ledger.length === 0 ? <p className="muted">No credit activity yet.</p> : <div className="credit-ledger-rows">{ledger.map((entry) => <div className="credit-ledger-row" key={entry.id}><span className={`credit-ledger-amount ${entry.amount > 0 ? 'positive' : 'negative'}`}>{entry.amount > 0 ? '+' : '−'}${Math.abs(entry.amount)}</span><span className="credit-ledger-name">{(serverLeague?.players ?? []).find((player) => player.id === entry.playerId)?.name ?? 'Player'}</span><span className="credit-ledger-reason">{entry.reason}</span><span className="credit-ledger-date">{new Date(entry.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div>)}</div>}
+                  </section>
+                </div>
+              );
+            })()}
+          </StandardPage>
+        )}
+
         {view === 'notifs' && (
           <StandardPage eyebrow="ACTIVITY" title="Notifications" subtitle="Deadline reminders, payouts, Jack messages, and other league events.">
             {!playerSession.authenticated ? (
@@ -3007,7 +3142,7 @@ function App() {
                 </div>
               </section>
             )}
-            {weekSheets.length ? <div className="standings-table">
+            {paidWeekSheets.length ? <div className="standings-table">
               {weekTiebreaker.game && (
                 <p className="tb-status">
                   ★ Tiebreaker: total points in {weekTiebreaker.game.away} @ {weekTiebreaker.game.home} — closest without going over wins ties.
@@ -3024,7 +3159,7 @@ function App() {
                   <b>{entry.score}<small> / {completedGames || '—'}</small></b>
                 </div>;
               })}
-            </div> : <EmptyState icon="↗" title="No standings yet" text="Locked entries will appear here as soon as the league joins." action="Make picks" onAction={() => setView('picks')} />}
+            </div> : <EmptyState icon="↗" title="No paid entries yet" text="Standings include confirmed, paid entries only. Submit your picks, then pay your entry to join the board." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}
 
@@ -3658,6 +3793,10 @@ function App() {
         {view === 'admin' && isComm && (
           <StandardPage eyebrow="COMMISSIONER ACCESS" title="League operations" subtitle="Verify scores, generate and approve grounded recaps, send consent-aware broadcasts, and inspect delivery outcomes from one durable workflow.">
             <button className="button button-ghost-dark" type="button" onClick={logoutAdmin} disabled={serverBusy === 'admin-logout'}>{serverBusy === 'admin-logout' ? 'Signing out…' : 'Sign out commissioner'}</button>
+            <section className="admin-payment-shortcut">
+              <div><span className="eyebrow dark">MONEY</span><h2>Track player payments</h2><p>Confirm weekly entries, account funding, and review the credit ledger.</p></div>
+              <button className="button button-primary" type="button" onClick={() => navigate('payment-center')}>Open Payment Center</button>
+            </section>
             {(() => {
               const players = (proofLeague.players ?? []).length;
               const picksIn = weekSheets.length;

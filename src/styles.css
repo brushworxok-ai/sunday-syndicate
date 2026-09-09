@@ -536,8 +536,8 @@ main { padding: 24px 0 40px; }
 
 /* ── Footer ── */
 footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-family: 'DM Mono'; font-size: 11px; text-transform: uppercase; margin-bottom: 80px; }
-.toast { position: fixed; z-index: 300; left: 50%; transform: translateX(-50%); top: calc(72px + env(safe-area-inset-top, 0px)); max-width: min(420px, calc(100vw - 24px)); width: max-content; padding: 14px 18px; background: var(--neon); color: #0a0a12; border-radius: 10px; box-shadow: 0 10px 40px rgba(57,255,20,.2); font-size: 12px; font-weight: 700; animation: toast-in .2s ease both; }
-@keyframes toast-in { from { transform: translateY(10px); opacity: 0; } }
+.toast { position: fixed; z-index: 300; left: 50%; transform: translateX(-50%); top: calc(72px + env(safe-area-inset-top, 0px)); width: min(420px, calc(100vw - 24px)); padding: 14px 18px; background: var(--neon); color: #0a0a12; border-radius: 10px; box-shadow: 0 10px 40px rgba(57,255,20,.2); font-size: 12px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; animation: toast-in .2s ease both; }
+@keyframes toast-in { from { transform: translateX(-50%) translateY(10px); opacity: 0; } to { transform: translateX(-50%) translateY(0); opacity: 1; } }
 
 /* ── Responsive ── */
 @media (max-width: 900px) {
@@ -937,6 +937,7 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .injury-team-head img { width: 24px; height: 24px; object-fit: contain; }
 .injury-team-head strong { font-size: 0.82rem; color: #fff; }
 .injury-player { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 0.72rem; color: rgba(255,255,255,0.8); }
+.injury-player > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .injury-player small { color: rgba(255,255,255,0.45); margin-left: 2px; }
 .injury-status { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.58rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
 .injury-out { background: rgba(255,68,68,0.2); color: #ff6b6b; }
@@ -1028,6 +1029,13 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .season-pool-admin { flex: 1 1 180px; padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.08); background: rgba(0, 0, 0, 0.25); }
 .season-pool-admin > small { display: block; font-size: 0.6rem; letter-spacing: 0.08em; color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; }
 .check-row.compact { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.8rem; }
+.season-pool-entry { flex: 1 1 240px; min-width: 0; padding: 14px; border: 1px solid rgba(255,215,0,.26); border-radius: 12px; background: rgba(0,0,0,.22); }
+.season-pool-entry h2 { margin: 4px 0 10px; font-size: 1.05rem; }
+.season-pool-entry > .muted { margin: 0; font-size: .82rem; }
+.season-entrants { display: flex; flex-direction: column; gap: 6px; max-height: 15rem; overflow-y: auto; }
+.season-entrant { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 7px 8px; border-radius: 9px; background: rgba(255,255,255,.04); }
+.season-entrant > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; font-weight: 700; }
+.season-entrant b { color: var(--neon); font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; }
 
 /* ── NFL Wire ── */
 .nfl-wire .wire-updated { color: rgba(255, 255, 255, 0.4); font-size: 0.68rem; }
@@ -1092,7 +1100,7 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .more-menu-item:active { transform: scale(.98); }
 
 /* Toast entrance with bounce */
-@keyframes toast-in { from { transform: translateY(16px) scale(.95); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
+@keyframes toast-in { from { transform: translateX(-50%) translateY(16px) scale(.95); opacity: 0; } to { transform: translateX(-50%) translateY(0) scale(1); opacity: 1; } }
 
 /* Jack FAB breathing glow */
 /* FAB breathing animation removed (motion budget) */
@@ -1478,10 +1486,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cfb-admin-bar { display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
 .cfb-empty.pool-hint { padding: 28px 20px; }
 
-.season-pool-player-action { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 14px; border: 1px solid rgba(57,255,20,.35); border-radius: 12px; background: rgba(57,255,20,.06); }
+.season-pool-player-action { flex: 1 1 240px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 0; padding: 14px; border: 1px solid rgba(57,255,20,.35); border-radius: 12px; background: rgba(57,255,20,.06); }
 .season-pool-player-action strong { color: #fff; }
 .season-pool-player-action small { color: var(--muted); line-height: 1.45; }
 .season-pool-player-action .button { min-height: 44px; }
+.season-pool-leaderboard { margin: 0 0 24px; }
+.season-pool-leaderboard > .muted { margin: 4px 0 12px; }
+.season-pool-table { margin-bottom: 0; }
+.season-pool-empty { margin: 0; padding: 16px; border: 1px dashed rgba(255, 215, 0, .35); border-radius: 12px; color: var(--muted); }
 
 @media (max-width: 560px) {
   .cfb-board-tb { display: none; }
@@ -1520,6 +1532,30 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .payment-status { flex: 1; color: #999; font-size: 0.76rem; min-width: 8rem; }
 .payment-row.claimed .payment-status { color: #ffd700; }
 .payment-missing { font-size: 0.8rem; color: #b06a6a; margin: 8px 0 0; }
+.payment-confirmed { color: var(--neon); font-size: 0.76rem; font-weight: 800; white-space: nowrap; }
+.payment-correct-button { min-height: 44px; padding: 8px 12px; white-space: nowrap; }
+.payment-tracker { display: flex; flex-direction: column; gap: 14px; }
+.payment-tracker-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.payment-tracker-summary > div { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.payment-tracker-summary span { display: block; color: var(--muted); font-size: 0.7rem; line-height: 1.3; text-transform: uppercase; letter-spacing: .05em; }
+.payment-tracker-summary strong { display: block; margin-top: 5px; color: #fff; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.payment-tracker-summary strong.warn { color: #ffd700; }
+.payment-tracker-card { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.payment-tracker-card > .muted { margin: 6px 0 12px; font-size: .82rem; line-height: 1.45; }
+.payment-tracker-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.payment-tracker-head h2 { margin: 3px 0 0; font-size: 1.05rem; }
+.payment-tracker-head .text-button { flex: 0 0 auto; min-height: 44px; }
+.admin-payment-shortcut { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 16px 0; padding: 16px; border: 1px solid rgba(57,255,20,.35); border-radius: 14px; background: rgba(57,255,20,.06); }
+.admin-payment-shortcut h2 { margin: 3px 0; font-size: 1.05rem; }
+.admin-payment-shortcut p { margin: 0; color: var(--muted); font-size: .82rem; }
+@media (max-width: 560px) {
+  .payment-tracker-summary { grid-template-columns: 1fr; }
+  .payment-row { align-items: flex-start; }
+  .payment-status { min-width: 0; flex-basis: 100%; overflow-wrap: anywhere; }
+  .deposit-actions { margin-left: 0; width: 100%; justify-content: space-between; }
+  .admin-payment-shortcut { align-items: stretch; flex-direction: column; }
+  .admin-payment-shortcut .button { width: 100%; }
+}
 
 /* Tiebreaker — closest without going over */
 .tb-status { font-size: 0.76rem; color: #9a9a9a; margin: 0 0 10px; padding: 8px 12px; background: rgba(255, 215, 0, 0.06); border: 1px solid rgba(255, 215, 0, 0.18); border-radius: 10px; line-height: 1.45; }

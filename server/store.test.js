@@ -45,22 +45,24 @@ test('Real SQLite credentials carry a revision so PIN resets revoke sessions', a
   assert.equal(await auth.playerFromRequest({ headers: { cookie } }), null);
 });
 
-test('Updating picks preserves sheet identity, paid status and payment claim', (t) => {
+test('Updating picks preserves sheet identity, paid status, claim, and review', (t) => {
   const store = new LeagueStore(':memory:'); t.after(() => store.close()); store.seedDemo();
   const league = store.getLeague(DEMO_LEAGUE.id); const original = league.sheets[0];
-  store.updateSheetFields(league.id, original.id, { paymentClaim: { claimedAt: 'today' } });
+  store.updateSheetFields(league.id, original.id, { paymentClaim: { claimedAt: 'today' }, paymentReview: { status: 'confirmed', method: 'cashapp', note: 'Verified' } });
   const saved = store.createSheet(league.id, { ...original, id: 'replacement-id', paid: false, picks: { g1: 'KC' }, paymentClaim: null });
   assert.equal(saved.id, original.id); assert.equal(saved.paid, true);
   assert.equal(saved.paymentClaim.claimedAt, 'today');
+  assert.equal(saved.paymentReview.note, 'Verified');
   assert.equal(store.getLeague(league.id).sheets.filter((sheet) => sheet.playerId === original.playerId).length, 1);
 });
 
 test('Postgres resubmission preserves the existing payment record inside its atomic mutation', async () => {
-  const draft = { sheets: [{ id: 'original', playerId: 'p1', week: 1, paid: true, paidVia: 'credit', paymentClaim: { claimedAt: 'yesterday' } }], auditLog: [] };
+  const draft = { sheets: [{ id: 'original', playerId: 'p1', week: 1, paid: true, paidVia: 'credit', paymentClaim: { claimedAt: 'yesterday' }, paymentReview: { status: 'confirmed', method: 'credit' } }], auditLog: [] };
   const store = { mutateLeague: async (_id, mutate) => mutate(draft) };
   const saved = await PostgresLeagueStore.prototype.createSheet.call(store, 'league', { id: 'new', playerId: 'p1', week: 1, paid: false, picks: { g1: 'KC' } });
   assert.equal(saved.id, 'original'); assert.equal(saved.paid, true);
   assert.equal(saved.paidVia, 'credit'); assert.equal(saved.paymentClaim.claimedAt, 'yesterday');
+  assert.equal(saved.paymentReview.method, 'credit');
   assert.equal(draft.sheets.length, 1);
 });
 

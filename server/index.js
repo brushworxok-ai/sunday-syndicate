@@ -948,7 +948,9 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
   const winnerIds = new Set(winnerRecognition?.protectedPlayerIds ?? []);
 
   // Build scored standings with roast levels
-  const leaderboard = buildLeaderboard(league.players, (league.sheets ?? []).filter((s) => s.week === currentWeek), league.results);
+  // Submitted picks do not enter the board or weekly pot until payment is
+  // confirmed. An unpaid player should never look active or eligible.
+  const leaderboard = buildLeaderboard(league.players, (league.sheets ?? []).filter((s) => s.week === currentWeek && s.paid), league.results);
   const standings = leaderboard.slice(0, 20).map((entry) => {
     const player = (league.players ?? []).find((p) => p.id === entry.playerId);
     const policy = player ? resolveJackRoastPolicy({ player, leagueSettings: league.settings, isWinner: winnerIds.has(entry.playerId) }) : null;
@@ -2519,14 +2521,31 @@ app.post('/api/leagues/:leagueId/deposits/:depositId/confirm', auth.requireAdmin
   const at = new Date().toISOString();
   const entry = { id: randomUUID(), playerId: deposit.playerId, amount: deposit.amount, reason: depositReason(deposit, label), by: request.actor ?? 'admin', at };
   await store.addCreditEntry(request.params.leagueId, entry);
+  // A deposit exactly equal to the entry fee is normally a player funding the
+  // sheet already waiting for this week. Apply it automatically; larger
+  // deposits remain available credit for future weeks.
+  const currentWeek = Number(league.week) || getCurrentWeek() || WEEK;
+  const entryFee = Number(league.settings?.entryFee) || ENTRY_FEE;
+  const waitingSheet = (league.sheets ?? []).find((sheet) => sheet.playerId === deposit.playerId && sheet.week === currentWeek && !sheet.paid);
+  let appliedToSheet = null;
+  let balance = creditBalance((league.creditLedger ?? []).concat(entry), deposit.playerId);
+  if (waitingSheet && Number(deposit.amount) === entryFee) {
+    const payment = await store.paySheetWithCredit(request.params.leagueId, waitingSheet.id, deposit.playerId, deposit.playerName, entryFee);
+    if (payment?.ok) {
+      appliedToSheet = waitingSheet.id;
+      balance = payment.balance;
+    }
+  }
   let updated = null;
   await store.mergeLeagueSettings(request.params.leagueId, (s) => {
     updated = (s.deposits ?? []).find((d) => d.id === deposit.id);
-    if (updated) { updated.status = 'confirmed'; updated.resolvedAt = at; updated.creditEntryId = entry.id; }
+    if (updated) { updated.status = 'confirmed'; updated.resolvedAt = at; updated.creditEntryId = entry.id; updated.appliedToSheetId = appliedToSheet; }
   });
-  const balance = creditBalance((league.creditLedger ?? []).concat(entry), deposit.playerId);
-  await saveNotification(request.params.leagueId, { playerId: deposit.playerId, kind: 'deposit_confirmed', title: `+$${deposit.amount} added to your account`, body: `Commissioner confirmed your $${deposit.amount} via ${label}. Your credit is now $${balance}.`, metadata: { depositId: deposit.id, amount: deposit.amount, balance } });
-  return response.json({ deposit: updated ?? deposit, entry, balance });
+  const message = appliedToSheet
+    ? `Commissioner confirmed your $${deposit.amount} via ${label} and used it for your Week ${currentWeek} entry. Your credit is now $${balance}.`
+    : `Commissioner confirmed your $${deposit.amount} via ${label}. Your credit is now $${balance}.`;
+  await saveNotification(request.params.leagueId, { playerId: deposit.playerId, kind: 'deposit_confirmed', title: appliedToSheet ? `Week ${currentWeek} entry paid from your $${deposit.amount}` : `+$${deposit.amount} added to your account`, body: message, metadata: { depositId: deposit.id, amount: deposit.amount, balance, appliedToSheet } });
+  return response.json({ deposit: updated ?? deposit, entry, balance, appliedToSheet });
 }));
 
 app.post('/api/leagues/:leagueId/deposits/:depositId/reject', auth.requireAdmin, asyncRoute(async (request, response) => {
@@ -2548,9 +2567,27 @@ app.delete('/api/leagues/:leagueId/sheets/:sheetId', auth.requireAdmin, asyncRou
 }));
 
 app.patch('/api/leagues/:leagueId/sheets/:sheetId/paid', auth.requireAdmin, asyncRoute(async (request, response) => {
-  const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paid: Boolean(request.body?.paid) });
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const existing = (league.sheets ?? []).find((sheet) => sheet.id === request.params.sheetId);
+  if (!existing) return response.status(404).json({ error: 'Sheet not found.' });
+  const paid = Boolean(request.body?.paid);
+  const allowedMethods = new Set(['cashapp', 'venmo', 'paypal', 'applecash', 'cash', 'credit', 'manual']);
+  const requestedMethod = String(request.body?.method ?? '').toLowerCase();
+  const method = allowedMethods.has(requestedMethod)
+    ? requestedMethod
+    : existing.paymentReview?.method ?? existing.paymentClaim?.method ?? (paid ? 'manual' : null);
+  const submittedNote = String(request.body?.note ?? '').trim().slice(0, 160);
+  const paymentReview = {
+    status: paid ? 'confirmed' : 'corrected_unpaid',
+    method,
+    note: submittedNote || (paid ? 'Confirmed by commissioner' : 'Marked unpaid by commissioner'),
+    reviewedAt: new Date().toISOString(),
+    reviewedBy: request.actor ?? 'admin',
+  };
+  const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paid, paymentReview });
   if (!updated) return response.status(404).json({ error: 'Sheet not found.' });
-  await store.writeAudit(request.params.leagueId, 'sheet.paid_updated', `${updated.name}'s Week ${updated.week} sheet marked ${updated.paid ? 'PAID' : 'unpaid'}`, 'admin', { sheetId: updated.id });
+  await store.writeAudit(request.params.leagueId, 'sheet.paid_updated', `${updated.name}'s Week ${updated.week} sheet marked ${updated.paid ? 'PAID' : 'unpaid'}`, request.actor ?? 'admin', { sheetId: updated.id, previousPaid: existing.paid, method, note: paymentReview.note });
   if (updated.paid) {
     await saveNotification(request.params.leagueId, { playerId: updated.playerId, kind: 'payment_confirmed', title: `Payment confirmed — Week ${updated.week}`, body: `Commissioner confirmed your Week ${updated.week} entry fee is paid.`, metadata: { week: updated.week } });
   }
