@@ -2103,3 +2103,4 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .bank-amount { font-size: 0.95rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .bank-amount.positive { color: var(--neon); }
 .bank-amount.zero { color: var(--muted); }
+.chase-money { align-self: flex-start; margin-bottom: 12px; }

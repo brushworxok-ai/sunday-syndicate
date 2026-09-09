@@ -7,7 +7,10 @@
 
 export const SEASON = 2026;
 export const ENTRY_FEE = 20;
-export const DEADLINE_HOURS_BEFORE_KICKOFF = 5;
+export const DEADLINE_HOURS_BEFORE_KICKOFF = 1;
+/* Grammatical label for the copy above ("1 hour" / "5 hours") so changing the
+   number above never leaves "1 hours" sitting in the app. */
+export const DEADLINE_LABEL = `${DEADLINE_HOURS_BEFORE_KICKOFF} hour${DEADLINE_HOURS_BEFORE_KICKOFF === 1 ? '' : 's'}`;
 
 export const TEAMS = {
   ARI: 'Arizona Cardinals',
@@ -562,9 +565,10 @@ function etOffset(dateStr) {
 }
 
 /**
- * Sheet-submission deadline for a week: 5 hours before the first scheduled kickoff.
+ * Sheet-submission deadline for a week: DEADLINE_HOURS_BEFORE_KICKOFF hours before
+ * the first scheduled kickoff.
  * Games with TBA times are ignored when a firm kickoff exists; if every game
- * is TBA, the deadline falls back to 5 hours before 1:00 PM ET on the earliest game date.
+ * is TBA, the deadline falls back to that same offset before 1:00 PM ET on the earliest game date.
  */
 export function getWeekDeadline(weekNum) {
   const games = getGames(weekNum);

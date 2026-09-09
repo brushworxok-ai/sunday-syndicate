@@ -33,7 +33,7 @@ function validateAvatar(value) {
   if (text.length <= 8 && !/[<>"'&]/.test(text)) return { avatar: text };
   return { error: 'Invalid profile picture.' };
 }
-import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
+import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
 import { createLeagueStore } from './storeFactory.js';
 import { buildLeagueView } from './publicLeagueView.js';
 import { ModerationError } from './moderation.js';
@@ -617,7 +617,7 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   }
   if (isWeekLocked(submittedWeek)) {
     const deadline = getWeekDeadline(submittedWeek);
-    return response.status(422).json({ error: `Week ${submittedWeek} is locked. Sheets were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff${deadline ? ` (${deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET)` : ''}. See you next week.` });
+    return response.status(422).json({ error: `Week ${submittedWeek} is locked. Sheets were due ${DEADLINE_LABEL} before the first kickoff${deadline ? ` (${deadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET)` : ''}. See you next week.` });
   }
   const everyPickValid = weekGames.every((game) => picks[game.id] === game.away || picks[game.id] === game.home);
   if (!everyPickValid || Object.keys(picks).length !== weekGames.length) return response.status(422).json({ error: `Exactly ${weekGames.length} valid picks are required for Week ${submittedWeek}.` });
@@ -1002,7 +1002,7 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
       `Pick one winner for every game (straight up, no spread).`,
       `One point per correct pick. Highest total wins the weekly pot. A game that ends in a TIE counts as no point for anyone.`,
       `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess wins. Identical guesses split the pot.`,
-      `DEADLINE: sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
+      `DEADLINE: sheets lock ${DEADLINE_LABEL} before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
       `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. Standings are the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week. Pays THREE places: ${(league.settings?.seasonPool?.payoutSplit ?? [60, 30, 10]).map((pct, i) => `${['1st', '2nd', '3rd'][i]} gets ${pct}%`).join(', ')} of the pot. Paid out after Week 18.`,
       `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you; a TIE counts as surviving. Last one standing wins.`,
       `CFB PICK-EM POOLS: separate college football pools where players pick every game AGAINST THE SPREAD. A weekly pool needs at least 3 paid players to count. Best ATS record wins that pool's pot; tiebreaker is closest to the total points of the last game.`,
@@ -1594,6 +1594,61 @@ app.post('/api/leagues/:leagueId/reminders/picks', auth.requireAdmin, asyncRoute
   return response.status(201).json({ week, missing: missing.map((p) => p.name), sent: missing.length, channel: 'in_app_and_push' });
 }));
 
+/* ── Jack's money check: who still owes the entry fee before lock ── */
+app.post('/api/leagues/:leagueId/reminders/payment', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const week = Number(request.body?.week) || getCurrentWeek();
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const fee = Number(league.settings?.entryFee) || 20;
+  const deadline = getWeekDeadline(week);
+  const hoursLeft = deadline ? Math.max(1, Math.round((deadline.getTime() - Date.now()) / 3_600_000)) : null;
+  const dueBy = deadline
+    ? `${deadline.toLocaleString('en-US', { timeZone: 'America/Chicago', weekday: 'short', hour: 'numeric', minute: '2-digit' })} CT`
+    : 'first kickoff';
+
+  /* Three ways a player can be short: nothing in at all, picks in but unpaid,
+     or picks in with enough credit sitting there to cover it in one tap. */
+  const owing = [];
+  for (const player of league.players ?? []) {
+    const sheet = (league.sheets ?? []).find((s) => s.week === week && s.playerId === player.id);
+    const credit = creditBalance(league.creditLedger ?? [], player.id);
+    if (sheet?.paid) continue;
+    if (sheet?.paymentClaim) { owing.push({ player, state: 'awaiting_confirmation', credit }); continue; }
+    if (!sheet) { owing.push({ player, state: credit >= fee ? 'no_picks_funded' : 'no_picks', credit }); continue; }
+    owing.push({ player, state: credit >= fee ? 'unpaid_has_credit' : 'unpaid', credit });
+  }
+
+  const notifiable = owing.filter((row) => row.state !== 'awaiting_confirmation');
+  if (!notifiable.length) {
+    return response.json({ week, sent: 0, owing: [], message: 'Everybody is square for this week. Nothing to chase.' });
+  }
+
+  const bodyFor = ({ state, credit }) => {
+    const clock = hoursLeft ? `~${hoursLeft}h left (locks ${dueBy})` : `Locks ${dueBy}`;
+    if (state === 'unpaid_has_credit') return `You've got $${credit} on your account — one tap covers your $${fee} Week ${week} entry. ${clock}.`;
+    if (state === 'no_picks_funded') return `Your $${credit} is on the books but your Week ${week} picks aren't in. Get them in and the entry pays itself. ${clock}.`;
+    if (state === 'no_picks') return `No picks and no $${fee} in for Week ${week} yet. Jack's counting — don't be the one holding up the pot. ${clock}.`;
+    return `Your Week ${week} picks are in but the $${fee} isn't. Send it and tap "I sent it" so you're locked in the pot. ${clock}.`;
+  };
+
+  for (const row of notifiable) {
+    await saveNotification(request.params.leagueId, {
+      playerId: row.player.id,
+      kind: 'payment_reminder',
+      title: `Week ${week} — $${fee} entry still owed`,
+      body: bodyFor(row),
+      metadata: { week, amount: fee, state: row.state },
+    });
+  }
+  await store.writeAudit(request.params.leagueId, 'payment.reminded', `Jack nudged ${notifiable.length} player(s) about the Week ${week} entry fee`, request.actor ?? 'admin', { week, players: notifiable.map((r) => r.player.name) });
+  return response.status(201).json({
+    week,
+    sent: notifiable.length,
+    owing: owing.map((row) => ({ playerId: row.player.id, name: row.player.name, state: row.state, credit: row.credit, notified: row.state !== 'awaiting_confirmation' })),
+    channel: 'in_app_and_push',
+  });
+}));
+
 /* ── Jack SMS Broadcast: results + roasts to every opted-in player ── */
 app.post('/api/leagues/:leagueId/jack/broadcast', auth.requireAdmin, asyncRoute(async (request, response) => {
   const league = await store.getLeague(request.params.leagueId);
@@ -1766,7 +1821,7 @@ app.post('/api/leagues/:leagueId/props', playerAuth.requirePlayer, asyncRoute(as
   if (!league) return response.status(404).json({ error: 'League not found.' });
   const week = Number(request.body?.week) || getCurrentWeek();
   if (isWeekLocked(week)) {
-    return response.status(422).json({ error: `Week ${week} is locked. Prop picks were due ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff.` });
+    return response.status(422).json({ error: `Week ${week} is locked. Prop picks were due ${DEADLINE_LABEL} before the first kickoff.` });
   }
   const input = request.body?.picks ?? {};
   const picks = {};
