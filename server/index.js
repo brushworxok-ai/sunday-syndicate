@@ -2334,6 +2334,33 @@ app.post('/api/leagues/:leagueId/sheets/:sheetId/pay-with-credit', playerAuth.re
   return response.json(result);
 }));
 
+// One season-long entry, paid from the player's already-confirmed credit.
+app.post('/api/leagues/:leagueId/season-pool/pay-with-credit', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const pool = league.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
+  const fee = Number(pool.entryFee) || 25;
+  if ((pool.paidPlayerIds ?? []).includes(request.player.id)) return response.status(422).json({ error: 'You are already entered in the season pool.' });
+  const balance = creditBalance(league.creditLedger ?? [], request.player.id);
+  if (balance < fee) return response.status(422).json({ error: `You need $${fee - balance} more credit to join the season pool.` });
+  if (!await store.claimOnce(request.params.leagueId, `season-credit-${request.player.id}`)) return response.status(409).json({ error: 'Your season-pool payment is already being processed. Refresh in a moment.' });
+  try {
+    await store.addCreditEntry(request.params.leagueId, { id: randomUUID(), playerId: request.player.id, amount: -fee, reason: 'Season pool entry', by: request.player.id, at: new Date().toISOString() });
+    await store.mergeLeagueSettings(request.params.leagueId, (settings) => {
+      const current = settings.seasonPool ?? { entryFee: fee, paidPlayerIds: [] };
+      current.paidPlayerIds = [...new Set([...(current.paidPlayerIds ?? []), request.player.id])];
+      settings.seasonPool = current;
+    });
+    const remaining = balance - fee;
+    await saveNotification(request.params.leagueId, { playerId: request.player.id, kind: 'payment_confirmed', title: 'Season pool entry confirmed', body: `$${fee} was paid from your credit. Your remaining credit is $${remaining}.`, metadata: { amount: fee, balance: remaining } });
+    await store.writeAudit(request.params.leagueId, 'season_pool.paid_with_credit', `${request.player.name} joined the season pool using credit.`, request.player.id, { fee, remaining });
+    return response.json({ paid: true, fee, balance: remaining });
+  } catch (error) {
+    await store.releaseClaim(request.params.leagueId, `season-credit-${request.player.id}`).catch(() => {});
+    throw error;
+  }
+}));
+
 app.post('/api/leagues/:leagueId/cfb-pool/:poolId/credit-winners', auth.requireAdmin, asyncRoute(async (request, response) => {
   const pool = await store.getCfbPool(request.params.leagueId, request.params.poolId);
   if (!pool) return response.status(404).json({ error: 'Pool not found.' });

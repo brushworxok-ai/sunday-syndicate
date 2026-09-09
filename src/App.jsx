@@ -316,7 +316,9 @@ function App() {
   // CFB state
   const [cfbRankings, setCfbRankings] = useState(null);
   const [cfbGames, setCfbGames] = useState(null);
-  const [cfbWeek, setCfbWeek] = useState(1);
+  // College starts a week ahead of the NFL schedule. Starting on the next
+  // playable slate prevents a finished Week 1 pool from being the default.
+  const [cfbWeek, setCfbWeek] = useState(() => Math.min(16, getCurrentWeek() + 1));
   const [cfbLoading, setCfbLoading] = useState('');
 
   // CashApp Pool state
@@ -913,6 +915,16 @@ function App() {
       const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/sheets/${sheetId}/pay-with-credit`, { method: 'POST' });
       await loadLeague();
       notify(`Entry paid from your credit — $${data.balance} left. ✅`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
+  const paySeasonWithCredit = async () => {
+    setServerBusy('season-credit-pay');
+    try {
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/season-pool/pay-with-credit`, { method: 'POST' });
+      await loadLeague();
+      notify(`You’re in the season pool. $${data.fee} paid from credit — $${data.balance} left. ✅`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -2436,6 +2448,17 @@ function App() {
                   </div>
                   <p>Most total correct picks combined across all 18 weeks sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three cash out.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
                 </div>
+                {playerSession.authenticated && !isComm && (() => {
+                  const entered = paidSet.has(playerSession.playerId);
+                  const fee = Number(pool.entryFee) || 25;
+                  return <div className="season-pool-player-action">
+                    <strong>{entered ? '✅ You are entered in the season pool' : `Join the season pool · $${fee}`}</strong>
+                    <small>{entered ? 'Your full-season record is now eligible for the three-place payout.' : `Use your confirmed credit balance. You have $${myCredit}.`}</small>
+                    {!entered && <button className="button button-primary" type="button" disabled={myCredit < fee || serverBusy === 'season-credit-pay'} onClick={paySeasonWithCredit}>
+                      {serverBusy === 'season-credit-pay' ? 'Joining…' : myCredit >= fee ? `Join with $${fee} credit` : `Add $${fee - myCredit} more credit`}
+                    </button>}
+                  </div>;
+                })()}
                 {isComm && <div className="season-pool-admin">
                   <small>SEASON ENTRIES PAID</small>
                   {proofLeague.players.map((player) => (
@@ -2824,6 +2847,32 @@ function App() {
                     </section>
                   );
                 })()}
+                {/* Who's got money on the books — everybody can see everybody */}
+                {(() => {
+                  const rows = (serverLeague?.players ?? [])
+                    .map((p) => ({ id: p.id, name: p.name, player: p, balance: serverLeague?.creditBalances?.[p.id] ?? 0 }))
+                    .sort((a, b) => b.balance - a.balance || a.name.localeCompare(b.name));
+                  if (rows.length < 2) return null;
+                  const total = rows.reduce((sum, r) => sum + r.balance, 0);
+                  return (
+                    <section className="bank-card">
+                      <div className="bank-head">
+                        <div><span className="eyebrow dark">THE CREW</span><h2>Who's funded up</h2></div>
+                        <span className="bank-total">${total} on the books</span>
+                      </div>
+                      <div className="bank-rows">
+                        {rows.map((row) => (
+                          <div className={`bank-row ${row.id === playerSession.playerId ? 'me' : ''}`} key={row.id}>
+                            <PlayerAvatar player={row.player} size={34} />
+                            <span className="bank-name">{row.name}{row.id === playerSession.playerId ? ' (you)' : ''}</span>
+                            <span className={`bank-amount ${row.balance > 0 ? 'positive' : 'zero'}`}>${row.balance}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <small className="muted">Credit is money already sent to the commissioner. It only changes when you choose “Pay from my credit” or receive a payout.</small>
+                    </section>
+                  );
+                })()}
                 <div className="payment-summary-cards">
                   <div className="payment-summary-card">
                     <span className="payment-summary-label">Paid in</span>
@@ -3064,6 +3113,9 @@ function App() {
                       <div className="crew-card-info">
                         <strong>{player.name}{player.id === playerSession.playerId ? ' (you)' : ''}</strong>
                         <small>{player.trashTalk?.jackPolicy?.favoriteTeam ? TEAMS[player.trashTalk.jackPolicy.favoriteTeam] : 'No team set'}</small>
+                        {playerSession.authenticated && (
+                          <span className={`crew-credit ${(serverLeague?.creditBalances?.[player.id] ?? 0) > 0 ? 'funded' : ''}`}>💳 ${serverLeague?.creditBalances?.[player.id] ?? 0}</span>
+                        )}
                         {playerSession.authenticated && <PayHandle player={player} compact />}
                       </div>
                       {player.trashTalk?.jackPolicy?.favoriteTeam && <img className="crew-card-team" src={getTeamLogoUrl(player.trashTalk.jackPolicy.favoriteTeam)} alt="" />}
@@ -3489,7 +3541,7 @@ function App() {
             )}
 
             {!cfbPool && !cfbBuilderOpen && (
-              <div className="cfb-empty pool-hint"><span>🏆</span><p>No pick-em pool for Week {cfbWeek} yet.{isComm ? ' Tap "Build Pool" above, pick 3–20 games from the list, and the pool goes live.' : " The commissioner hasn't built this week's slate yet — check back soon."}</p></div>
+              <div className="cfb-empty pool-hint"><span>🏆</span><p>No pick-em pool for Week {cfbWeek} yet.{isComm ? ' Tap “Auto-build from Top 25” above to open this week’s games for everyone.' : ' Week-by-week games appear here as soon as the commissioner opens the slate. Use the Week selector above to view upcoming matchups.'}</p></div>
             )}
 
             {cfbRankings && (
