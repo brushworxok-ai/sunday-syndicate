@@ -34,6 +34,7 @@ function validateAvatar(value) {
   return { error: 'Invalid profile picture.' };
 }
 import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
+import { validateTiebreaker } from '../src/tiebreaker.js';
 import { createLeagueStore } from './storeFactory.js';
 import { buildLeagueView } from './publicLeagueView.js';
 import { ModerationError } from './moderation.js';
@@ -606,7 +607,8 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   // Signed-in players may submit unpaid and settle from credit or Cash App after;
   // anonymous sheets still need the payment confirmation checkbox.
   if (!input.paid && !playerId) return response.status(422).json({ error: 'Payment confirmation is required.' });
-  if (input.tiebreaker == null || String(input.tiebreaker).trim() === '' || typeof input.tiebreaker === 'boolean' || !Number.isInteger(Number(input.tiebreaker)) || Number(input.tiebreaker) < 0 || Number(input.tiebreaker) > 250) return response.status(422).json({ error: 'Tiebreaker must be a whole number between 0 and 250 (total points in the tiebreaker game).' });
+  const tbVerdict = validateTiebreaker(input.tiebreaker, { max: 250 });
+  if (!tbVerdict.ok) return response.status(422).json({ error: tbVerdict.error });
   const submittedWeek = Number(input.week) || getCurrentWeek();
   const weekGames = getGames(submittedWeek);
   if (!weekGames.length) return response.status(422).json({ error: `No games found for Week ${submittedWeek}.` });

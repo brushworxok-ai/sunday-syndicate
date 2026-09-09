@@ -21,7 +21,7 @@ import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
 import { deriveSurvivorPool, findTeamGame } from './survivor.js';
 import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
-import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted } from './tiebreaker.js';
+import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted, validateTiebreaker, TIEBREAKER_STEP } from './tiebreaker.js';
 import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
 import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle, messagesLink } from './payment.js';
@@ -1061,7 +1061,8 @@ function App() {
     // not this field — so only guests need to type a name.
     if (!playerSession.authenticated && !name.trim()) return notify('Add your name before locking in.');
     if (Object.keys(picks).length !== currentGames.length) return notify(`Finish all ${currentGames.length} picks first.`);
-    if (!tiebreaker || Number(tiebreaker) < 0) return notify('Add a valid tiebreaker total.');
+    const tbCheck = validateTiebreaker(tiebreaker, { max: 250 });
+    if (!tbCheck.ok) return notify(tbCheck.error);
     if (!paid && !playerSession.authenticated) return notify('Confirm your payment first.');
 
     setServerBusy('entry');
@@ -2410,7 +2411,7 @@ function App() {
                   <p className="slip-signin-hint">Already have a profile? <button type="button" className="link-button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in</button> and skip this.</p>
                 </>
               )}
-              <label>Tiebreaker total<input ref={tiebreakerRef} type="number" min="0" value={tiebreaker} onChange={(event) => setTiebreaker(event.target.value)} placeholder="48" /></label>
+              <label>Tiebreaker total<input ref={tiebreakerRef} type="number" min="0" max="250" step={TIEBREAKER_STEP} inputMode="decimal" value={tiebreaker} onChange={(event) => setTiebreaker(event.target.value)} placeholder="47.5" /></label>
               <p className="rule-note"><strong>Closest without going over wins.</strong> Going over means your tiebreaker is busted.</p>
               {!playerSession.authenticated && <label className="check-row"><input type="checkbox" checked={paid} onChange={(event) => setPaid(event.target.checked)} /><span>I confirm I sent ${ENTRY_FEE}</span></label>}
               {playerSession.authenticated && (() => {

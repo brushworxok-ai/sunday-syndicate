@@ -49,3 +49,17 @@ export function tiebreakerBusted(guess, actualTotal) {
 export function getWeekTiebreakerActual(weekNumber, results) {
   return getTiebreakerActual(getGames(weekNumber), results);
 }
+
+/* Guesses are allowed in half points (47 or 47.5) — the .5 is a hedge under
+   closest-without-going-over, and it keeps two players off the exact same
+   number. The ranking math above is plain arithmetic, so halves just work. */
+export const TIEBREAKER_STEP = 0.5;
+
+export function validateTiebreaker(value, { max = 250 } = {}) {
+  const error = `Tiebreaker must be between 0 and ${max}, in whole or half points (like 47 or 47.5).`;
+  if (value == null || typeof value === 'boolean' || String(value).trim() === '') return { ok: false, error };
+  const total = Number(value);
+  if (!Number.isFinite(total) || total < 0 || total > max) return { ok: false, error };
+  if (Math.round(total * 2) !== total * 2) return { ok: false, error };
+  return { ok: true, value: total };
+}

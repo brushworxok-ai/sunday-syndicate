@@ -1,5 +1,6 @@
 // CFB Pick-Em pool — shared grading + validation used by both server and frontend.
 // Pools grade picks against the spread (ATS) using the spread snapshotted at pool creation.
+import { validateTiebreaker } from './tiebreaker.js';
 
 /**
  * Grade a single game ATS.
@@ -37,10 +38,8 @@ export function validateCfbPicks({ pool, picks, tiebreaker, now = new Date() }) 
     if (side !== 'home' && side !== 'away') return { ok: false, error: 'Picks must choose the home or away side.' };
   }
   if (entries.length !== gameIds.size) return { ok: false, error: `Pick every game — ${gameIds.size - entries.length} still open.` };
-  const tb = Number(tiebreaker);
-  if (tiebreaker == null || String(tiebreaker).trim() === '' || typeof tiebreaker === 'boolean' || !Number.isFinite(tb) || tb < 0 || tb > 200 || !Number.isInteger(tb)) {
-    return { ok: false, error: 'Tiebreaker must be a whole number between 0 and 200 (total points in the tiebreaker game).' };
-  }
+  const tbVerdict = validateTiebreaker(tiebreaker, { max: 200 });
+  if (!tbVerdict.ok) return { ok: false, error: tbVerdict.error };
   return { ok: true };
 }
 
