@@ -1029,6 +1029,13 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .season-pool-admin { flex: 1 1 180px; padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.08); background: rgba(0, 0, 0, 0.25); }
 .season-pool-admin > small { display: block; font-size: 0.6rem; letter-spacing: 0.08em; color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; }
 .check-row.compact { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.8rem; }
+.season-pool-entry { flex: 1 1 240px; min-width: 0; padding: 14px; border: 1px solid rgba(255,215,0,.26); border-radius: 12px; background: rgba(0,0,0,.22); }
+.season-pool-entry h2 { margin: 4px 0 10px; font-size: 1.05rem; }
+.season-pool-entry > .muted { margin: 0; font-size: .82rem; }
+.season-entrants { display: flex; flex-direction: column; gap: 6px; max-height: 15rem; overflow-y: auto; }
+.season-entrant { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 7px 8px; border-radius: 9px; background: rgba(255,255,255,.04); }
+.season-entrant > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; font-weight: 700; }
+.season-entrant b { color: var(--neon); font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; }
 
 /* ── NFL Wire ── */
 .nfl-wire .wire-updated { color: rgba(255, 255, 255, 0.4); font-size: 0.68rem; }
@@ -1479,7 +1486,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cfb-admin-bar { display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
 .cfb-empty.pool-hint { padding: 28px 20px; }
 
-.season-pool-player-action { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 14px; border: 1px solid rgba(57,255,20,.35); border-radius: 12px; background: rgba(57,255,20,.06); }
+.season-pool-player-action { flex: 1 1 240px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 0; padding: 14px; border: 1px solid rgba(57,255,20,.35); border-radius: 12px; background: rgba(57,255,20,.06); }
 .season-pool-player-action strong { color: #fff; }
 .season-pool-player-action small { color: var(--muted); line-height: 1.45; }
 .season-pool-player-action .button { min-height: 44px; }

@@ -2429,6 +2429,7 @@ function App() {
             {(() => {
               const pool = serverLeague?.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
               const paidSet = new Set(pool.paidPlayerIds ?? []);
+              const seasonEntrants = proofLeague.players.filter((player) => paidSet.has(player.id));
               const seasonPot = paidSet.size * (pool.entryFee ?? 25);
               const split = Array.isArray(pool.payoutSplit) && pool.payoutSplit.length === 3 ? pool.payoutSplit : [60, 30, 10];
               const seasonPaidOut = (serverLeague?.payouts ?? []).some((p) => p.pool === 'season');
@@ -2459,17 +2460,27 @@ function App() {
                   </div>
                   <p>Most total correct picks combined across all 18 weeks sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three cash out.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
                 </div>
-                {playerSession.authenticated && !isComm && (() => {
+                <aside className="season-pool-entry">
+                  <span className="eyebrow dark">WHO'S IN</span>
+                  <h2>{seasonEntrants.length} {seasonEntrants.length === 1 ? 'player' : 'players'} entered</h2>
+                  {seasonEntrants.length ? (
+                    <div className="season-entrants" aria-label="Season pool entrants">
+                      {seasonEntrants.map((player) => <div className="season-entrant" key={player.id}><PlayerAvatar player={player} size={32} /><span>{player.name}</span><b>Paid</b></div>)}
+                    </div>
+                  ) : <p className="muted">No entries yet — be the first one in.</p>}
+                </aside>
+                {playerSession.authenticated && (() => {
                   const entered = paidSet.has(playerSession.playerId);
                   const fee = Number(pool.entryFee) || 25;
                   return <div className="season-pool-player-action">
                     <strong>{entered ? '✅ You are entered in the season pool' : `Join the season pool · $${fee}`}</strong>
-                    <small>{entered ? 'Your full-season record is now eligible for the three-place payout.' : `Use your confirmed credit balance. You have $${myCredit}.`}</small>
-                    {!entered && <button className="button button-primary" type="button" disabled={myCredit < fee || serverBusy === 'season-credit-pay'} onClick={paySeasonWithCredit}>
-                      {serverBusy === 'season-credit-pay' ? 'Joining…' : myCredit >= fee ? `Join with $${fee} credit` : `Add $${fee - myCredit} more credit`}
+                    <small>{entered ? 'Your full-season record is eligible for the three-place payout.' : `Enter with credit. You have $${myCredit}; the entry is $${fee}.`}</small>
+                    {!entered && <button className="button button-primary" type="button" disabled={serverBusy === 'season-credit-pay'} onClick={myCredit >= fee ? paySeasonWithCredit : () => setView('payments')}>
+                      {serverBusy === 'season-credit-pay' ? 'Joining…' : myCredit >= fee ? `Join with $${fee} credit` : `Add $${fee - myCredit} credit to enter`}
                     </button>}
                   </div>;
                 })()}
+                {!playerSession.authenticated && <div className="season-pool-player-action"><strong>Want in?</strong><small>Sign in, add credit, then enter the season pool in one tap.</small><button className="button button-primary" type="button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in to enter</button></div>}
                 {isComm && <div className="season-pool-admin">
                   <small>SEASON ENTRIES PAID</small>
                   {proofLeague.players.map((player) => (
