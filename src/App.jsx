@@ -511,6 +511,8 @@ function App() {
   );
   const slipRef = useRef(null);
   const tiebreakerRef = useRef(null);
+  const submitRef = useRef(null);
+  const [submitOnScreen, setSubmitOnScreen] = useState(false);
 
   // Prefill the sheet from the player's saved entry so "edit one pick" doesn't
   // mean redoing all 16. Never clobbers in-progress edits.
@@ -1078,6 +1080,17 @@ function App() {
   };
 
   // Sticky-bar lock: route the player to whatever's still missing.
+  /* The sticky bar exists so the lock-in button is always reachable while
+     scrolling. Once the real button is on screen, two identical buttons is just
+     confusing — so the bar steps aside. */
+  useEffect(() => {
+    const node = submitRef.current;
+    if (!node || typeof IntersectionObserver !== 'function') { setSubmitOnScreen(false); return undefined; }
+    const observer = new IntersectionObserver(([entry]) => setSubmitOnScreen(entry.isIntersecting), { rootMargin: '0px 0px -80px 0px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [view, weekLocked, currentGames.length]);
+
   const lockFromBar = () => {
     const done = Object.keys(picks).length;
     if (done < currentGames.length) return notify(`Pick all ${currentGames.length} games — ${currentGames.length - done} to go.`);
@@ -2436,14 +2449,14 @@ function App() {
                 );
               })()}
               {!mySheet?.paid && <PayOptions settings={serverLeague?.settings} amount={ENTRY_FEE} note={`405 BadGuys ${weekLabel}`} picked={payMethodUsed} onPick={setPayMethodUsed} />}
-              <button className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Saving…' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
+              <button ref={submitRef} className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Saving…' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
               <button className="ai-mini-button" type="button" onClick={analyzePicks} disabled={aiLoading === 'picks'}><span>✦</span>{aiLoading === 'picks' ? 'Reviewing…' : 'Ask Jack to check my picks'}</button>
               {aiResult.picks && <div className="ai-slip-result">{aiResult.picks}</div>}
               {aiError && <p className="error-text">{aiError}</p>}
             </aside>
 
             {/* Mobile sticky lock bar — progress + one button, always reachable */}
-            {!weekLocked && (
+            {!weekLocked && !submitOnScreen && (
               <div className="picks-sticky" role="region" aria-label="Lock in your picks">
                 <div className="picks-sticky-progress"><strong>{Object.keys(picks).length}/{currentGames.length}</strong> picked{tiebreaker ? ` · TB ${tiebreaker}` : ''}</div>
                 <button className="button button-primary" type="button" onClick={lockFromBar} disabled={serverBusy === 'entry'}>{serverBusy === 'entry' ? 'Saving…' : mySheet ? 'Update →' : 'Lock in →'}</button>

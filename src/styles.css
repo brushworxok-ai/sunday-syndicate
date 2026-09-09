@@ -1720,7 +1720,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
    of stretching the whole layout wide. This is the fix for content bleeding
    past the right edge and getting cut off on iPhone. */
 html, body { overflow-x: hidden; max-width: 100vw; }
-.app-shell { overflow-x: clip; max-width: 100vw; }
+/* NOTE: do NOT put overflow/clip on .app-shell — it contains the fixed bottom
+   nav and the fixed picks bar, and a clipping ancestor makes iOS Safari
+   position them against that box instead of the viewport, so they scroll away
+   with the page. html/body above already stops horizontal scrolling. */
 main { max-width: 100%; }
 main section, .page-grid, .standard-page, .hero, .hero-actions,
 .stat-grid, .game-ticker, .injury-ticker, .games-list,
