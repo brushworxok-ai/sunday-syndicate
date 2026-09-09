@@ -46,6 +46,7 @@ const MORE_ITEMS = [
   ['props',    'Prop Picks',       '🎯', 'Passing, rushing, first TD & more'],
   ['cfb',      'College FB',       '🏟️', 'CFB rankings, games & pick-em pools'],
   ['payments', 'My Payments',      '💰', 'Payment history & balance'],
+  ['payment-center', 'Payment Center', '✓', 'Confirm player payments'],
   ['notifs',   'Notifications',    '🔔', 'Reminders, payouts & messages'],
   ['entries',  "Who's In",         '📋', 'Who has picks in & who paid'],
   ['players',  'My Profile',       '👤', 'Your pic, the crew & settings'],
@@ -1633,9 +1634,14 @@ function App() {
   const devicePushRegistration = async () => {
     let timer;
     try {
+      // Register on the button tap as well as on page load. iOS can suspend the
+      // background registration while a standalone app is opening, leaving
+      // serviceWorker.ready pending even though this device supports push.
+      const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      if (registration.active) return registration;
       return await Promise.race([
         navigator.serviceWorker.ready,
-        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Notification setup is not ready. Reload the app and try again.')), 8000); }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Push setup took too long. Close and reopen the app from your Home Screen, then try again.')), 8000); }),
       ]);
     } finally { clearTimeout(timer); }
   };
@@ -1923,7 +1929,7 @@ function App() {
   };
 
   // Determine active tab (map sub-views to parent)
-  const activeTab = ['live', 'stats', 'season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin', 'payments', 'notifs'].includes(view) ? 'more' : view;
+  const activeTab = ['live', 'stats', 'season', 'survivor', 'props', 'entries', 'players', 'bets', 'ai', 'rules', 'demo', 'admin', 'payments', 'payment-center', 'notifs'].includes(view) ? 'more' : view;
 
   return (
     <div className="app-shell">
@@ -1969,7 +1975,7 @@ function App() {
               <button className="more-menu-close" type="button" onClick={() => setShowMore(false)}>×</button>
             </div>
             <div className="more-menu-items">
-              {MORE_ITEMS.filter(([id]) => isComm || !['demo', 'ai'].includes(id)).map(([id, label, icon, desc]) => (
+              {MORE_ITEMS.filter(([id]) => isComm || !['demo', 'ai', 'payment-center'].includes(id)).map(([id, label, icon, desc]) => (
                 <button className="more-menu-item" type="button" key={id} onClick={() => { setView(id); setShowMore(false); }}>
                   <span className="menu-icon">{icon}</span>
                   {label}{id === 'notifs' && unreadNotifs > 0 && <i className="menu-badge">{unreadNotifs > 9 ? '9+' : unreadNotifs}</i>}
@@ -2933,6 +2939,74 @@ function App() {
           </StandardPage>
         )}
 
+        {view === 'payment-center' && (
+          <StandardPage eyebrow="COMMISSIONER" title="Payment Center" subtitle="Review player entries, payment claims, and account funding in one place.">
+            {!isComm ? (
+              <EmptyState icon="🔒" title="Commissioner sign-in required" text="Sign in as commissioner to review and confirm player payments." action="Commissioner sign-in" onAction={() => setView('admin')} />
+            ) : (() => {
+              const currentWeekSheets = weekSheets;
+              const paidSheets = currentWeekSheets.filter((sheet) => sheet.paid);
+              const pendingSheets = currentWeekSheets.filter((sheet) => !sheet.paid);
+              const deposits = pendingDeposits(serverLeague?.settings?.deposits);
+              const ledger = [...(serverLeague?.creditLedger ?? [])].reverse().slice(0, 20);
+              const cfbEntries = Object.values(cfbPool?.entries ?? {});
+              return (
+                <div className="payment-tracker">
+                  <section className="payment-tracker-summary" aria-label="Payment overview">
+                    <div><span>Paid entries</span><strong>{paidSheets.length}/{currentWeekSheets.length}</strong></div>
+                    <div><span>Waiting on you</span><strong className={deposits.length + pendingSheets.filter((sheet) => sheet.paymentClaim).length > 0 ? 'warn' : ''}>{deposits.length + pendingSheets.filter((sheet) => sheet.paymentClaim).length}</strong></div>
+                    <div><span>Credit on books</span><strong>${Object.values(serverLeague?.creditBalances ?? {}).reduce((sum, amount) => sum + Number(amount || 0), 0)}</strong></div>
+                  </section>
+
+                  <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">NFL {weekLabel.toUpperCase()}</span><h2>Weekly entry payments</h2></div><button className="text-button" type="button" onClick={() => setView('picks')}>View picks →</button></div>
+                    <p className="muted">Use the Week picker at the top to review another week.</p>
+                    {currentWeekSheets.length === 0 ? <p className="muted">No picks submitted for this week yet.</p> : (
+                      <div className="payment-center">
+                        {currentWeekSheets.map((sheet) => (
+                          <div className={`payment-row ${sheet.paymentClaim && !sheet.paid ? 'claimed' : ''}`} key={sheet.id}>
+                            <span className="payment-name">{sheet.name}</span>
+                            <span className="payment-status">{sheet.paid ? `✓ Paid${sheet.paidVia === 'credit' ? ' from credit' : ''}` : sheet.paymentClaim ? `⏳ Says paid via ${PAY_METHODS[sheet.paymentClaim.method]?.label ?? sheet.paymentClaim.method ?? 'payment link'}` : 'Not paid yet'}</span>
+                            {sheet.paid ? <span className="payment-confirmed">Paid</span> : <button className="button button-primary" type="button" disabled={serverBusy === `sheet-paid-${sheet.id}`} onClick={() => confirmSheetPaid(sheet.id, true)}>{serverBusy === `sheet-paid-${sheet.id}` ? 'Saving…' : 'Confirm paid'}</button>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">ACCOUNT FUNDING</span><h2>Credit deposits</h2></div></div>
+                    {deposits.length === 0 ? <p className="muted">No account-funding payments are waiting for confirmation.</p> : (
+                      <div className="payment-center">
+                        {deposits.map((deposit) => (
+                          <div className="payment-row claimed" key={deposit.id}>
+                            <span className="payment-name">{deposit.playerName}</span>
+                            <span className="payment-status">⏳ ${deposit.amount} via {PAY_METHODS[deposit.method]?.label ?? deposit.method}</span>
+                            <span className="deposit-actions">
+                              <button className="button button-primary" type="button" disabled={serverBusy === `deposit-${deposit.id}`} onClick={() => resolveDeposit(deposit.id, 'confirm')}>{serverBusy === `deposit-${deposit.id}` ? 'Saving…' : `Add $${deposit.amount}`}</button>
+                              <button className="link-button" type="button" disabled={serverBusy === `deposit-${deposit.id}`} onClick={() => resolveDeposit(deposit.id, 'reject')}>Not received</button>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">COLLEGE</span><h2>College Pick-Em</h2></div>{cfbPool && <button className="text-button" type="button" onClick={() => setView('cfb')}>Open College FB →</button>}</div>
+                    {cfbPool ? <p className="muted">Week {cfbPool.week}: {cfbEntries.filter((entry) => entry.paid).length}/{cfbEntries.length} entered players paid. Confirm individual College payments on the College FB page.</p> : <p className="muted">No College Pick-Em pool is open for the selected week.</p>}
+                  </section>
+
+                  <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">LEDGER</span><h2>Recent credit activity</h2></div></div>
+                    {ledger.length === 0 ? <p className="muted">No credit activity yet.</p> : <div className="credit-ledger-rows">{ledger.map((entry) => <div className="credit-ledger-row" key={entry.id}><span className={`credit-ledger-amount ${entry.amount > 0 ? 'positive' : 'negative'}`}>{entry.amount > 0 ? '+' : '−'}${Math.abs(entry.amount)}</span><span className="credit-ledger-name">{(serverLeague?.players ?? []).find((player) => player.id === entry.playerId)?.name ?? 'Player'}</span><span className="credit-ledger-reason">{entry.reason}</span><span className="credit-ledger-date">{new Date(entry.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div>)}</div>}
+                  </section>
+                </div>
+              );
+            })()}
+          </StandardPage>
+        )}
+
         {view === 'notifs' && (
           <StandardPage eyebrow="ACTIVITY" title="Notifications" subtitle="Deadline reminders, payouts, Jack messages, and other league events.">
             {!playerSession.authenticated ? (
@@ -3646,6 +3720,10 @@ function App() {
         {view === 'admin' && isComm && (
           <StandardPage eyebrow="COMMISSIONER ACCESS" title="League operations" subtitle="Verify scores, generate and approve grounded recaps, send consent-aware broadcasts, and inspect delivery outcomes from one durable workflow.">
             <button className="button button-ghost-dark" type="button" onClick={logoutAdmin} disabled={serverBusy === 'admin-logout'}>{serverBusy === 'admin-logout' ? 'Signing out…' : 'Sign out commissioner'}</button>
+            <section className="admin-payment-shortcut">
+              <div><span className="eyebrow dark">MONEY</span><h2>Track player payments</h2><p>Confirm weekly entries, account funding, and review the credit ledger.</p></div>
+              <button className="button button-primary" type="button" onClick={() => navigate('payment-center')}>Open Payment Center</button>
+            </section>
             {(() => {
               const players = (proofLeague.players ?? []).length;
               const picksIn = weekSheets.length;
