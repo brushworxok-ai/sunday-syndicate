@@ -1490,6 +1490,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .season-pool-player-action strong { color: #fff; }
 .season-pool-player-action small { color: var(--muted); line-height: 1.45; }
 .season-pool-player-action .button { min-height: 44px; }
+.season-pool-leaderboard { margin: 0 0 24px; }
+.season-pool-leaderboard > .muted { margin: 4px 0 12px; }
+.season-pool-table { margin-bottom: 0; }
+.season-pool-empty { margin: 0; padding: 16px; border: 1px dashed rgba(255, 215, 0, .35); border-radius: 12px; color: var(--muted); }
 
 @media (max-width: 560px) {
   .cfb-board-tb { display: none; }

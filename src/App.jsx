@@ -2440,11 +2440,15 @@ function App() {
         )}
 
         {view === 'season' && (
-          <StandardPage eyebrow={`${SEASON} SEASON`} title="Season standings" subtitle="Weekly crowns, cumulative accuracy, and who has actually been paid.">
+          <StandardPage eyebrow={`${SEASON} SEASON`} title="Season Pool & standings" subtitle="Enter the one-time season pool, see who is paid in, and follow the eligible leaderboard.">
             {(() => {
               const pool = serverLeague?.settings?.seasonPool ?? { entryFee: 25, paidPlayerIds: [] };
               const paidSet = new Set(pool.paidPlayerIds ?? []);
               const seasonEntrants = proofLeague.players.filter((player) => paidSet.has(player.id));
+              const seasonLeaderboard = seasonEntrants.map((player) => {
+                const stats = seasonStats.table.find((row) => row.key === player.id);
+                return stats ?? { key: player.id, name: player.name, weeklyWins: 0, totalCorrect: 0, totalPicks: 0, winPct: 0, earnings: 0 };
+              }).sort((a, b) => b.totalCorrect - a.totalCorrect || b.winPct - a.winPct || a.name.localeCompare(b.name));
               const seasonPot = paidSet.size * (pool.entryFee ?? 25);
               const split = Array.isArray(pool.payoutSplit) && pool.payoutSplit.length === 3 ? pool.payoutSplit : [60, 30, 10];
               const seasonPaidOut = (serverLeague?.payouts ?? []).some((p) => p.pool === 'season');
@@ -2455,7 +2459,8 @@ function App() {
               const third = Math.floor(seasonPot * split[2] / 100);
               const first = seasonPot - second - third;
               const payouts = [first, second, third];
-              return <section className="season-pool-card">
+              return <>
+              <section className="season-pool-card">
                 <div className="season-pool-main">
                   <span className="eyebrow dark">SEASON POOL · ${pool.entryFee ?? 25}/PLAYER · PAYS THREE PLACES</span>
                   <div className="season-pool-figures">
@@ -2464,7 +2469,7 @@ function App() {
                   </div>
                   <div className="season-podium">
                     {payouts.map((amount, index) => {
-                      const row = seasonStats.table[index];
+                      const row = seasonLeaderboard[index];
                       return <div className={`season-podium-place p${index + 1}`} key={places[index]}>
                         <span className="podium-medal">{medals[index]}</span>
                         <small>{places[index]} · {split[index]}%</small>
@@ -2475,6 +2480,19 @@ function App() {
                   </div>
                   <p>Most total correct picks combined across all 18 weeks sets the final standings — it's the whole season's work, not one hot week. Ties break on accuracy %. Top three cash out.{seasonPaidOut ? ' Season pot has been PAID.' : ''}</p>
                 </div>
+                {playerSession.authenticated && (() => {
+                  const entered = paidSet.has(playerSession.playerId);
+                  const fee = Number(pool.entryFee) || 25;
+                  return <div className="season-pool-player-action">
+                    <span className="eyebrow dark">YOUR SEASON ENTRY</span>
+                    <strong>{entered ? '✅ You are entered in the season pool' : `Enter the season pool · $${fee}`}</strong>
+                    <small>{entered ? `$${fee} paid in · your full-season record is eligible for the three-place payout.` : `One-time $${fee} entry. You have $${myCredit} in credit.`}</small>
+                    {!entered && <button className="button button-primary" type="button" disabled={serverBusy === 'season-credit-pay'} onClick={myCredit >= fee ? paySeasonWithCredit : () => setView('payments')}>
+                      {serverBusy === 'season-credit-pay' ? 'Joining…' : myCredit >= fee ? `Pay $${fee} from credit` : `Add $${fee - myCredit} credit to enter`}
+                    </button>}
+                  </div>;
+                })()}
+                {!playerSession.authenticated && <div className="season-pool-player-action"><span className="eyebrow dark">YOUR SEASON ENTRY</span><strong>Want in for $${pool.entryFee ?? 25}?</strong><small>Sign in, add credit, then enter in one tap.</small><button className="button button-primary" type="button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in to enter</button></div>}
                 <aside className="season-pool-entry">
                   <span className="eyebrow dark">WHO'S IN</span>
                   <h2>{seasonEntrants.length} {seasonEntrants.length === 1 ? 'player' : 'players'} entered</h2>
@@ -2484,18 +2502,6 @@ function App() {
                     </div>
                   ) : <p className="muted">No entries yet — be the first one in.</p>}
                 </aside>
-                {playerSession.authenticated && (() => {
-                  const entered = paidSet.has(playerSession.playerId);
-                  const fee = Number(pool.entryFee) || 25;
-                  return <div className="season-pool-player-action">
-                    <strong>{entered ? '✅ You are entered in the season pool' : `Join the season pool · $${fee}`}</strong>
-                    <small>{entered ? 'Your full-season record is eligible for the three-place payout.' : `Enter with credit. You have $${myCredit}; the entry is $${fee}.`}</small>
-                    {!entered && <button className="button button-primary" type="button" disabled={serverBusy === 'season-credit-pay'} onClick={myCredit >= fee ? paySeasonWithCredit : () => setView('payments')}>
-                      {serverBusy === 'season-credit-pay' ? 'Joining…' : myCredit >= fee ? `Join with $${fee} credit` : `Add $${fee - myCredit} credit to enter`}
-                    </button>}
-                  </div>;
-                })()}
-                {!playerSession.authenticated && <div className="season-pool-player-action"><strong>Want in?</strong><small>Sign in, add credit, then enter the season pool in one tap.</small><button className="button button-primary" type="button" onClick={() => { setWelcomeMode('signin'); setShowWelcome(true); }}>Sign in to enter</button></div>}
                 {isComm && <div className="season-pool-admin">
                   <small>SEASON ENTRIES PAID</small>
                   {proofLeague.players.map((player) => (
@@ -2521,7 +2527,18 @@ function App() {
                     }}>{serverBusy === 'season-split' ? 'Saving…' : 'Save split'}</button>
                   </div>
                 </div>}
-              </section>;
+              </section>
+              <section className="season-pool-leaderboard" aria-labelledby="season-pool-leaderboard-title">
+                <div className="proof-heading"><div><span className="proof-step">SEASON POOL</span><h2 id="season-pool-leaderboard-title">Eligible leaderboard</h2></div><StatusPill state="pass">{seasonLeaderboard.length} paid in</StatusPill></div>
+                <p className="muted">Only players who paid the season entry are ranked here. Weekly picks count after their weekly entry is paid.</p>
+                {seasonLeaderboard.length ? <div className="season-table season-pool-table">
+                  <div className="season-head"><span>Rank · Player</span><span>Wins</span><span>Correct</span><span>Acc %</span><span>Season entry</span></div>
+                  {seasonLeaderboard.map((row, index) => <div className={`season-row ${index === 0 && row.totalCorrect > 0 ? 'leader' : ''}`} key={row.key}>
+                    <strong>#{index + 1} · {row.name}</strong><span>{row.weeklyWins}</span><span>{row.totalCorrect}<small>/{row.totalPicks}</small></span><span>{row.winPct}%</span><b>Paid</b>
+                  </div>)}
+                </div> : <p className="season-pool-empty">No one has paid into the season pool yet. The first paid entry will appear here.</p>}
+              </section>
+              </>;
             })()}
             {seasonStats.table.length ? <>
               <div className="season-table">
