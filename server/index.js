@@ -1003,7 +1003,7 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
       `DEADLINE: sheets lock ${DEADLINE_HOURS_BEFORE_KICKOFF} hours before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
       `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. Standings are the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week. Pays THREE places: ${(league.settings?.seasonPool?.payoutSplit ?? [60, 30, 10]).map((pct, i) => `${['1st', '2nd', '3rd'][i]} gets ${pct}%`).join(', ')} of the pot. Paid out after Week 18.`,
       `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you; a TIE counts as surviving. Last one standing wins.`,
-      `CFB PICK-EM POOLS: separate college football pools where players pick every game AGAINST THE SPREAD. Best ATS record wins that pool's pot; tiebreaker is closest to the total points of the last game.`,
+      `CFB PICK-EM POOLS: separate college football pools where players pick every game AGAINST THE SPREAD. A weekly pool needs at least 3 paid players to count. Best ATS record wins that pool's pot; tiebreaker is closest to the total points of the last game.`,
       `PAYMENTS: players pay through the league's Cash App Pool link or with one tap from their credit balance. Winnings can be credited straight to a player's balance and rolled into future entries. The app only tracks money between friends — Cash App moves it.`,
     ],
     seasonPool: (() => {
@@ -2154,6 +2154,29 @@ async function syncCfbPoolScores(leagueId, pool) {
 async function creditCfbPoolWinners(leagueId, pool, actor = 'admin') {
   if (pool.status !== 'final') return { ok: false, error: 'Sync scores until every game is final before paying out.' };
   if (pool.potCredited) return { ok: false, error: 'This pot was already credited to the winners.' };
+  // A weekly pool is only official once at least three players have paid.
+  // Keep results visible, but do not award a winner or move credit for a
+  // two-player (or smaller) week. A commissioner can confirm a late payment
+  // and run the normal payout again.
+  const paidEntries = Object.values(pool.entries ?? {}).filter((entry) => entry.paid);
+  const minimumPaidPlayers = 3;
+  if (paidEntries.length < minimumPaidPlayers) {
+    pool.noContest = {
+      reason: 'minimum-paid-players',
+      paidPlayers: paidEntries.length,
+      minimumPaidPlayers,
+      at: new Date().toISOString(),
+    };
+    pool.updatedAt = pool.noContest.at;
+    await store.saveCfbPool(leagueId, pool);
+    return {
+      ok: false,
+      noContest: true,
+      error: `Week ${pool.week} is no contest: it needs at least ${minimumPaidPlayers} paid players to count (currently ${paidEntries.length}).`,
+    };
+  }
+  // A late confirmed payment can make a previously no-contest week eligible.
+  if (pool.noContest?.reason === 'minimum-paid-players') delete pool.noContest;
   const { gradeCfbPool } = await import('../src/cfbPool.js');
   const board = gradeCfbPool(pool);
   if (!board.complete || !board.winners.length) return { ok: false, error: 'No winners to credit yet.' };
@@ -2161,7 +2184,7 @@ async function creditCfbPoolWinners(leagueId, pool, actor = 'admin') {
   // record wins bragging rights but can't be credited money they never put in.
   const paidWinners = board.winners.filter((w) => pool.entries?.[w.playerId]?.paid);
   if (!paidWinners.length) return { ok: false, error: 'The top record(s) haven’t paid — no one is eligible for the pot yet.' };
-  const pot = Object.values(pool.entries ?? {}).filter((e) => e.paid).length * (Number(pool.entryFee) || 0);
+  const pot = paidEntries.length * (Number(pool.entryFee) || 0);
   if (pot <= 0) return { ok: false, error: 'The pot is $0 — mark entries paid first.' };
   const share = Math.floor((pot / paidWinners.length) * 100) / 100;
   const at = new Date().toISOString();
@@ -2273,6 +2296,8 @@ app.post('/api/leagues/:leagueId/cfb-pool/:poolId/picks', playerAuth.requirePlay
     picks: Object.fromEntries((pool.games ?? []).map((g) => [g.id, picks[g.id]])),
     tiebreaker: Number(tiebreaker),
     paid: pool.entries?.[request.player.id]?.paid ?? false,
+    paidVia: pool.entries?.[request.player.id]?.paidVia ?? null,
+    paymentClaim: pool.entries?.[request.player.id]?.paymentClaim ?? null,
     submittedAt: pool.entries?.[request.player.id]?.submittedAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -2842,6 +2867,8 @@ async function autoManageCfb({ leagueId: lid, actions }) {
             await store.addChatMessage(lid, { id: `chat-cfb-final-w${week}`, playerId: null, name: 'Jack 🤖', msg: `🎓🏁 CFB Week ${week} is official: ${names} take${credit.winners.length > 1 ? '' : 's'} the $${credit.pot} college pot${credit.winners.length > 1 ? ` ($${credit.share} each)` : ''}. Dropped straight into the balance. 💰`, time: new Date().toISOString() });
           } catch { /* chat is non-critical */ }
           actions.push(`Finalized CFB Week ${week} and credited $${credit.pot} to ${names}.`);
+        } else if (credit.noContest) {
+          actions.push(`Finalized CFB Week ${week} as no contest: ${credit.error}`);
         }
       }
     } catch (error) { console.error('Auto-pilot CFB finalize failed:', error.message); }
@@ -2866,6 +2893,8 @@ async function sweepPriorCfbPools({ lid, currentWeek, actions }) {
             const names = credit.winners.join(' & ');
             try { await store.addChatMessage(lid, { id: `chat-cfb-final-w${p.week}`, playerId: null, name: 'Jack 🤖', msg: `🎓🏁 CFB Week ${p.week} is official: ${names} take${credit.winners.length > 1 ? '' : 's'} the $${credit.pot} college pot${credit.winners.length > 1 ? ` ($${credit.share} each)` : ''}. 💰`, time: new Date().toISOString() }); } catch { /* chat non-critical */ }
             actions.push(`Finalized CFB Week ${p.week} and credited $${credit.pot} to ${names}.`);
+          } else if (credit.noContest) {
+            actions.push(`Finalized CFB Week ${p.week} as no contest: ${credit.error}`);
           }
         }
       } catch (error) { console.error(`Auto-pilot CFB sweep (week ${p.week}) failed:`, error.message); }

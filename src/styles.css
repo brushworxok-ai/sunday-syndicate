@@ -1417,6 +1417,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cfb-pool-status { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.04em; padding: 5px 10px; border-radius: 999px; background: #1a1a1a; border: 1px solid var(--line); white-space: nowrap; }
 .cfb-pool-status.open { color: var(--neon, #39ff14); border-color: rgba(57, 255, 20, 0.4); }
 .cfb-pool-status.final { color: #ffd700; border-color: rgba(255, 215, 0, 0.4); }
+.cfb-pool-status.no-contest { color: #ffb3b3; border-color: rgba(220, 82, 82, 0.55); }
+.cfb-minimum-note { border-radius: 10px; padding: 10px 12px; font-size: 0.82rem; font-weight: 700; line-height: 1.35; }
+.cfb-minimum-note.pending { color: #ffe08a; background: rgba(255, 215, 0, 0.08); border: 1px solid rgba(255, 215, 0, 0.34); }
+.cfb-minimum-note.met { color: #8cf0a0; background: rgba(0, 214, 50, 0.08); border: 1px solid rgba(0, 214, 50, 0.36); }
+.cfb-no-contest-copy { margin: -4px 0 2px; color: #f0aaaa; font-size: 0.82rem; line-height: 1.45; }
 
 .cfb-builder-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .cfb-builder-bar label { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; color: #aaa; font-weight: 600; }

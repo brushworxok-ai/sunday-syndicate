@@ -725,6 +725,11 @@ function App() {
   const cfbBoard = useMemo(() => (cfbPool ? gradeCfbPool(cfbPool) : null), [cfbPool]);
   const cfbMyEntry = cfbPool?.entries?.[playerSession.playerId] ?? null;
   const cfbTbGame = useMemo(() => (cfbPool ? getTiebreakerGame(cfbPool) : null), [cfbPool]);
+  const cfbPaidCount = useMemo(
+    () => Object.values(cfbPool?.entries ?? {}).filter((entry) => entry.paid).length,
+    [cfbPool],
+  );
+  const cfbMinimumPlayers = 3;
 
   // Auto-load games + rankings the first time the CFB page opens
   useEffect(() => {
@@ -3367,7 +3372,7 @@ function App() {
               <div>
                 <strong>How College Pick-Em works</strong>
                 <p>{cfbPool
-                  ? 'A pool is live below. Pick a team to cover the spread in every game, set your tiebreaker, and lock your card. Best record takes the pot — closest tiebreaker settles ties.'
+                  ? 'A pool is live below. Pick a team to cover the spread in every game, set your tiebreaker, and lock your card. The week counts once 3 players have paid. Best record takes the pot — closest tiebreaker settles ties.'
                   : isComm
                     ? 'No pool yet for this week. Tap "Build Pool" above, choose 3–20 games from the list below, and it goes live for players to pick.'
                     : 'When the commissioner opens a weekly pool, it appears here. You\'ll pick a team to cover the spread in each game, set a tiebreaker, and pay the entry. Best record wins the pot. Until then, browse the AP Top 25 and this week\'s games below.'}</p>
@@ -3395,10 +3400,17 @@ function App() {
                 <div className="cfb-pool-head">
                   <div>
                     <h2 className="cfb-section-title">🏆 Week {cfbPool.week} Pick-Em Pool</h2>
-                    <small className="muted">{cfbPool.games.length} games · ${cfbPool.entryFee} entry · Pot ${Object.values(cfbPool.entries ?? {}).filter((e) => e.paid).length * cfbPool.entryFee}</small>
+                    <small className="muted">{cfbPool.games.length} games · ${cfbPool.entryFee} entry · Pot ${cfbPaidCount * cfbPool.entryFee}</small>
                   </div>
-                  <span className={`cfb-pool-status ${cfbPool.status}`}>{cfbPool.status === 'open' ? '🟢 Open for picks' : cfbPool.status === 'locked' ? '🔒 Locked' : '🏁 Final'}</span>
+                  <span className={`cfb-pool-status ${cfbPool.noContest ? 'no-contest' : cfbPool.status}`}>{cfbPool.noContest ? '↩ No contest' : cfbPool.status === 'open' ? '🟢 Open for picks' : cfbPool.status === 'locked' ? '🔒 Locked' : '🏁 Final'}</span>
                 </div>
+
+                <div className={`cfb-minimum-note ${cfbPaidCount >= cfbMinimumPlayers ? 'met' : 'pending'}`}>
+                  {cfbPaidCount >= cfbMinimumPlayers
+                    ? `✅ ${cfbPaidCount} paid players — this week counts.`
+                    : `⏳ ${cfbPaidCount}/${cfbMinimumPlayers} paid players — this week only counts once ${cfbMinimumPlayers} players are paid.`}
+                </div>
+                {cfbPool.noContest && <p className="cfb-no-contest-copy">No pot was awarded because this week did not reach 3 paid players. The commissioner can confirm another payment if one is pending.</p>}
 
                 {/* Payment — credit first, Cash App as the backup */}
                 {playerSession.authenticated && cfbMyEntry?.paid && (
@@ -3473,13 +3485,13 @@ function App() {
                 {/* Leaderboard */}
                 {cfbBoard && cfbBoard.rows.length > 0 && (
                   <div className="cfb-board">
-                    <h3 className="cfb-sub-title">{cfbBoard.complete ? '🏁 Final Standings' : `📊 Standings — ${cfbBoard.gamesFinal}/${cfbBoard.gamesTotal} games final`}</h3>
+                    <h3 className="cfb-sub-title">{cfbPool.noContest ? '↩ No-contest standings' : cfbBoard.complete ? '🏁 Final Standings' : `📊 Standings — ${cfbBoard.gamesFinal}/${cfbBoard.gamesTotal} games final`}</h3>
                     {cfbBoard.tiebreakerTotal != null && <small className="muted">Tiebreaker game landed on {cfbBoard.tiebreakerTotal} total points.</small>}
                     <div className="cfb-board-rows">
                       {cfbBoard.rows.map((row, index) => (
-                        <div className={`cfb-board-row ${cfbBoard.complete && cfbBoard.winners.some((w) => w.playerId === row.playerId) ? 'winner' : ''} ${row.playerId === playerSession.playerId ? 'me' : ''}`} key={row.playerId}>
+                        <div className={`cfb-board-row ${!cfbPool.noContest && cfbBoard.complete && cfbBoard.winners.some((w) => w.playerId === row.playerId) ? 'winner' : ''} ${row.playerId === playerSession.playerId ? 'me' : ''}`} key={row.playerId}>
                           <span className="cfb-board-rank">{index + 1}</span>
-                          <span className="cfb-board-name">{row.name}{cfbBoard.complete && cfbBoard.winners.some((w) => w.playerId === row.playerId) ? ' 👑' : ''}</span>
+                          <span className="cfb-board-name">{row.name}{!cfbPool.noContest && cfbBoard.complete && cfbBoard.winners.some((w) => w.playerId === row.playerId) ? ' 👑' : ''}</span>
                           <span className="cfb-board-record">{row.wins}-{row.losses}{row.pushes ? `-${row.pushes}` : ''}</span>
                           <span className="cfb-board-tb">TB {row.tiebreaker}{row.tbDiff != null ? ` (±${row.tbDiff})` : ''}</span>
                           {isComm ? (
@@ -3529,7 +3541,7 @@ function App() {
                     {cfbPool.status === 'open' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('locked')}>🔒 Lock picks</button>}
                     {cfbPool.status === 'locked' && <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-pool-status'} onClick={() => patchCfbPool('open')}>🔓 Reopen picks</button>}
                     <button className="button button-ghost-dark" type="button" disabled={serverBusy === 'cfb-sync'} onClick={syncCfbScores}>{serverBusy === 'cfb-sync' ? 'Syncing…' : '⚡ Sync scores from ESPN'}</button>
-                    {cfbPool.status === 'final' && !cfbPool.potCredited && cfbBoard?.winners?.length > 0 && (
+                    {cfbPool.status === 'final' && !cfbPool.potCredited && !cfbPool.noContest && cfbBoard?.winners?.length > 0 && (
                       <button className="button button-primary" type="button" disabled={serverBusy === 'cfb-credit-winners'} onClick={creditCfbWinners}>
                         {serverBusy === 'cfb-credit-winners' ? 'Crediting…' : `💰 Credit pot to ${cfbBoard.winners.map((w) => w.name.split(' ')[0]).join(' & ')}`}
                       </button>
