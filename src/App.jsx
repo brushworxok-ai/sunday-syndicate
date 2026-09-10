@@ -121,6 +121,7 @@ function App() {
   const [paid, setPaid] = useState(false);
   const [sheets, setSheets] = useState(DEMO_LEAGUE.sheets);
   const [results, setResults] = useState(DEMO_LEAGUE.results);
+  const resultsRef = useRef(results);
   const [chatMsgs, setChatMsgs] = useState(DEMO_CHAT);
   const [rolloverPot, setRolloverPot] = useState(0);
   const [serverLeague, setServerLeague] = useState(null);
@@ -477,6 +478,8 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => { resultsRef.current = results; }, [results]);
+
   // Live scores: fetch on week change, then poll — every 30s while games are
   // in progress, every 3 minutes otherwise.
   useEffect(() => {
@@ -487,8 +490,14 @@ function App() {
         const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/live-scores?week=${selectedWeek}`);
         if (cancelled) return;
         setLiveScores(data);
-        // The server auto-verifies finals from the feed — refresh standings when new ones land.
-        if (data.autoVerified > 0) loadLeague();
+        /* The server auto-verifies finals, but `autoVerified` is only non-zero for
+           the single client whose poll happened to do the writing. Everybody
+           else has to spot it themselves: if the feed calls a game final and we
+           haven't got a winner for it yet, our standings are stale — go re-read
+           the league. This is what makes the board move when a game ends. */
+        const feedFinals = (data.scores ?? []).filter((score) => score.state === 'post' && score.completed);
+        const missingLocally = feedFinals.some((score) => !resultsRef.current?.[score.gameId]?.winner);
+        if (data.autoVerified > 0 || missingLocally) loadLeague();
         timer = setTimeout(poll, data.anyLive ? 30_000 : 180_000);
       } catch {
         if (!cancelled) timer = setTimeout(poll, 180_000);
@@ -1105,12 +1114,36 @@ function App() {
 
   const chatEndRef = useRef(null);
 
-  // Keep the chat live: refresh every 12s while the Chat tab is open.
+  /* Keep the app live. Scores land in the league doc (results) via the auto
+     sync, so any screen that shows a score or a standing has to re-read the
+     league — otherwise the scoreboard card up top says FINAL while the board
+     underneath is frozen at whatever it was when the page loaded. */
+  const LEAGUE_REFRESH_MS = { chat: 12_000, results: 30_000, live: 30_000, home: 45_000, entries: 45_000, season: 60_000, survivor: 60_000 };
   useEffect(() => {
-    if (view !== 'chat') return undefined;
-    const timer = setInterval(() => { loadLeague(); }, 12_000);
+    const every = LEAGUE_REFRESH_MS[view];
+    if (!every) return undefined;
+    const timer = setInterval(() => { if (!document.hidden) loadLeague(); }, every);
     return () => clearInterval(timer);
   }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Coming back to the app is the moment people most expect fresh numbers —
+     phone unlocked, tab re-focused. Throttled so flipping tabs can't spam. */
+  useEffect(() => {
+    let last = 0;
+    const refreshIfStale = () => {
+      if (document.hidden) return;
+      const now = Date.now();
+      if (now - last < 10_000) return;
+      last = now;
+      loadLeague();
+    };
+    document.addEventListener('visibilitychange', refreshIfStale);
+    window.addEventListener('focus', refreshIfStale);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshIfStale);
+      window.removeEventListener('focus', refreshIfStale);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll chat to bottom when messages change
   useEffect(() => {
