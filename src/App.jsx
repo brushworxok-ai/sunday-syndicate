@@ -513,6 +513,7 @@ function App() {
   const tiebreakerRef = useRef(null);
   const submitRef = useRef(null);
   const [submitOnScreen, setSubmitOnScreen] = useState(false);
+  const [openSheetId, setOpenSheetId] = useState('');
 
   // Prefill the sheet from the player's saved entry so "edit one pick" doesn't
   // mean redoing all 16. Never clobbers in-progress edits.
@@ -3120,9 +3121,9 @@ function App() {
         )}
 
         {view === 'entries' && (
-          <StandardPage eyebrow={weekLabel.toUpperCase()} title="Who's in" subtitle="Everyone with picks in for this week. Picks stay hidden until the week locks — then you can see them on the Board.">
+          <StandardPage eyebrow={weekLabel.toUpperCase()} title="Who's in" subtitle={weekLocked ? 'Picks are open — tap anybody to see the sheet they turned in.' : 'Everyone with picks in for this week. Sheets stay sealed until the deadline, then everybody can read everybody.'}>
             {weekSheets.length ? <div className="entry-list">{weekSheets.map((sheet, index) => (
-              <article className="entry-row" key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div><strong>{sheet.name}</strong><p>{sheet.pickCount ?? Object.keys(sheet.picks).length} picks · {sheet.picksHidden ? 'Hidden until lock' : `TB ${sheet.tiebreaker}`}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b>{isComm && (
+              <article className={`entry-row ${sheet.picksHidden ? '' : 'readable'} ${openSheetId === sheet.id ? 'open' : ''}`} key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div className="entry-who" role={sheet.picksHidden ? undefined : 'button'} tabIndex={sheet.picksHidden ? undefined : 0} onClick={() => { if (!sheet.picksHidden) setOpenSheetId((id) => (id === sheet.id ? '' : sheet.id)); }} onKeyDown={(e) => { if (!sheet.picksHidden && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpenSheetId((id) => (id === sheet.id ? '' : sheet.id)); } }}><strong>{sheet.name}{!sheet.picksHidden && <span className="entry-caret">{openSheetId === sheet.id ? '▾' : '▸'}</span>}</strong><p>{sheet.pickCount ?? Object.keys(sheet.picks).length} picks · {sheet.picksHidden ? '🔒 Sealed until the deadline' : `TB ${sheet.tiebreaker} · tap to open`}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b>{isComm && (
                 <button className="entry-remove" type="button" title="Remove sheet" disabled={serverBusy === `del-${sheet.id}`} onClick={async () => {
                   if (!window.confirm(`Remove ${sheet.name}'s ${weekLabel} sheet? This can't be undone.`)) return;
                   setServerBusy(`del-${sheet.id}`);
@@ -3133,7 +3134,34 @@ function App() {
                   } catch (err) { notify(err.message); }
                   finally { setServerBusy(''); }
                 }}>{serverBusy === `del-${sheet.id}` ? '…' : '✕'}</button>
-              )}</article>
+              )}
+              {openSheetId === sheet.id && !sheet.picksHidden && (() => {
+                const correct = currentGames.reduce((total, game) => total + (results[game.id]?.winner && results[game.id].winner === sheet.picks[game.id] ? 1 : 0), 0);
+                const graded = currentGames.filter((game) => results[game.id]?.winner).length;
+                return (
+                  <div className="sheet-open">
+                    <div className="sheet-open-head">
+                      <strong>{sheet.name}'s {weekLabel} sheet</strong>
+                      <span>{graded ? `${correct}/${graded} right so far` : 'No games final yet'} · TB {sheet.tiebreaker}</span>
+                    </div>
+                    <div className="sheet-open-grid">
+                      {currentGames.map((game) => {
+                        const pick = sheet.picks?.[game.id];
+                        const winner = results[game.id]?.winner;
+                        const state = !pick ? 'blank' : !winner ? 'pending' : pick === winner ? 'hit' : 'miss';
+                        return (
+                          <div className={`sheet-pick ${state}`} key={game.id}>
+                            <span className="sheet-pick-matchup">{game.away} @ {game.home}</span>
+                            <span className="sheet-pick-team">{pick ? TEAMS[pick]?.split(' ').at(-1) ?? pick : '—'}</span>
+                            <span className="sheet-pick-mark">{state === 'hit' ? '✓' : state === 'miss' ? '✗' : ''}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+              </article>
             ))}</div> : <EmptyState icon="◎" title="Nobody's in yet" text="Be the first to get your picks in this week." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
         )}

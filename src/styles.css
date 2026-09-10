@@ -2107,3 +2107,23 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .bank-amount.positive { color: var(--neon); }
 .bank-amount.zero { color: var(--muted); }
 .chase-money { align-self: flex-start; margin-bottom: 12px; }
+
+/* ── Reading somebody else's sheet after the deadline ── */
+.entry-who { min-width: 0; }
+.entry-row.readable .entry-who { cursor: pointer; }
+.entry-caret { color: var(--neon); font-size: 11px; margin-left: 6px; }
+.entry-row.open { border-color: rgba(57,255,20,.35); }
+.sheet-open { grid-column: 1 / -1; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); display: flex; flex-direction: column; gap: 8px; }
+.sheet-open-head { display: flex; flex-direction: column; gap: 2px; }
+.sheet-open-head strong { font-size: 13px; color: #fff; }
+.sheet-open-head span { font-size: 11px; color: var(--muted); }
+.sheet-open-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.sheet-pick { display: flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); font-size: 11px; }
+.sheet-pick-matchup { color: var(--muted); white-space: nowrap; }
+.sheet-pick-team { font-weight: 800; color: var(--ink); margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-pick-mark { font-weight: 800; width: 10px; text-align: center; }
+.sheet-pick.hit { border-color: rgba(57,255,20,.4); background: rgba(57,255,20,.07); }
+.sheet-pick.hit .sheet-pick-team, .sheet-pick.hit .sheet-pick-mark { color: var(--neon); }
+.sheet-pick.miss { border-color: rgba(255,77,77,.35); background: rgba(255,77,77,.06); }
+.sheet-pick.miss .sheet-pick-team, .sheet-pick.miss .sheet-pick-mark { color: var(--rust); }
+.sheet-pick.blank .sheet-pick-team { color: var(--muted); }
