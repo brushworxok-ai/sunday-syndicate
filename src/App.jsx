@@ -3135,32 +3135,7 @@ function App() {
                   finally { setServerBusy(''); }
                 }}>{serverBusy === `del-${sheet.id}` ? '…' : '✕'}</button>
               )}
-              {openSheetId === sheet.id && !sheet.picksHidden && (() => {
-                const correct = currentGames.reduce((total, game) => total + (results[game.id]?.winner && results[game.id].winner === sheet.picks[game.id] ? 1 : 0), 0);
-                const graded = currentGames.filter((game) => results[game.id]?.winner).length;
-                return (
-                  <div className="sheet-open">
-                    <div className="sheet-open-head">
-                      <strong>{sheet.name}'s {weekLabel} sheet</strong>
-                      <span>{graded ? `${correct}/${graded} right so far` : 'No games final yet'} · TB {sheet.tiebreaker}</span>
-                    </div>
-                    <div className="sheet-open-grid">
-                      {currentGames.map((game) => {
-                        const pick = sheet.picks?.[game.id];
-                        const winner = results[game.id]?.winner;
-                        const state = !pick ? 'blank' : !winner ? 'pending' : pick === winner ? 'hit' : 'miss';
-                        return (
-                          <div className={`sheet-pick ${state}`} key={game.id}>
-                            <span className="sheet-pick-matchup">{game.away} @ {game.home}</span>
-                            <span className="sheet-pick-team">{pick ? TEAMS[pick]?.split(' ').at(-1) ?? pick : '—'}</span>
-                            <span className="sheet-pick-mark">{state === 'hit' ? '✓' : state === 'miss' ? '✗' : ''}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })()}
+              {openSheetId === sheet.id && !sheet.picksHidden && <SheetPicks sheet={sheet} games={currentGames} results={results} weekLabel={weekLabel} />}
               </article>
             ))}</div> : <EmptyState icon="◎" title="Nobody's in yet" text="Be the first to get your picks in this week." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
@@ -3191,14 +3166,19 @@ function App() {
                   {weekTiebreaker.total != null ? ` Final total: ${weekTiebreaker.total}.` : " Awaiting that game's final score."}
                 </p>
               )}
+              {leaderboard.some((entry) => !entry.picksHidden) && <p className="board-hint">👆 Tap anybody to see every pick they made.</p>}
               <div className="table-head"><span>Rank</span><span>Player</span><span>Tiebreaker</span><span>Correct</span></div>
               {leaderboard.map((entry, index) => {
                 const path = winPathsByEntry[entry.id];
-                return <div className={`standing-row ${index === 0 && completedGames ? 'leader' : ''}`} key={entry.id}>
+                const readable = !entry.picksHidden;
+                const open = openSheetId === entry.id;
+                const toggle = () => { if (readable) setOpenSheetId((id) => (id === entry.id ? '' : entry.id)); };
+                return <div className={`standing-row ${index === 0 && completedGames ? 'leader' : ''} ${readable ? 'readable' : ''} ${open ? 'open' : ''}`} key={entry.id} role={readable ? 'button' : undefined} tabIndex={readable ? 0 : undefined} onClick={toggle} onKeyDown={(e) => { if (readable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } }}>
                   <span>#{index + 1}</span>
-                  <strong>{entry.name}{index === 0 && completedGames ? '  ♛' : ''}{path && <i className={`path-badge ${path.status}`}>{{ clinched: 'CLINCHED', won: 'WINNER', alive: 'ALIVE', on_tiebreaker: 'TB DECIDES', eliminated: 'OUT' }[path.status]}</i>}</strong>
+                  <strong>{entry.name}{index === 0 && completedGames ? '  ♛' : ''}{path && <i className={`path-badge ${path.status}`}>{{ clinched: 'CLINCHED', won: 'WINNER', alive: 'ALIVE', on_tiebreaker: 'TB DECIDES', eliminated: 'OUT' }[path.status]}</i>}{readable && <span className="entry-caret">{open ? '▾' : '▸'}</span>}</strong>
                   <span>{entry.tiebreaker}{entry.tiebreakerBusted && <em className="tb-busted"> BUST</em>}{!entry.tiebreakerBusted && weekTiebreaker.total != null && <em className="tb-actual">{weekTiebreaker.total - entry.tiebreaker === 0 ? ' ✓ NAILED IT' : ` (−${weekTiebreaker.total - entry.tiebreaker})`}</em>}</span>
                   <b>{entry.score}<small> / {completedGames || '—'}</small></b>
+                  {open && <SheetPicks sheet={entry} games={currentGames} results={results} weekLabel={weekLabel} />}
                 </div>;
               })}
             </div> : <EmptyState icon="↗" title="No paid entries yet" text="Standings include confirmed, paid entries only. Submit your picks, then pay your entry to join the board." action="Make picks" onAction={() => setView('picks')} />}
@@ -4271,6 +4251,35 @@ function parseQuickPay(text) {
 
 /* How to PAY the commissioner: every method they've set up, as one-tap
    buttons. Tapping remembers the method so "I sent it" records it. */
+/* One player's sheet for a week: their pick per game, graded once results land.
+   Used on the Board and on Who's in — same markup either place. */
+function SheetPicks({ sheet, games, results, weekLabel }) {
+  const correct = games.reduce((total, game) => total + (results[game.id]?.winner && results[game.id].winner === sheet.picks?.[game.id] ? 1 : 0), 0);
+  const graded = games.filter((game) => results[game.id]?.winner).length;
+  return (
+    <div className="sheet-open">
+      <div className="sheet-open-head">
+        <strong>{sheet.name}'s {weekLabel} sheet</strong>
+        <span>{graded ? `${correct}/${graded} right so far` : 'No games final yet'} · TB {sheet.tiebreaker}</span>
+      </div>
+      <div className="sheet-open-grid">
+        {games.map((game) => {
+          const pick = sheet.picks?.[game.id];
+          const winner = results[game.id]?.winner;
+          const state = !pick ? 'blank' : !winner ? 'pending' : pick === winner ? 'hit' : 'miss';
+          return (
+            <div className={`sheet-pick ${state}`} key={game.id}>
+              <span className="sheet-pick-matchup">{game.away} @ {game.home}</span>
+              <span className="sheet-pick-team">{pick ? TEAMS[pick]?.split(' ').at(-1) ?? pick : '—'}</span>
+              <span className="sheet-pick-mark">{state === 'hit' ? '✓' : state === 'miss' ? '✗' : ''}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function PayOptions({ settings, amount, note, picked, onPick }) {
   const pool = settings?.cashAppPool;
   const payIn = settings?.payIn ?? {};
