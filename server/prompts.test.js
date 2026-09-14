@@ -78,3 +78,36 @@ test('assistant prompt preserves matchups and bounded season facts', () => {
   assert.equal(data.league.weeklyWinner.winners[0].name, 'Avery');
   assert.equal(data.currentPlayer.favoriteTeam, 'DAL');
 });
+
+test('weekly roast hands Jack the real reason, not just the score', () => {
+  const { prompt, systemInstruction } = buildPrompt('weeklyRoast', {
+    playerName: 'Big Lite', roastLevel: 'target', weekScore: 11, weekTotal: 16, weekRank: 2,
+    leaderName: 'Trent Walton',
+    elimination: { status: 'eliminated', blockedBy: { name: 'Trent Walton', lead: 1, swingGames: 0 } },
+    costlyMisses: [{ matchup: 'NE at SEA', took: 'NE', won: 'SEA' }],
+  });
+  // The funniest fact about this loss is that he copied the man ahead of him.
+  assert.match(prompt, /SAME picks in every game that was left/);
+  assert.match(prompt, /Trent Walton finished 1 ahead/);
+  assert.match(prompt, /NE at SEA \(they took NE, SEA won\)/);
+  assert.match(systemInstruction, /Never invent a game that is not listed/);
+});
+
+test('weekly roast explains a partial-swing loss with the real count', () => {
+  const { prompt } = buildPrompt('weeklyRoast', {
+    playerName: 'Alonzo Prince', roastLevel: 'explicit', weekScore: 9, weekTotal: 16, weekRank: 7,
+    elimination: { status: 'eliminated', blockedBy: { name: 'Trent Walton', lead: 3, swingGames: 1 } },
+  });
+  assert.match(prompt, /only 1 remaining game had different picks/);
+});
+
+test('the weekly winner still gets no roast material', () => {
+  const { prompt, systemInstruction } = buildPrompt('weeklyRoast', {
+    playerName: 'Trent Walton', roastLevel: 'target', isWinner: true, weekScore: 12, weekTotal: 16, weekRank: 1,
+    elimination: { status: 'clinched', reason: 'Locked it up' },
+    costlyMisses: [{ matchup: 'NE at SEA', took: 'NE', won: 'SEA' }],
+  });
+  assert.doesNotMatch(prompt, /Why they lost/);
+  assert.doesNotMatch(prompt, /Games .* hit and they missed/);
+  assert.match(systemInstruction, /Never roast a weekly winner/);
+});

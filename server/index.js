@@ -1220,7 +1220,29 @@ app.post('/api/leagues/:leagueId/jack/weekly-roast', auth.requireAdmin, asyncRou
   const winnerRecognition = computeWinnerRecognition(league, currentWeek);
   const winnerIds = new Set(winnerRecognition?.protectedPlayerIds ?? []);
 
-  const leaderboard = buildLeaderboard(league.players, (league.sheets ?? []).filter((s) => s.week === currentWeek), league.results);
+  const weekSheets = (league.sheets ?? []).filter((s) => s.week === currentWeek);
+  const leaderboard = buildLeaderboard(league.players, weekSheets, league.results);
+
+  /* Jack needs to know WHY somebody lost, not just that they did. The paths
+     carry the head-to-head math (who blocked you, how many games left could
+     still have moved it), and the misses below name the actual games where the
+     week's winner cashed and this player didn't. */
+  const { buildWinningPaths } = await import('../src/winningPaths.js');
+  const { paths } = buildWinningPaths({ sheets: weekSheets, results: league.results ?? {} }, { week: currentWeek, games: weekGames });
+  const pathByPlayer = new Map(paths.map((path) => [path.playerId, path]));
+  const topEntry = leaderboard[0] ?? null;
+  const topSheet = topEntry ? weekSheets.find((s) => s.playerId === topEntry.playerId) : null;
+
+  /* Games the leader got right and this player got wrong — the picks that
+     actually cost them. Capped so the prompt stays small and factual. */
+  const missesAgainstLeader = (sheet) => {
+    if (!topSheet || !sheet || sheet.id === topSheet.id) return [];
+    return weekGames.filter((game) => {
+      const winner = league.results?.[game.id]?.winner;
+      return winner && topSheet.picks?.[game.id] === winner && sheet.picks?.[game.id] && sheet.picks[game.id] !== winner;
+    }).slice(0, 3).map((game) => ({ matchup: `${game.away} at ${game.home}`, took: sheet.picks[game.id], won: league.results[game.id].winner }));
+  };
+
   const { buildPrompt } = await import('./prompts.js');
   const client = new GoogleGenAI({ apiKey: (await getGeminiKey()).value });
 
@@ -1239,6 +1261,13 @@ app.post('/api/leagues/:leagueId/jack/weekly-roast', auth.requireAdmin, asyncRou
       weekScore: entry.score,
       weekTotal: weekGames.length,
       weekRank: entry.rank,
+      elimination: (() => {
+        const path = pathByPlayer.get(entry.playerId);
+        if (!path) return null;
+        return { status: path.status, reason: path.reason, blockedBy: path.blockedBy };
+      })(),
+      costlyMisses: missesAgainstLeader(weekSheets.find((s) => s.playerId === entry.playerId)),
+      leaderName: topEntry && topEntry.playerId !== entry.playerId ? topEntry.name : null,
     });
 
     try {

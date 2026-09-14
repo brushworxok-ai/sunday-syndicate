@@ -252,6 +252,29 @@ export const PROMPTS = {
 
     const memoryLine = memory ? `Season stats: ${memory.correct ?? 0}/${memory.totalPicks ?? 0} correct (${memory.winPercentage ?? 0}%), streak ${memory.currentStreak?.type ?? 'none'} ${memory.currentStreak?.length ?? 0}, best week ${memory.bestWeek?.correct ?? '?'}/${memory.bestWeek?.total ?? '?'}.` : '';
 
+    /* The "why" — head-to-head math plus the actual games it turned on. This is
+       what lets Jack say "you copied the man ahead of you" instead of just
+       repeating the score back at them. */
+    const elimination = payload.elimination ?? null;
+    const leaderName = cleanText(payload.leaderName, 40);
+    const blocked = elimination?.blockedBy;
+    const whyLine = (() => {
+      if (!elimination || isWinner) return '';
+      if (elimination.status === 'eliminated' && blocked) {
+        const frozen = blocked.swingGames === 0
+          ? `they made the SAME picks in every game that was left, so the gap could never move`
+          : `only ${blocked.swingGames} remaining game${blocked.swingGames === 1 ? '' : 's'} had different picks, so they could close ${blocked.swingGames} at most`;
+        return `Why they lost: ${blocked.name} finished ${blocked.lead} ahead and ${frozen}.`;
+      }
+      if (elimination.status === 'on_tiebreaker') return 'They could only draw level — the tiebreaker settled it.';
+      return elimination.reason ? `Status: ${elimination.reason}` : '';
+    })();
+
+    const misses = Array.isArray(payload.costlyMisses) ? payload.costlyMisses.slice(0, 3) : [];
+    const missLine = misses.length && !isWinner
+      ? `Games ${leaderName || 'the winner'} hit and they missed: ${misses.map((m) => `${cleanText(m.matchup, 24)} (they took ${cleanText(m.took, 6)}, ${cleanText(m.won, 6)} won)`).join('; ')}.`
+      : '';
+
     const toneGuide = {
       clean: 'Keep it G-rated. No swearing, no innuendo. Sports-only humor.',
       pg13: 'Mild adult humor is fine. Light swearing (damn, hell). No slurs or personal attacks.',
@@ -269,10 +292,15 @@ export const PROMPTS = {
         'Generate original jokes. Do not copy comedian routines, catchphrases, or copyrighted material.',
         'Never cross into protected traits, real-life personal problems, family, health, appearance, finances, or threats.',
         'Use only supplied facts. Do not invent scores, injuries, odds, or outcomes.',
+        'If a "Why they lost" line is supplied, build the roast around THAT — the specific reason beats a generic jab at the score. Copying the leader\'s picks while trailing him is the funniest possible way to lose; say so.',
+        'If specific missed games are supplied, name the teams. Never invent a game that is not listed.',
         'Return only the roast line, no quotation marks or preamble.',
         'Maximum 35 words.',
       ].join(' '),
-      prompt: `Player: ${playerName}. Week score: ${weekScore}/${weekTotal}. Rank: #${weekRank}. Winner: ${isWinner}. ${memoryLine}`,
+      prompt: [
+        `Player: ${playerName}. Week score: ${weekScore}/${weekTotal}. Rank: #${weekRank}. Winner: ${isWinner}.`,
+        memoryLine, whyLine, missLine,
+      ].filter(Boolean).join(' '),
     };
   },
 
