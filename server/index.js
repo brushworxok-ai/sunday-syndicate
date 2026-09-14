@@ -35,6 +35,7 @@ function validateAvatar(value) {
 }
 import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
 import { validateTiebreaker } from '../src/tiebreaker.js';
+import { createHash } from 'node:crypto';
 import { createLeagueStore } from './storeFactory.js';
 import { buildLeagueView } from './publicLeagueView.js';
 import { ModerationError } from './moderation.js';
@@ -512,8 +513,37 @@ app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   if (!league) return response.status(404).json({ error: 'League not found.' });
   await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
   const player = await playerAuth.playerFromRequest(request);
-  response.set('Cache-Control', 'private, no-store');
-  return response.json(buildLeagueView(league, { playerId: player?.leagueId === league.id ? player.id : null, isAdmin: auth.isAuthenticated(request) }));
+  const view = buildLeagueView(league, { playerId: player?.leagueId === league.id ? player.id : null, isAdmin: auth.isAuthenticated(request) });
+
+  /* Phones poll this every few seconds. When nothing has changed since their
+     last read, answer 304 with no body: a poll costs a few hundred bytes
+     instead of the whole league. This is the difference between a Sunday
+     costing ~1 GB of database transfer and costing almost nothing. */
+  const body = JSON.stringify(view);
+  const etag = `W/"${createHash('sha1').update(body).digest('base64url')}"`;
+  response.set('Cache-Control', 'private, no-cache');
+  response.set('ETag', etag);
+  if (request.headers['if-none-match'] === etag) return response.status(304).end();
+  response.type('application/json');
+  return response.send(body);
+}));
+
+/* Uploaded photos live here instead of inside every league poll. They are
+   content-addressed by ?v=<hash>, so the browser can cache one hard and never
+   ask again until the player changes their picture. */
+app.get('/api/leagues/:leagueId/players/:playerId/avatar', asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  const player = (league?.players ?? []).find((candidate) => candidate.id === request.params.playerId);
+  const avatar = typeof player?.avatar === 'string' ? player.avatar : '';
+  const match = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(avatar);
+  if (!match) return response.status(404).json({ error: 'No photo for that player.' });
+  const body = Buffer.from(match[2], 'base64');
+  const etag = `"${createHash('sha1').update(body).digest('base64url')}"`;
+  response.set('Cache-Control', 'public, max-age=31536000, immutable');
+  response.set('ETag', etag);
+  if (request.headers['if-none-match'] === etag) return response.status(304).end();
+  response.type(match[1]);
+  return response.send(body);
 }));
 
 /* ── Manual season start: commissioner clears the demo crew on demand ── */

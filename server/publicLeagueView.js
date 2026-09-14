@@ -1,5 +1,21 @@
 import { isWeekLocked } from '../src/data.js';
 import { creditBalances } from '../src/credits.js';
+import { createHash } from 'node:crypto';
+
+/* Uploaded photos are data: URLs of ~8 KB each. Shipping twelve of them inside
+   every league poll was ~95 KB of the ~132 KB payload, re-sent every few
+   seconds to every open phone — that is what drained the database's monthly
+   transfer. Photos change about never, so they move to their own URL the
+   browser can cache hard; emoji avatars are a few bytes and stay inline. */
+export function slimAvatars(players = [], leagueId = '') {
+  return players.map((player) => {
+    const avatar = player.avatar;
+    if (typeof avatar !== 'string' || !avatar.startsWith('data:image/')) return player;
+    const version = createHash('sha1').update(avatar).digest('hex').slice(0, 12);
+    const { avatar: _photo, ...rest } = player;
+    return { ...rest, avatar: null, avatarVersion: version, avatarUrl: `/api/leagues/${leagueId}/players/${player.id}/avatar?v=${version}` };
+  });
+}
 
 function scoreSheet(sheet, results = {}) {
   return Object.entries(sheet.picks ?? {}).reduce(
@@ -30,7 +46,7 @@ export function buildLeagueView(league, { playerId = null, isAdmin = false, lock
   /* Every player can see what everyone has on the books — balances only, never
      each other's ledger entries (those stay owner-only below). */
   const balances = creditBalances(league.creditLedger ?? [], league.players ?? []);
-  if (isAdmin) return { ...view, creditBalances: balances };
+  if (isAdmin) return { ...view, players: slimAvatars(league.players ?? [], league.id), creditBalances: balances };
   const owns = (item) => Boolean(playerId) && item.playerId === playerId;
   const entryView = (entry, revealed) => {
     const { handle, paymentClaim, paymentReview, paidVia, ...safe } = entry;
@@ -49,11 +65,11 @@ export function buildLeagueView(league, { playerId = null, isAdmin = false, lock
   return {
     ...view,
     settings,
-    players: (league.players ?? []).map((player) => {
+    players: slimAvatars((league.players ?? []).map((player) => {
       if (player.id === playerId) return player;
       const { phone, phoneE164, messaging, phoneVerifiedAt, payment, ...profile } = player;
       return profile;
-    }),
+    }), league.id),
     sheets: (league.sheets ?? []).map((sheet) => entryView(sheet, locked(sheet.week))),
     cfbPools: (league.cfbPools ?? []).map((pool) => {
       const revealed = pool.status !== 'open' || (pool.games ?? []).some((game) => Number.isFinite(Date.parse(game.date)) && Date.parse(game.date) <= now);

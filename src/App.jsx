@@ -1118,13 +1118,19 @@ function App() {
      sync, so any screen that shows a score or a standing has to re-read the
      league — otherwise the scoreboard card up top says FINAL while the board
      underneath is frozen at whatever it was when the page loaded. */
-  const LEAGUE_REFRESH_MS = { chat: 12_000, results: 30_000, live: 30_000, home: 45_000, entries: 45_000, season: 60_000, survivor: 60_000 };
+  /* Polls are cheap now (unchanged ones come back 304 with no body), but there
+     is no reason to ask every 30s when nothing is playing. Lean in during
+     games, back off otherwise. */
+  const gamesInProgress = Boolean(liveScores.anyLive);
+  const LEAGUE_REFRESH_MS = gamesInProgress
+    ? { chat: 12_000, results: 30_000, live: 30_000, home: 45_000, entries: 60_000, season: 60_000, survivor: 60_000 }
+    : { chat: 15_000, results: 120_000, live: 120_000, home: 180_000, entries: 180_000, season: 300_000, survivor: 300_000 };
   useEffect(() => {
     const every = LEAGUE_REFRESH_MS[view];
     if (!every) return undefined;
     const timer = setInterval(() => { if (!document.hidden) loadLeague(); }, every);
     return () => clearInterval(timer);
-  }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, gamesInProgress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Coming back to the app is the moment people most expect fresh numbers —
      phone unlocked, tab re-focused. Throttled so flipping tabs can't spam. */
@@ -4350,7 +4356,9 @@ function PayHandle({ player, compact = false }) {
 }
 
 function PlayerAvatar({ player, size = 44 }) {
-  const avatar = player?.avatar;
+  /* Uploaded photos now arrive as a cacheable URL instead of a data: blob
+     riding along in every league poll; emoji still come through inline. */
+  const avatar = player?.avatar || player?.avatarUrl || null;
   const isImage = typeof avatar === 'string' && (avatar.startsWith('data:') || avatar.startsWith('http') || avatar.startsWith('/'));
   const isEmoji = typeof avatar === 'string' && avatar.trim() && !isImage;
   const initials = (player?.name || '?').split(' ').filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
