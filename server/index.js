@@ -75,19 +75,55 @@ const jackModel = process.env.JACK_GEMINI_MODEL || DEFAULT_JACK_MODEL;
 // explicit so an old hosting variable can never reactivate SMS accidentally.
 const SMS_DISABLED = true;
 const databasePath = process.env.DATABASE_PATH || path.join(projectRoot, 'work', 'sunday-syndicate.sqlite');
-const store = await createLeagueStore({ databaseUrl: process.env.DATABASE_URL, databasePath });
+/* A bad database URL or a missing secret used to throw right here, at module
+   scope. On Vercel that kills the whole function and every single route — even
+   /api/health — answers FUNCTION_INVOCATION_FAILED with no clue why. So record
+   boot problems instead of throwing: the API still refuses to serve data, but
+   it can say what is wrong, and it recovers on its own once the cause is. */
+export class ServiceUnavailableError extends Error {}
+const bootProblems = [];
+let liveStore = null;
+
+async function connectStore() {
+  try {
+    liveStore = await createLeagueStore({ databaseUrl: process.env.DATABASE_URL, databasePath });
+    await liveStore.seedDemo();
+    const index = bootProblems.indexOf('database');
+    if (index !== -1) bootProblems.splice(index, 1);
+    return true;
+  } catch (error) {
+    liveStore = null;
+    if (!bootProblems.includes('database')) bootProblems.push('database');
+    console.error('Database unavailable at boot:', error.message);
+    return false;
+  }
+}
+await connectStore();
+
+/* Every existing `store.whatever()` call site keeps working; if the database
+   never came up they throw a typed error that the handler below turns into a
+   503 instead of a crash. */
+const store = new Proxy({}, {
+  get(_target, prop) {
+    if (!liveStore) throw new ServiceUnavailableError('The league database is unavailable.');
+    const value = liveStore[prop];
+    return typeof value === 'function' ? value.bind(liveStore) : value;
+  },
+});
+
 const { makeGeminiKeyResolver, invalidateGeminiKeyCache } = await import('./geminiKey.js');
 const getGeminiKey = makeGeminiKeyResolver(store);
-await store.seedDemo();
 
 const isProduction = process.env.NODE_ENV === 'production';
 const isDeployed = isProduction || process.env.VERCEL === '1' || Boolean(process.env.REPL_ID || process.env.REPLIT_DEPLOYMENT);
 // Fail fast in any deployed environment: never run with development secrets in production.
 if (isDeployed && !process.env.SESSION_SECRET) {
-  throw new Error('SESSION_SECRET must be set in production — refusing to start with the development fallback secret.');
+  bootProblems.push('configuration');
+  console.error('SESSION_SECRET must be set in production — refusing to serve with the development fallback secret.');
 }
 if (isDeployed && !process.env.ADMIN_PASSWORD) {
-  throw new Error('ADMIN_PASSWORD must be set in production — refusing to start without a commissioner password.');
+  bootProblems.push('configuration');
+  console.error('ADMIN_PASSWORD must be set in production — refusing to serve without a commissioner password.');
 }
 const sessionSecret = process.env.SESSION_SECRET || 'development-only-session-secret-change-me';
 const secureCookies = process.env.VERCEL === '1' || (isProduction && String(process.env.APP_BASE_URL).startsWith('https://'));
@@ -129,6 +165,22 @@ async function notifyFinalResults(lid, week) {
 }
 
 app.set('trust proxy', 1);
+
+/* While a boot problem stands, serve nothing but a clear 503 — except health,
+   which exists to report it. A database that comes back is picked up here, so
+   the API heals itself without a redeploy. */
+app.use(async (request, response, next) => {
+  if (!bootProblems.length) return next();
+  if (bootProblems.includes('database') && !bootProblems.includes('configuration')) await connectStore();
+  if (!bootProblems.length) return next();
+  if (request.path === '/api/health') return next();
+  return response.status(503).json({
+    error: bootProblems.includes('configuration')
+      ? 'The app is not configured correctly on the server. The commissioner needs to check the hosting settings.'
+      : 'The league database is unavailable right now. Try again in a minute.',
+    reason: bootProblems[0],
+  });
+});
 app.disable('x-powered-by');
 app.use(helmet({
   contentSecurityPolicy: {
@@ -198,6 +250,17 @@ app.get('/api/sms/trace', auth.requireAdmin, asyncRoute(async (request, response
 }));
 
 app.get('/api/health', asyncRoute(async (_request, response) => {
+  /* Health must answer even when nothing else can — that is the whole point of
+     it. Say plainly what is broken so the fix is obvious from one curl. */
+  if (bootProblems.length) {
+    return response.status(503).json({
+      ok: false,
+      problem: bootProblems[0],
+      detail: bootProblems.includes('configuration')
+        ? 'Required hosting settings are missing (SESSION_SECRET and/or ADMIN_PASSWORD). Set them and redeploy.'
+        : 'Could not reach the league database. Check DATABASE_URL and that the database is awake.',
+    });
+  }
   const geminiKey = await getGeminiKey().catch(() => ({ value: null, source: 'none' }));
   response.json({
     ok: true,
@@ -3203,6 +3266,10 @@ if (isProduction && !process.env.VERCEL) {
 }
 
 app.use((error, _request, response, _next) => {
+  if (error instanceof ServiceUnavailableError) {
+    console.error('Request hit an unavailable database:', error.message);
+    return response.status(503).json({ error: 'The league database is unavailable right now. Try again in a minute.' });
+  }
   const known = error instanceof WorkflowError || error instanceof ModerationError;
   console.error('Request failed:', error.message);
   response.status(known ? (error.status ?? 422) : 500).json({ error: known ? error.message : 'The server could not complete that request.', ...(error.code ? { code: error.code } : {}) });
