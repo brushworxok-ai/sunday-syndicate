@@ -3211,6 +3211,7 @@ function App() {
                   <strong>{entry.name}{index === 0 && completedGames ? '  ♛' : ''}{path && <i className={`path-badge ${path.status}`}>{{ clinched: 'CLINCHED', won: 'WINNER', alive: 'ALIVE', on_tiebreaker: 'TB DECIDES', eliminated: 'OUT' }[path.status]}</i>}{readable && <span className="entry-caret">{open ? '▾' : '▸'}</span>}</strong>
                   <span>{entry.tiebreaker}{entry.tiebreakerBusted && <em className="tb-busted"> BUST</em>}{!entry.tiebreakerBusted && weekTiebreaker.total != null && <em className="tb-actual">{weekTiebreaker.total - entry.tiebreaker === 0 ? ' ✓ NAILED IT' : ` (−${weekTiebreaker.total - entry.tiebreaker})`}</em>}</span>
                   <b>{entry.score}<small> / {completedGames || '—'}</small></b>
+                  {path?.reason && <span className={`path-why ${path.status}`}>{path.reason}</span>}
                   {open && <SheetPicks sheet={entry} games={currentGames} results={results} weekLabel={weekLabel} />}
                 </div>;
               })}

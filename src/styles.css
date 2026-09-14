@@ -2138,3 +2138,10 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .standing-row .sheet-open { grid-column: 1 / -1; }
 .standing-row.open { align-items: start; padding-top: 12px; padding-bottom: 12px; }
 .standing-row .sheet-open { margin-top: 4px; }
+/* The "why" line under each standings row — the whole point is that a player
+   can read it and know exactly what killed their week. */
+.path-why { grid-column: 2 / -1; font-size: 11px; line-height: 1.35; color: var(--muted); margin-top: 2px; }
+.path-why.eliminated { color: rgba(255, 77, 77, 0.85); }
+.path-why.clinched { color: var(--gold); }
+.path-why.on_tiebreaker { color: var(--blue); }
+@media (max-width: 560px) { .path-why { grid-column: 1 / -1; } }

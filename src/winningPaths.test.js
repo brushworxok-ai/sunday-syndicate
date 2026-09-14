@@ -41,7 +41,10 @@ test('winning paths cover every player without revealing hidden selections', () 
   assert.equal(alpha.status, 'alive');
   const delta = snapshot.paths.find((path) => path.playerId === 'delta');
   assert.equal(delta.score, 0);
-  assert.equal(delta.status, 'alive'); // 0 + 2 remaining can still tie the leader's 2
+  // Delta never picked g3 or g4, so there is no way left to earn a point and
+  // no way to close a 2-point gap. Trailing + nothing to gain = eliminated.
+  assert.equal(delta.status, 'eliminated');
+  assert.match(delta.reason, /Alpha One/);
 
   // The snapshot must never leak actual pick selections.
   for (const path of snapshot.paths) {
@@ -115,8 +118,84 @@ test('with 2 games left, only players who can reach the leader stay alive', () =
   const statusOf = (id) => paths.find((p) => p.playerId === id)?.status;
 
   assert.notEqual(statusOf('leader'), 'eliminated');
-  assert.notEqual(statusOf('chaser'), 'eliminated');   // 11 + 2 = 13 > 12, can win outright
-  assert.notEqual(statusOf('tier'), 'eliminated');     // 10 + 2 = 12, can tie -> tiebreaker
+  // Every entrant here picked the SAME two teams in the remaining games, so no
+  // gap can move: trailing by even 1 with identical picks is already over.
+  assert.equal(statusOf('chaser'), 'eliminated');
+  assert.equal(statusOf('tier'), 'eliminated');
   assert.equal(statusOf('done'), 'eliminated');        // 9 + 2 = 11 < 12, cannot catch him
   assert.equal(statusOf('buried'), 'eliminated');
+});
+
+/* ── Shared picks are what actually decides elimination ── */
+
+const slate16 = Array.from({ length: 16 }, (_, i) => ({ id: `w${i + 1}`, away: 'AWY', home: 'HOM', kickoff: `2026-09-${10 + (i % 5)}T00:00:00Z` }));
+
+/** 14 of 16 final (HOM won them all); caller sets each entrant's last two picks. */
+function boardWithTwoLeft(entrants) {
+  const results = Object.fromEntries(slate16.slice(0, 14).map((g) => [g.id, { winner: 'HOM', verifiedAt: '2026-09-14T00:00:00Z' }]));
+  const sheets = entrants.map(({ id, correct, last2, tiebreaker = 45 }) => ({
+    id: `s-${id}`, playerId: id, name: id, week: 1, tiebreaker,
+    picks: {
+      ...Object.fromEntries(slate16.slice(0, 14).map((g, i) => [g.id, i < correct ? 'HOM' : 'AWY'])),
+      'w15': last2[0], 'w16': last2[1],
+    },
+  }));
+  const { paths } = buildWinningPaths({ sheets, results }, { week: 1, games: slate16 });
+  return Object.fromEntries(paths.map((p) => [p.playerId, p]));
+}
+
+test('trailing by 1 with identical remaining picks is already over', () => {
+  // This is Anthony's real Week 1 board: Trent up 1, and the chasers had the
+  // same two teams left, so the gap was frozen and he had already clinched.
+  const by = boardWithTwoLeft([
+    { id: 'trent', correct: 12, last2: ['HOM', 'HOM'] },
+    { id: 'biglite', correct: 11, last2: ['HOM', 'HOM'] },
+    { id: 'mann', correct: 10, last2: ['HOM', 'HOM'] },
+  ]);
+  assert.equal(by.trent.status, 'clinched');
+  assert.equal(by.biglite.status, 'eliminated');
+  assert.equal(by.mann.status, 'eliminated');
+  assert.match(by.biglite.reason, /same picks/);
+  assert.deepEqual(
+    { name: by.biglite.blockedBy.name, lead: by.biglite.blockedBy.lead, swingGames: by.biglite.blockedBy.swingGames },
+    { name: 'trent', lead: 1, swingGames: 0 },
+  );
+});
+
+test('the same 1-point gap stays alive when the remaining picks differ', () => {
+  const by = boardWithTwoLeft([
+    { id: 'trent', correct: 12, last2: ['HOM', 'HOM'] },
+    { id: 'biglite', correct: 11, last2: ['AWY', 'AWY'] }, // both games can swing
+  ]);
+  assert.equal(by.biglite.status, 'alive');
+  assert.equal(by.trent.status, 'alive'); // no longer safe — biglite can pass him
+});
+
+test('a gap bigger than the number of differing games is still out', () => {
+  const by = boardWithTwoLeft([
+    { id: 'trent', correct: 12, last2: ['HOM', 'HOM'] },
+    { id: 'chaser', correct: 10, last2: ['AWY', 'HOM'] }, // down 2, only 1 can swing
+  ]);
+  assert.equal(by.chaser.status, 'eliminated');
+  assert.match(by.chaser.reason, /only 1 game/);
+});
+
+test('when the best you can do is draw level, it says the tiebreaker decides', () => {
+  const by = boardWithTwoLeft([
+    { id: 'trent', correct: 12, last2: ['HOM', 'HOM'] },
+    { id: 'chaser', correct: 11, last2: ['AWY', 'HOM'] }, // down 1, exactly 1 swing game
+  ]);
+  assert.equal(by.chaser.status, 'on_tiebreaker');
+  assert.match(by.chaser.reason, /tiebreaker/);
+});
+
+test('every path carries a human reason and still leaks no picks', () => {
+  const by = boardWithTwoLeft([
+    { id: 'trent', correct: 12, last2: ['HOM', 'HOM'] },
+    { id: 'biglite', correct: 11, last2: ['HOM', 'AWY'] },
+  ]);
+  for (const path of Object.values(by)) {
+    assert.ok(path.reason && path.reason.length > 10, `missing reason: ${JSON.stringify(path)}`);
+    assert.equal(Object.hasOwn(path, 'picks'), false);
+  }
 });
