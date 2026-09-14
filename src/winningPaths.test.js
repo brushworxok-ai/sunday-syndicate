@@ -88,3 +88,35 @@ test('elimination math respects maximum possible score mid-week', () => {
   const delta = snapshot.paths.find((path) => path.playerId === 'delta');
   assert.equal(delta.status, 'eliminated'); // 0 correct + 1 remaining < leader's 3
 });
+
+/* The real Week 1 board, two games left: the leader sat on 12, three players on
+   11 could pass him, one on 10 could only tie him (tiebreaker), and everyone at
+   9 or below was mathematically done. Anthony questioned the ALIVE badges on
+   exactly this board, so pin the boundary. */
+test('with 2 games left, only players who can reach the leader stay alive', () => {
+  const slate = Array.from({ length: 16 }, (_, i) => ({ id: `w${i + 1}`, away: 'AWY', home: 'HOM', kickoff: `2026-09-${10 + (i % 5)}T00:00:00Z` }));
+  const finals = slate.slice(0, 14);
+  const results = Object.fromEntries(finals.map((g) => [g.id, { winner: 'HOM', verifiedAt: '2026-09-14T00:00:00Z' }]));
+
+  // Give each player exactly N correct picks out of the 14 decided games.
+  const entrant = (id, correct, tiebreaker) => ({
+    id: `s-${id}`, playerId: id, name: id, week: 1, tiebreaker,
+    picks: Object.fromEntries(slate.map((g, i) => [g.id, i < correct ? 'HOM' : 'AWY'])),
+  });
+  const sheets = [
+    entrant('leader', 12, 45), entrant('chaser', 11, 44),
+    entrant('tier', 10, 43), entrant('done', 9, 42), entrant('buried', 6, 41),
+  ];
+
+  const { paths } = buildWinningPaths(
+    { players: sheets.map((s) => ({ id: s.playerId, name: s.name })), sheets, results },
+    { week: 1, games: slate },
+  );
+  const statusOf = (id) => paths.find((p) => p.playerId === id)?.status;
+
+  assert.notEqual(statusOf('leader'), 'eliminated');
+  assert.notEqual(statusOf('chaser'), 'eliminated');   // 11 + 2 = 13 > 12, can win outright
+  assert.notEqual(statusOf('tier'), 'eliminated');     // 10 + 2 = 12, can tie -> tiebreaker
+  assert.equal(statusOf('done'), 'eliminated');        // 9 + 2 = 11 < 12, cannot catch him
+  assert.equal(statusOf('buried'), 'eliminated');
+});

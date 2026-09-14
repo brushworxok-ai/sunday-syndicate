@@ -956,7 +956,12 @@ footer { min-height: 80px; border-top: 1px solid var(--line); display: flex; jus
 .path-badge.clinched, .path-badge.won { background: rgba(255, 215, 0, 0.16); color: #FFD700; border: 1px solid rgba(255, 215, 0, 0.4); }
 .path-badge.alive { background: rgba(57, 255, 20, 0.12); color: var(--neon, #39FF14); border: 1px solid rgba(57, 255, 20, 0.3); }
 .path-badge.on_tiebreaker { background: rgba(0, 212, 255, 0.12); color: #00D4FF; border: 1px solid rgba(0, 212, 255, 0.3); }
-.path-badge.eliminated { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.4); border: 1px solid rgba(255, 255, 255, 0.12); }
+/* OUT reads as OUT — red badge, and the whole row steps back so the guys who
+   can still win are what your eye lands on. */
+.path-badge.eliminated { background: rgba(255, 77, 77, 0.14); color: var(--rust); border: 1px solid rgba(255, 77, 77, 0.45); }
+.standing-row.is-out { background: rgba(255, 77, 77, 0.04); }
+.standing-row.is-out strong { color: rgba(255, 255, 255, 0.62); }
+.standing-row.is-out > b { color: var(--rust); }
 
 /* ── Season standings ── */
 .season-table { border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; overflow: hidden; margin-bottom: 24px; }

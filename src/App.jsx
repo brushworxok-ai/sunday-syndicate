@@ -3206,7 +3206,7 @@ function App() {
                 const readable = !entry.picksHidden;
                 const open = openSheetId === entry.id;
                 const toggle = () => { if (readable) setOpenSheetId((id) => (id === entry.id ? '' : entry.id)); };
-                return <div className={`standing-row ${index === 0 && completedGames ? 'leader' : ''} ${readable ? 'readable' : ''} ${open ? 'open' : ''}`} key={entry.id} role={readable ? 'button' : undefined} tabIndex={readable ? 0 : undefined} onClick={toggle} onKeyDown={(e) => { if (readable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } }}>
+                return <div className={`standing-row ${index === 0 && completedGames ? 'leader' : ''} ${readable ? 'readable' : ''} ${open ? 'open' : ''} ${path?.status === 'eliminated' ? 'is-out' : ''}`} key={entry.id} role={readable ? 'button' : undefined} tabIndex={readable ? 0 : undefined} onClick={toggle} onKeyDown={(e) => { if (readable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } }}>
                   <span>#{index + 1}</span>
                   <strong>{entry.name}{index === 0 && completedGames ? '  ♛' : ''}{path && <i className={`path-badge ${path.status}`}>{{ clinched: 'CLINCHED', won: 'WINNER', alive: 'ALIVE', on_tiebreaker: 'TB DECIDES', eliminated: 'OUT' }[path.status]}</i>}{readable && <span className="entry-caret">{open ? '▾' : '▸'}</span>}</strong>
                   <span>{entry.tiebreaker}{entry.tiebreakerBusted && <em className="tb-busted"> BUST</em>}{!entry.tiebreakerBusted && weekTiebreaker.total != null && <em className="tb-actual">{weekTiebreaker.total - entry.tiebreaker === 0 ? ' ✓ NAILED IT' : ` (−${weekTiebreaker.total - entry.tiebreaker})`}</em>}</span>
