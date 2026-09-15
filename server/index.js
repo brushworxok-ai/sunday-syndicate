@@ -510,9 +510,14 @@ async function autoStartSeasonIfDue(league) {
 }
 
 app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
-  const league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
+  let league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
   if (!league) return response.status(404).json({ error: 'League not found.' });
   await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
+  // A clinched result does not need to wait for unrelated games to go final.
+  // The settlement helper is idempotent, so this is safe on every refresh.
+  await settleClinchedWeeklyPayout({ leagueId: league.id, week: Number(league.week) || getCurrentWeek(), actor: 'league-refresh' });
+  league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
   const player = await playerAuth.playerFromRequest(request);
   const view = buildLeagueView(league, { playerId: player?.leagueId === league.id ? player.id : null, isAdmin: auth.isAuthenticated(request) });
 
@@ -1012,11 +1017,22 @@ function buildSeasonMemories(league, currentWeek) {
 function computeWinnerRecognition(league, currentWeek) {
   const jackSettings = normalizeJackSettings(league.settings);
   for (let w = currentWeek; w >= 1; w -= 1) {
-    const weekSheets = (league.sheets ?? []).filter((s) => s.week === w);
+    const weekSheets = (league.sheets ?? []).filter((s) => s.week === w && s.paid);
     if (!weekSheets.length) continue;
     const weekGames = getGames(w);
     const verifiedCount = weekGames.filter((g) => (league.results ?? {})[g.id]?.winner && (league.results ?? {})[g.id]?.verifiedAt).length;
     const verified = verifiedCount === weekGames.length && weekGames.length > 0;
+    const earlyPayout = (league.payouts ?? []).find((payout) => payout.week === w && (payout.pool ?? 'weekly') === 'weekly');
+    if (!verified && earlyPayout?.winnerPlayerIds?.length) {
+      const winners = (earlyPayout.winnerPlayerIds ?? []).map((playerId) => {
+        const player = (league.players ?? []).find((candidate) => candidate.id === playerId);
+        return player ? { playerId, name: player.name } : null;
+      }).filter(Boolean);
+      if (winners.length) return {
+        status: 'winner', winners, protectedPlayerIds: winners.map((winner) => winner.playerId), week: w, reigning: w < currentWeek,
+        message: `${winners.map((winner) => winner.name).join(' & ')} clinched Week ${w} early.`, clinchedEarly: true,
+      };
+    }
     if (!verified) continue;
     const leaderboard = buildLeaderboard(league.players, weekSheets, league.results);
     const recognition = buildWeeklyWinnerRecognition({
@@ -1683,7 +1699,10 @@ app.get('/api/leagues/:leagueId/live-scores', asyncRoute(async (request, respons
       }
     }
   }
-  return response.json({ ...data, autoVerified });
+  // Re-evaluate the week on every score refresh. A clinch can happen while
+  // another game is still live, so waiting for an all-final sweep is wrong.
+  const settlement = await settleClinchedWeeklyPayout({ leagueId: request.params.leagueId, week, actor: 'live-score-refresh' });
+  return response.json({ ...data, autoVerified, payoutSettled: settlement.settled });
 }));
 
 /* ── Auto score verification: pull finals from the live feed ── */
@@ -3152,6 +3171,55 @@ async function sweepPriorCfbPools({ lid, currentWeek, actions }) {
   } catch (error) { console.error('Auto-pilot CFB sweep failed:', error.message); }
 }
 
+/* Settle a weekly pot as soon as the verified score/pick math produces one
+   undisputed winner. The atomic claim makes this safe to call from score polls,
+   app refreshes, cron, and manual auto-pilot without paying twice. */
+async function settleClinchedWeeklyPayout({ leagueId: lid, week, actor = 'auto-clinch' }) {
+  const league = await store.getLeague(lid);
+  if (!league) return { settled: false, reason: 'league_not_found' };
+  if ((league.payouts ?? []).some((payout) => payout.week === week && (payout.pool ?? 'weekly') === 'weekly')) return { settled: false, reason: 'already_paid' };
+
+  const games = getGames(week);
+  const paidSheets = (league.sheets ?? []).filter((sheet) => sheet.week === week && sheet.paid);
+  if (!games.length || !paidSheets.length) return { settled: false, reason: 'no_paid_entries' };
+
+  // Only results which the app has verified can move real money.
+  const verifiedResults = Object.fromEntries(games.flatMap((game) => {
+    const result = (league.results ?? {})[game.id];
+    return result?.winner && result?.verifiedAt ? [[game.id, result]] : [];
+  }));
+  const { paths } = buildWinningPaths({ sheets: paidSheets, results: verifiedResults }, { week, games });
+  const clinched = paths.filter((path) => path.status === 'clinched');
+  if (clinched.length !== 1) return { settled: false, reason: 'not_clinched' };
+
+  const winner = clinched[0];
+  if (!winner.playerId || !paidSheets.some((sheet) => sheet.playerId === winner.playerId)) return { settled: false, reason: 'winner_not_eligible' };
+  const pot = paidSheets.length * (Number(league.settings?.entryFee) || ENTRY_FEE);
+  if (pot <= 0) return { settled: false, reason: 'empty_pot' };
+  if (!await store.claimOnce(lid, `weekly-pot-${week}`)) return { settled: false, reason: 'settling_elsewhere' };
+
+  try {
+    const { validateCreditEntry } = await import('../src/credits.js');
+    const verdict = validateCreditEntry({ amount: pot, reason: `Week ${week} winnings` });
+    if (!verdict.ok) throw new Error('The clinched payout amount could not be validated.');
+    const at = new Date().toISOString();
+    await store.addCreditEntry(lid, { id: randomUUID(), playerId: winner.playerId, amount: verdict.value, reason: `Week ${week} winnings — clinched early`, by: actor, at });
+    const payout = {
+      id: `payout-${randomUUID()}`, week, pool: 'weekly', amount: pot,
+      winnerNames: [winner.name], winnerPlayerIds: [winner.playerId], method: 'credit',
+      note: 'Automatic payout after mathematically verified clinch', paidAt: at, paidBy: actor,
+    };
+    await store.savePayout(lid, payout);
+    await store.addChatMessage(lid, { id: `chat-payout-w${week}`, playerId: null, name: 'Jack', msg: `🏆 WEEK ${week} CLINCHED: ${winner.name.split(' ')[0]} locked up the $${pot} pot with ${winner.remainingGames} game${winner.remainingGames === 1 ? '' : 's'} still left. $${pot} is now in their account credit.`, time: at });
+    await saveNotification(lid, { playerId: winner.playerId, kind: 'payout', title: `You clinched Week ${week}!`, body: `$${pot} was added to your account credit.`, metadata: { week, amount: pot, earlyClinch: true } });
+    await saveNotification(lid, { kind: 'payout', title: `Week ${week} winner: ${winner.name}`, body: `${winner.name} clinched the $${pot} pot. Winnings are in their account credit.`, metadata: { week, amount: pot, winnerId: winner.playerId, earlyClinch: true } });
+    return { settled: true, payout, winner };
+  } catch (error) {
+    await store.releaseClaim(lid, `weekly-pot-${week}`).catch(() => {});
+    throw error;
+  }
+}
+
 async function runAutoPilot({ source = 'traffic' } = {}) {
   if (autoPilotRunning) return { skipped: 'already running' };
   autoPilotRunning = true;
@@ -3191,67 +3259,11 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
       }
     } catch (error) { console.error('Auto-pilot prop settle failed:', error.message); }
 
-    // 2.5 Auto weekly winner payout: when every game is verified final, the pot
-    // goes to the winner's credit balance and Jack announces it in chat.
+    // 2.5 Auto weekly winner payout: a verified mathematical clinch is enough;
+    // an unrelated game still on the slate never holds up the winner's credit.
     try {
-      const freshLeague = await store.getLeague(leagueId);
-      const weekGames = getGames(week);
-      const allVerified = weekGames.length > 0 && weekGames.every((g) => {
-        const r = (freshLeague.results ?? {})[g.id];
-        return r?.winner && r?.verifiedAt;
-      });
-      const weekSheets = (freshLeague.sheets ?? []).filter((s) => s.week === week);
-      const alreadyPaid = (freshLeague.payouts ?? []).some((p) => p.week === week && p.pool === 'weekly');
-      if (allVerified && weekSheets.length && !alreadyPaid) {
-        const recognition = computeWinnerRecognition(freshLeague, week);
-        // Atomic claim (only once a real winner is confirmed) so two concurrent
-        // isolates can't both pay the weekly pot.
-        const claimedWeekly = (recognition?.status === 'winner' || recognition?.status === 'co_winners') && recognition.week === week && recognition.winners?.length
-          ? await store.claimOnce(leagueId, `weekly-pot-${week}`)
-          : false;
-        if (claimedWeekly) {
-          try {
-            const pot = weekSheets.filter((s) => s.paid).length * ENTRY_FEE;
-            // Only PAID winners are eligible for the pot; an unpaid best record
-            // takes bragging rights but isn't credited money they didn't put in.
-            const winners = recognition.winners.filter((w) => weekSheets.some((s) => s.playerId === w.playerId && s.paid));
-            if (pot <= 0 || !winners.length) {
-              // Nothing payable — release the claim so it doesn't block a later run.
-              await store.releaseClaim(leagueId, `weekly-pot-${week}`).catch(() => {});
-            } else {
-              const share = Math.floor((pot / winners.length) * 100) / 100;
-              const { validateCreditEntry } = await import('../src/credits.js');
-              let credited = 0;
-              for (const winner of winners) {
-                if (!winner.playerId || share <= 0) continue;
-                const verdict = validateCreditEntry({ amount: share, reason: `Week ${week} winnings` });
-                if (!verdict.ok) continue;
-                await store.addCreditEntry(leagueId, { id: randomUUID(), playerId: winner.playerId, amount: verdict.value, reason: `Week ${week} winnings — auto payout`, by: 'auto-pilot', at: new Date().toISOString() });
-                credited += 1;
-              }
-              await store.savePayout(leagueId, {
-                id: `payout-${randomUUID()}`, week, pool: 'weekly', amount: pot,
-                winnerNames: winners.map((w) => String(w.name ?? '').slice(0, 50)),
-                method: credited ? 'credit' : 'pending', note: 'Auto-pilot weekly payout', paidAt: new Date().toISOString(), paidBy: 'auto-pilot',
-              });
-              const names = winners.map((w) => w.name.split(' ')[0]).join(' & ');
-              await store.addChatMessage(leagueId, {
-                id: `chat-payout-w${week}`, playerId: null, name: 'Jack',
-                msg: `🏆 WEEK ${week} IS OFFICIAL: ${names} take${winners.length > 1 ? '' : 's'} the $${pot} pot${winners.length > 1 ? ` ($${share} each)` : ''}. Winnings dropped straight into ${winners.length > 1 ? 'their' : 'the'} credit balance. Everybody else — Jack's got jokes waiting.`,
-                time: new Date().toISOString(),
-              });
-              for (const winner of winners) {
-                if (winner.playerId) await saveNotification(leagueId, { playerId: winner.playerId, kind: 'payout', title: `You won Week ${week}!`, body: `$${share} credited to your balance. Nice work!`, metadata: { week, amount: share } });
-              }
-              await saveNotification(leagueId, { kind: 'payout', title: `Week ${week} payout — $${pot}`, body: `${names} won the Week ${week} pot.`, metadata: { week, amount: pot } });
-              actions.push(`Paid Week ${week} pot ($${pot}) to ${names} via credit balance and announced it in chat.`);
-            }
-          } catch (error) {
-            await store.releaseClaim(leagueId, `weekly-pot-${week}`).catch(() => {});
-            throw error;
-          }
-        }
-      }
+      const settlement = await settleClinchedWeeklyPayout({ leagueId, week, actor: 'auto-pilot' });
+      if (settlement.settled) actions.push(`Paid Week ${week} pot ($${settlement.payout.amount}) to ${settlement.winner.name} after a verified clinch.`);
     } catch (error) { console.error('Auto-pilot winner payout failed:', error.message); }
 
     // 3. Deadline reminders (24h and 3h windows, each sent once per week)

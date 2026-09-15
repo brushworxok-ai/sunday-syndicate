@@ -497,8 +497,11 @@ function App() {
            the league. This is what makes the board move when a game ends. */
         const feedFinals = (data.scores ?? []).filter((score) => score.state === 'post' && score.completed);
         const missingLocally = feedFinals.some((score) => !resultsRef.current?.[score.gameId]?.winner);
-        if (data.autoVerified > 0 || missingLocally) loadLeague();
-        timer = setTimeout(poll, data.anyLive ? 30_000 : 180_000);
+        if (data.autoVerified > 0 || data.payoutSettled || missingLocally) loadLeague();
+        // Keep the Board fresh during a game window or while a weekly result
+        // is waiting to settle. Once the slate is entirely quiet, back off.
+        const scoreWindowActive = data.anyLive || (data.scores ?? []).some((score) => score.state === 'post');
+        timer = setTimeout(poll, scoreWindowActive ? 30_000 : 180_000);
       } catch {
         if (!cancelled) timer = setTimeout(poll, 180_000);
       }
@@ -619,12 +622,17 @@ function App() {
       const scored = ws.map((s) => ({ ...s, score: calcScore(s) }))
         .sort((a, b) => b.score - a.score || tiebreakerRank(a.tiebreaker, tbTotal) - tiebreakerRank(b.tiebreaker, tbTotal));
       const top = scored[0];
-      const winners = complete && top
+      const scoredWinners = complete && top
         ? scored.filter((s) => s.score === top.score && tiebreakerRank(s.tiebreaker, tbTotal) === tiebreakerRank(top.tiebreaker, tbTotal))
         : [];
       const weekPot = ws.filter((s) => s.paid).length * ENTRY_FEE;
       const payout = (serverLeague?.payouts ?? []).find((p) => p.week === week && (p.pool ?? 'weekly') === 'weekly');
-      weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
+      // A verified clinch is an official award even if an unrelated game has
+      // not gone final yet. Payout records are the durable source of truth.
+      const winners = payout && !complete
+        ? scored.filter((s) => (payout.winnerPlayerIds ?? []).includes(s.playerId) || (payout.winnerNames ?? []).includes(s.name))
+        : scoredWinners;
+      weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete: complete || Boolean(payout), clinchedEarly: Boolean(payout) && !complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
       for (const s of scored) {
         const key = s.playerId ?? s.name;
         if (!players.has(key)) players.set(key, { key, name: s.name, weeksPlayed: 0, totalCorrect: 0, totalPicks: 0, weeklyWins: 0, earnings: 0 });
@@ -2635,7 +2643,7 @@ function App() {
                   {seasonStats.weeks.map((w) => (
                     <article key={w.week} className={w.paid ? 'paid' : ''}>
                       <span className="ledger-week">W{w.week}</span>
-                      <div><strong>${w.pot.toLocaleString()} · {w.entries} entries</strong><p>{w.complete ? (w.winners.length ? `Winner: ${w.winners.join(' & ')} (${w.topScore} correct)` : 'Complete — no winner determined') : 'In progress'}</p>{isComm && w.complete && !w.paid && w.winners.length > 0 && <p className="ledger-pay-to">Pay to: {w.winners.map((name) => { const pl = (serverLeague?.players ?? []).find((p) => p.name === name); return <span key={name}>{name.split(' ')[0]} → <PayHandle player={pl} /></span>; })}</p>}</div>
+                      <div><strong>${w.pot.toLocaleString()} · {w.entries} entries</strong><p>{w.complete ? (w.winners.length ? `${w.clinchedEarly ? 'Clinched early · ' : ''}Winner: ${w.winners.join(' & ')} (${w.topScore} correct)` : 'Complete — no winner determined') : 'In progress'}</p>{isComm && w.complete && !w.paid && w.winners.length > 0 && <p className="ledger-pay-to">Pay to: {w.winners.map((name) => { const pl = (serverLeague?.players ?? []).find((p) => p.name === name); return <span key={name}>{name.split(' ')[0]} → <PayHandle player={pl} /></span>; })}</p>}</div>
                       {w.paid
                         ? <StatusPill state="pass">Paid {w.payout?.paidAt ? new Date(w.payout.paidAt).toLocaleDateString() : ''}</StatusPill>
                         : w.complete && w.winners.length
