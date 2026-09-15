@@ -623,6 +623,15 @@ export class LeagueStore {
     return payout;
   }
 
+  setLeagueWeek(leagueId, week, actor = 'system') {
+    const league = this.db.prepare('SELECT week FROM leagues WHERE id = ?').get(leagueId);
+    if (!league) return null;
+    if (Number(week) <= Number(league.week)) return Number(league.week);
+    this.db.prepare('UPDATE leagues SET week = ? WHERE id = ?').run(week, leagueId);
+    this.writeAudit(leagueId, 'week.opened', `Week ${week} pick sheet opened automatically after the prior week's final game.`, actor, { week });
+    return week;
+  }
+
   startSeason(leagueId, { week = 1, actor = 'commissioner' } = {}) {
     const demoIds = DEMO_LEAGUE.players.map((player) => player.id);
     const placeholders = demoIds.map(() => '?').join(',');

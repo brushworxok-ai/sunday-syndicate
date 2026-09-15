@@ -547,6 +547,15 @@ export class PostgresLeagueStore {
     });
   }
 
+  async setLeagueWeek(leagueId, week, actor = 'system') {
+    return this.mutateLeague(leagueId, (draft) => {
+      if (Number(week) <= Number(draft.week)) return Number(draft.week);
+      draft.week = week;
+      draft.auditLog.push(auditEntry('week.opened', `Week ${week} pick sheet opened automatically after the prior week's final game.`, actor, { week }));
+      return week;
+    });
+  }
+
   async startSeason(leagueId, { week = 1, actor = 'commissioner' } = {}) {
     const demoPlayerIds = new Set(DEMO_LEAGUE.players.map((player) => player.id));
     const containsDemoPlayer = (value) => {

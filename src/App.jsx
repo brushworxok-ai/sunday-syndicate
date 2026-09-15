@@ -447,6 +447,13 @@ function App() {
     loadLeague();
   }, [loadLeague]);
 
+  // When the last game of a week is final, the server advances the league
+  // immediately. Move a player forward too, but never kick them out of an
+  // older week they deliberately opened to review standings or picks.
+  useEffect(() => {
+    if (serverLeague?.week && selectedWeek < serverLeague.week) setSelectedWeek(serverLeague.week);
+  }, [serverLeague?.week, selectedWeek]);
+
   // Auto-fill chat name from player session
   useEffect(() => {
     if (playerSession.authenticated && playerSession.name && !chatName) {
@@ -497,7 +504,7 @@ function App() {
            the league. This is what makes the board move when a game ends. */
         const feedFinals = (data.scores ?? []).filter((score) => score.state === 'post' && score.completed);
         const missingLocally = feedFinals.some((score) => !resultsRef.current?.[score.gameId]?.winner);
-        if (data.autoVerified > 0 || data.payoutSettled || missingLocally) loadLeague();
+        if (data.autoVerified > 0 || data.payoutSettled || data.weekAdvanced || missingLocally) loadLeague();
         // Keep the Board fresh during a game window or while a weekly result
         // is waiting to settle. Once the slate is entirely quiet, back off.
         const scoreWindowActive = data.anyLive || (data.scores ?? []).some((score) => score.state === 'post');

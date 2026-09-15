@@ -509,6 +509,25 @@ async function autoStartSeasonIfDue(league) {
   }
 }
 
+/* The next sheet opens as soon as every result in the active week is verified.
+   This deliberately does not wait for midnight or the next Thursday kickoff. */
+async function advanceWeekAfterFinal(league, actor = 'week-finalizer') {
+  if (!league) return league;
+  let week = Number(league.week) || 1;
+  while (week < SCHEDULE.length) {
+    const games = getGames(week);
+    const allFinal = games.length > 0 && games.every((game) => {
+      const result = (league.results ?? {})[game.id];
+      return result?.winner && result?.verifiedAt;
+    });
+    if (!allFinal) break;
+    const nextWeek = week + 1;
+    await store.setLeagueWeek(league.id, nextWeek, actor);
+    week = nextWeek;
+  }
+  return week === league.week ? league : await store.getLeague(league.id);
+}
+
 app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   let league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
   if (!league) return response.status(404).json({ error: 'League not found.' });
@@ -516,7 +535,7 @@ app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   // A clinched result does not need to wait for unrelated games to go final.
   // The settlement helper is idempotent, so this is safe on every refresh.
   await settleClinchedWeeklyPayout({ leagueId: league.id, week: Number(league.week) || getCurrentWeek(), actor: 'league-refresh' });
-  league = await store.getLeague(request.params.leagueId);
+  league = await advanceWeekAfterFinal(await store.getLeague(request.params.leagueId), 'league-refresh');
   if (!league) return response.status(404).json({ error: 'League not found.' });
   const player = await playerAuth.playerFromRequest(request);
   const view = buildLeagueView(league, { playerId: player?.leagueId === league.id ? player.id : null, isAdmin: auth.isAuthenticated(request) });
@@ -713,8 +732,9 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   if (!weekGames.length) return response.status(422).json({ error: `No games found for Week ${submittedWeek}.` });
   // Picks can only be filed for the CURRENT week — stops a browsed-ahead week
   // selector from quietly filing a Week 5 sheet while everyone else is on Week 1.
-  if (submittedWeek !== getCurrentWeek()) {
-    return response.status(422).json({ error: `Picks are only open for Week ${getCurrentWeek()} right now. Switch back to the current week to lock in.` });
+  const activeWeek = Number((await advanceWeekAfterFinal(league, 'entry-submit'))?.week) || getCurrentWeek();
+  if (submittedWeek !== activeWeek) {
+    return response.status(422).json({ error: `Picks are only open for Week ${activeWeek} right now. Switch back to the current week to lock in.` });
   }
   if (isWeekLocked(submittedWeek)) {
     const deadline = getWeekDeadline(submittedWeek);
@@ -1702,7 +1722,9 @@ app.get('/api/leagues/:leagueId/live-scores', asyncRoute(async (request, respons
   // Re-evaluate the week on every score refresh. A clinch can happen while
   // another game is still live, so waiting for an all-final sweep is wrong.
   const settlement = await settleClinchedWeeklyPayout({ leagueId: request.params.leagueId, week, actor: 'live-score-refresh' });
-  return response.json({ ...data, autoVerified, payoutSettled: settlement.settled });
+  const beforeAdvance = await store.getLeague(request.params.leagueId);
+  const advancedLeague = await advanceWeekAfterFinal(beforeAdvance, 'live-score-refresh');
+  return response.json({ ...data, autoVerified, payoutSettled: settlement.settled, weekAdvanced: advancedLeague?.week !== beforeAdvance?.week, activeWeek: advancedLeague?.week ?? week });
 }));
 
 /* ── Auto score verification: pull finals from the live feed ── */
@@ -2683,7 +2705,7 @@ app.post('/api/leagues/:leagueId/deposits/:depositId/confirm', auth.requireAdmin
   await store.addCreditEntry(request.params.leagueId, entry);
   // Credit is the first payment method: when a confirmed deposit leaves enough
   // balance to cover a waiting current-week sheet, pay that sheet immediately.
-  const currentWeek = Number(league.week) || getCurrentWeek() || WEEK;
+  const currentWeek = Number((await advanceWeekAfterFinal(league, 'deposit-confirm'))?.week) || getCurrentWeek() || WEEK;
   const entryFee = Number(league.settings?.entryFee) || ENTRY_FEE;
   const waitingSheet = (league.sheets ?? []).find((sheet) => sheet.playerId === deposit.playerId && sheet.week === currentWeek && !sheet.paid);
   let appliedToSheet = null;
@@ -3225,9 +3247,10 @@ async function runAutoPilot({ source = 'traffic' } = {}) {
   autoPilotRunning = true;
   const actions = [];
   try {
-    const week = getCurrentWeek();
-    const league = await store.getLeague(leagueId);
+    let league = await store.getLeague(leagueId);
     if (!league) return { skipped: 'no league' };
+    league = await advanceWeekAfterFinal(league, 'auto-pilot');
+    const week = Number(league?.week) || getCurrentWeek();
     const settings = league.settings ?? {};
 
     // 1. Verify finals from ESPN
