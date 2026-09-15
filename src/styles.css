@@ -184,6 +184,15 @@ main { padding: 24px 0 40px; }
 .payout-ready-card { margin: 14px 0; border-color: rgba(55, 255, 102, .42); background: linear-gradient(135deg, rgba(20, 82, 44, .28), var(--card)); }
 .payout-ready-card .button { margin-top: 4px; }
 .success-note { margin: 14px 0; color: #41f76f; font-weight: 700; overflow-wrap: anywhere; }
+.week-winner-card, .jack-board-recap { display: flex; align-items: center; gap: 14px; min-width: 0; border: 1px solid rgba(255, 215, 0, .52); border-radius: 14px; padding: 14px; background: linear-gradient(135deg, rgba(255, 215, 0, .10), rgba(20, 20, 31, .94)); }
+.week-winner-card { margin: 14px 0; }
+.week-winner-card > div, .jack-board-recap > div:last-child { min-width: 0; }
+.week-winner-card span, .jack-board-recap .eyebrow { display: block; color: #ffd700; font-size: .7rem; font-weight: 800; letter-spacing: .09em; }
+.week-winner-card h2, .jack-board-recap h2 { margin: 3px 0; font-size: 1.1rem; overflow-wrap: anywhere; }
+.week-winner-card p, .jack-board-recap p { margin: 0; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
+.jack-board-recap { align-items: flex-start; margin: 0 0 2px; border-color: rgba(57, 255, 20, .34); background: linear-gradient(135deg, rgba(57, 255, 20, .10), var(--card)); }
+.jack-board-recap-mark { flex: 0 0 48px; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: var(--neon); color: #061008; font-size: 1.25rem; font-weight: 900; box-shadow: 0 0 20px rgba(57,255,20,.38); }
+.jack-board-recap .text-button { min-height: 44px; margin-top: 8px; }
 .panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .panel h2 { margin: 0; font-size: 24px; letter-spacing: -.035em; color: #fff; }
 .panel .muted, .ai-copy { color: var(--muted); line-height: 1.7; font-size: 14px; white-space: pre-line; max-width: 650px; }
@@ -1564,6 +1573,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .deposit-actions { margin-left: 0; width: 100%; justify-content: space-between; }
   .admin-payment-shortcut { align-items: stretch; flex-direction: column; }
   .admin-payment-shortcut .button { width: 100%; }
+  .week-winner-card, .jack-board-recap { align-items: flex-start; }
 }
 
 /* Tiebreaker — closest without going over */

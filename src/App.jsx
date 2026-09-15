@@ -681,6 +681,9 @@ function App() {
   const gameContext = currentGames.map((game) => ({ ...game, ...results[game.id] }));
   const proofLeague = serverLeague ?? { ...DEMO_LEAGUE, latestRecap: DEMO_LEAGUE.recap, latestBroadcast: DEMO_LEAGUE.broadcast, recaps: [DEMO_LEAGUE.recap], broadcasts: [DEMO_LEAGUE.broadcast], chat: DEMO_CHAT };
   const demoPlayerName = (playerId) => proofLeague.players.find((player) => player.id === playerId)?.name ?? 'Unknown player';
+  const latestWeeklyPayout = useMemo(() => (proofLeague.payouts ?? [])
+    .filter((payout) => (payout.pool ?? 'weekly') === 'weekly')
+    .sort((a, b) => Number(b.week) - Number(a.week) || Date.parse(b.paidAt ?? 0) - Date.parse(a.paidAt ?? 0))[0] ?? null, [proofLeague.payouts]);
 
   const notify = (message) => setToast(message);
 
@@ -1671,6 +1674,18 @@ function App() {
     finally { setServerBusy(''); }
   };
 
+  const reconcileExternalPayout = async (payout) => {
+    if (!(await ensureAdmin())) return;
+    if (!window.confirm(`Remove the automatic $${payout.amount} credit from ${payout.winnerNames?.join(' & ') || 'this winner'}? The payout will remain recorded as paid outside the app.`)) return;
+    setServerBusy(`reconcile-${payout.id}`);
+    try {
+      const result = await apiRequest(`/api/leagues/${LEAGUE_ID}/payouts/${payout.id}/reconcile-external`, { method: 'POST' });
+      await loadLeague();
+      notify(`Corrected. Account credit is now $${result.balance}; the payout remains recorded as paid outside the app.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
   const submitSurvivorPick = async () => {
     if (!playerSession.authenticated) return notify('Sign in as a player to make a survivor pick.');
     if (!survivorTeam) return notify('Pick a team first.');
@@ -2302,6 +2317,22 @@ function App() {
                     </button>
                   </section>
 
+                  {lastWon && (() => {
+                    const recap = (proofLeague.recaps ?? []).find((item) => item.week === lastWon.week && item.adminApproval?.status === 'approved');
+                    const recapText = recap?.finalText || `Jack's call: ${lastWon.winners.join(' & ')} took Week ${lastWon.week} with ${lastWon.topScore} correct and claimed the $${lastWon.pot.toLocaleString()} pot.`;
+                    return (
+                      <section className="jack-board-recap" aria-labelledby="jack-board-recap-title">
+                        <div className="jack-board-recap-mark" aria-hidden="true">J</div>
+                        <div>
+                          <span className="eyebrow dark">JACK'S BOARD RECAP · WEEK {lastWon.week}</span>
+                          <h2 id="jack-board-recap-title">{lastWon.winners.join(' & ')} won the week</h2>
+                          <p>{recapText}</p>
+                          {recap && <button className="text-button recap-show-btn" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading…' : 'Watch Jack’s recap'}</button>}
+                        </div>
+                      </section>
+                    );
+                  })()}
+
                   {/* ── The Crew ── */}
                   <section className="crew-strip" aria-label="Players">
                     <div className="ticker-head">
@@ -2435,15 +2466,6 @@ function App() {
                 </section>
               );
             })()}
-
-            {/* Jack's approved weekly recap (only once the commissioner has signed it off) */}
-            {proofLeague.latestRecap?.adminApproval?.status === 'approved' && proofLeague.latestRecap?.finalText && (
-              <section className="panel">
-                <div className="panel-heading"><div><span className="eyebrow dark">JACK'S RECAP</span><h2>{weekLabel} in review</h2></div></div>
-                <p className="ai-copy">{proofLeague.latestRecap.finalText}</p>
-                <button className="text-button recap-show-btn" type="button" onClick={launchRecapShow} disabled={recapShowLoading}>{recapShowLoading ? 'Loading…' : '▶ Watch the recap show'}</button>
-              </section>
-            )}
 
           </div>
         )}
@@ -3149,6 +3171,17 @@ function App() {
                     {cfbPool ? <p className="muted">Week {cfbPool.week}: {cfbEntries.filter((entry) => entry.paid).length}/{cfbEntries.length} entered players paid. Confirm individual College payments on the College FB page.</p> : <p className="muted">No College Pick-Em pool is open for the selected week.</p>}
                   </section>
 
+                  {(serverLeague?.payouts ?? []).filter((payout) => (payout.pool ?? 'weekly') === 'weekly').length > 0 && <section className="payment-tracker-card">
+                    <div className="payment-tracker-head"><div><span className="eyebrow dark">PAYOUT RECORDS</span><h2>Weekly winners</h2></div></div>
+                    <div className="payment-center">
+                      {(serverLeague?.payouts ?? []).filter((payout) => (payout.pool ?? 'weekly') === 'weekly').slice(0, 8).map((payout) => <div className="payment-row" key={payout.id}>
+                        <span className="payment-name">Week {payout.week} · {payout.winnerNames?.join(' & ') || 'Winner'}</span>
+                        <span className="payment-status">${payout.amount} · {payout.method === 'external_manual' ? 'Paid outside the app' : payout.method === 'credit' ? 'Credited in app' : `Paid via ${payout.method}`}</span>
+                        {payout.method === 'credit' && !payout.creditReversedAt && <button className="button button-ghost-dark payment-correct-button" type="button" disabled={serverBusy === `reconcile-${payout.id}`} onClick={() => reconcileExternalPayout(payout)}>{serverBusy === `reconcile-${payout.id}` ? 'Correcting…' : 'Paid outside app — remove credit'}</button>}
+                      </div>)}
+                    </div>
+                  </section>}
+
                   <section className="payment-tracker-card">
                     <div className="payment-tracker-head"><div><span className="eyebrow dark">LEDGER</span><h2>Recent credit activity</h2></div></div>
                     {ledger.length === 0 ? <p className="muted">No credit activity yet.</p> : <div className="credit-ledger-rows">{ledger.map((entry) => <div className="credit-ledger-row" key={entry.id}><span className={`credit-ledger-amount ${entry.amount > 0 ? 'positive' : 'negative'}`}>{entry.amount > 0 ? '+' : '−'}${Math.abs(entry.amount)}</span><span className="credit-ledger-name">{(serverLeague?.players ?? []).find((player) => player.id === entry.playerId)?.name ?? 'Player'}</span><span className="credit-ledger-reason">{entry.reason}</span><span className="credit-ledger-date">{new Date(entry.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div>)}</div>}
@@ -3223,6 +3256,14 @@ function App() {
                 </div>
               </section>
             )}
+            {(currentWeekPayout ?? latestWeeklyPayout) && (() => {
+              const payout = currentWeekPayout ?? latestWeeklyPayout;
+              const winner = (proofLeague.players ?? []).find((player) => player.id === payout.winnerPlayerIds?.[0]) ?? { name: payout.winnerNames?.[0] ?? 'Winner' };
+              return <section className="week-winner-card" aria-label={`Week ${payout.week} winner`}>
+                <PlayerAvatar player={winner} size={56} />
+                <div><span>WEEK {payout.week} WINNER</span><h2>{winner.name}</h2><p>${Number(payout.amount ?? 0).toLocaleString()} pot · {payout.method === 'external_manual' ? 'Paid outside the app' : 'Payout recorded'}</p></div>
+              </section>;
+            })()}
             {paidWeekSheets.length ? <div className="standings-table">
               {weekTiebreaker.game && (
                 <p className="tb-status">

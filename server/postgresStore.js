@@ -547,6 +547,16 @@ export class PostgresLeagueStore {
     });
   }
 
+  async updatePayout(leagueId, payout) {
+    return this.mutateLeague(leagueId, (draft) => {
+      const index = (draft.payouts ?? []).findIndex((item) => item.id === payout.id);
+      if (index < 0) return null;
+      draft.payouts[index] = clone(payout);
+      draft.auditLog.push(auditEntry('payout.corrected', `Week ${payout.week} payout record corrected: ${payout.note || 'payment details updated'}`, payout.correctedBy ?? 'admin', { payoutId: payout.id, week: payout.week, amount: payout.amount }));
+      return clone(payout);
+    });
+  }
+
   async setLeagueWeek(leagueId, week, actor = 'system') {
     return this.mutateLeague(leagueId, (draft) => {
       if (Number(week) <= Number(draft.week)) return Number(draft.week);

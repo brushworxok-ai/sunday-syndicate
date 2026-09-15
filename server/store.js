@@ -623,6 +623,15 @@ export class LeagueStore {
     return payout;
   }
 
+  updatePayout(leagueId, payout) {
+    const existing = this.db.prepare('SELECT id FROM payouts WHERE league_id = ? AND id = ?').get(leagueId, payout.id);
+    if (!existing) return null;
+    this.db.prepare('UPDATE payouts SET data_json = ? WHERE league_id = ? AND id = ?')
+      .run(stringify(payout), leagueId, payout.id);
+    this.writeAudit(leagueId, 'payout.corrected', `Week ${payout.week} payout record corrected: ${payout.note || 'payment details updated'}`, payout.correctedBy ?? 'admin', { payoutId: payout.id, week: payout.week, amount: payout.amount });
+    return payout;
+  }
+
   setLeagueWeek(leagueId, week, actor = 'system') {
     const league = this.db.prepare('SELECT week FROM leagues WHERE id = ?').get(leagueId);
     if (!league) return null;

@@ -2821,6 +2821,41 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
   return response.status(201).json(payout);
 }));
 
+// If a commissioner already paid a winner outside the app, reverse only the
+// automatic account-credit duplicate. The original payout stays visible and
+// becomes an externally-paid record, leaving a complete audit trail.
+app.post('/api/leagues/:leagueId/payouts/:payoutId/reconcile-external', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const payout = (league.payouts ?? []).find((item) => item.id === request.params.payoutId);
+  if (!payout) return response.status(404).json({ error: 'Payout not found.' });
+  if (payout.creditReversedAt || payout.method === 'external_manual') return response.status(409).json({ error: 'This payout was already reconciled as an external payment.' });
+  if (payout.method !== 'credit') return response.status(422).json({ error: 'Only an automatic credit payout can be reversed here.' });
+  const winnerId = payout.winnerPlayerIds?.[0];
+  if (!winnerId || !(league.players ?? []).some((player) => player.id === winnerId)) return response.status(422).json({ error: 'This payout has no valid winner to correct.' });
+  const amount = Number(payout.amount);
+  const { creditBalance } = await import('../src/credits.js');
+  const balance = creditBalance(league.creditLedger ?? [], winnerId);
+  if (!Number.isFinite(amount) || amount <= 0 || balance < amount) return response.status(422).json({ error: 'The automatic credit is no longer fully available to reverse.' });
+  const at = new Date().toISOString();
+  const reversal = {
+    id: randomUUID(), playerId: winnerId, amount: -amount,
+    reason: `Reversal: Week ${payout.week} automatic payout was paid externally`,
+    by: request.actor ?? 'admin', at,
+  };
+  await store.addCreditEntry(request.params.leagueId, reversal);
+  const corrected = {
+    ...payout,
+    method: 'external_manual',
+    note: 'Paid outside the app by commissioner; automatic account credit reversed.',
+    creditReversedAt: at,
+    creditReversalEntryId: reversal.id,
+    correctedBy: request.actor ?? 'admin',
+  };
+  await store.updatePayout(request.params.leagueId, corrected);
+  return response.json({ payout: corrected, reversal, balance: Math.round((balance - amount) * 100) / 100 });
+}));
+
 /* ── Payment history — detailed per-player payment tracking ── */
 app.get('/api/leagues/:leagueId/payment-history', playerAuth.requirePlayer, asyncRoute(async (request, response) => {
   const league = await store.getLeague(request.params.leagueId);
