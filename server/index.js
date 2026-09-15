@@ -40,6 +40,7 @@ import { createLeagueStore } from './storeFactory.js';
 import { buildLeagueView } from './publicLeagueView.js';
 import { ModerationError } from './moderation.js';
 import { DEMO_LEAGUE, buildLeaderboard, scoreSheet } from '../src/demoLeague.js';
+import { buildWinningPaths } from '../src/winningPaths.js';
 import {
   buildPlayerSeasonMemory,
   buildWeeklyWinnerRecognition,
@@ -719,7 +720,18 @@ app.post('/api/leagues/:leagueId/entries', asyncRoute(async (request, response) 
   // A checkbox is a payment CLAIM, never proof that money was received.
   const sheet = { id: `sheet-${randomUUID()}`, playerId, name, handle: String(input.handle ?? '').trim().slice(0, 50), picks, tiebreaker: Number(input.tiebreaker), paid: false, week: submittedWeek, submittedAt: new Date().toISOString() };
   await store.createSheet(request.params.leagueId, sheet);
-  if (input.paid === true && !sheet.paid) {
+  /* Account credit always comes first. A player who already has enough
+     confirmed credit cannot bypass it by filing an outside-payment claim. */
+  const entryFee = Number(league.settings?.entryFee) || ENTRY_FEE;
+  const availableCredit = playerId ? creditBalance(league.creditLedger ?? [], playerId) : 0;
+  if (playerId && availableCredit >= entryFee && !sheet.paid) {
+    const payment = await store.paySheetWithCredit(league.id, sheet.id, playerId, name, entryFee);
+    if (payment?.ok) {
+      sheet.paid = true;
+      sheet.paidVia = 'credit';
+      sheet.paymentReview = { status: 'confirmed', method: 'credit', note: 'Automatically paid from available account credit', reviewedAt: new Date().toISOString(), reviewedBy: 'system' };
+    }
+  } else if (input.paid === true && !sheet.paid) {
     sheet.paymentClaim = { claimedAt: sheet.submittedAt, method: 'external', amount: Number(league.settings?.entryFee) || ENTRY_FEE };
     await store.updateSheetFields(league.id, sheet.id, { paymentClaim: sheet.paymentClaim });
   }
@@ -2583,9 +2595,14 @@ app.post('/api/leagues/:leagueId/sheets/:sheetId/claim-payment', playerAuth.requ
   if (!sheet) return response.status(404).json({ error: 'Sheet not found.' });
   if (sheet.playerId !== request.player.id) return response.status(403).json({ error: 'You can only claim payment for your own sheet.' });
   if (sheet.paid) return response.status(422).json({ error: 'This sheet is already marked paid.' });
+  const entryFee = Number(league.settings?.entryFee) || ENTRY_FEE;
+  const availableCredit = creditBalance(league.creditLedger ?? [], request.player.id);
+  if (availableCredit >= entryFee) {
+    return response.status(409).json({ error: `You have $${availableCredit} in account credit, so your Week ${sheet.week} entry must be paid from credit.` });
+  }
   const CLAIM_METHODS = ['cashapp', 'venmo', 'paypal', 'applecash', 'cash'];
   const chosen = CLAIM_METHODS.includes(request.body?.method) ? request.body.method : null;
-  const paymentClaim = { claimedAt: new Date().toISOString(), method: chosen ?? preferredHandle(request.player)?.key ?? 'cashapp', amount: Number(league.settings?.entryFee) || 20 };
+  const paymentClaim = { claimedAt: new Date().toISOString(), method: chosen ?? preferredHandle(request.player)?.key ?? 'cashapp', amount: entryFee };
   const updated = await store.updateSheetFields(request.params.leagueId, request.params.sheetId, { paymentClaim });
   await store.writeAudit(request.params.leagueId, 'payment.claimed', `${request.player.name} says they sent $${paymentClaim.amount} for Week ${sheet.week}`, request.player.id, { sheetId: sheet.id });
   await saveNotification(request.params.leagueId, { playerId: request.player.id, kind: 'payment_claimed', title: `Payment claimed — Week ${sheet.week}`, body: `You claimed $${paymentClaim.amount} sent for Week ${sheet.week}. Waiting for commissioner to confirm.`, metadata: { week: sheet.week, amount: paymentClaim.amount } });
@@ -2645,15 +2662,14 @@ app.post('/api/leagues/:leagueId/deposits/:depositId/confirm', auth.requireAdmin
   const at = new Date().toISOString();
   const entry = { id: randomUUID(), playerId: deposit.playerId, amount: deposit.amount, reason: depositReason(deposit, label), by: request.actor ?? 'admin', at };
   await store.addCreditEntry(request.params.leagueId, entry);
-  // A deposit exactly equal to the entry fee is normally a player funding the
-  // sheet already waiting for this week. Apply it automatically; larger
-  // deposits remain available credit for future weeks.
+  // Credit is the first payment method: when a confirmed deposit leaves enough
+  // balance to cover a waiting current-week sheet, pay that sheet immediately.
   const currentWeek = Number(league.week) || getCurrentWeek() || WEEK;
   const entryFee = Number(league.settings?.entryFee) || ENTRY_FEE;
   const waitingSheet = (league.sheets ?? []).find((sheet) => sheet.playerId === deposit.playerId && sheet.week === currentWeek && !sheet.paid);
   let appliedToSheet = null;
   let balance = creditBalance((league.creditLedger ?? []).concat(entry), deposit.playerId);
-  if (waitingSheet && Number(deposit.amount) === entryFee) {
+  if (waitingSheet && balance >= entryFee) {
     const payment = await store.paySheetWithCredit(request.params.leagueId, waitingSheet.id, deposit.playerId, deposit.playerName, entryFee);
     if (payment?.ok) {
       appliedToSheet = waitingSheet.id;
@@ -2726,13 +2742,31 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
   const amount = Number(request.body?.amount);
   if (!Number.isInteger(week) || week < 1 || week > 18) return response.status(422).json({ error: 'A valid week (1–18) is required.' });
   if (!Number.isFinite(amount) || amount <= 0) return response.status(422).json({ error: 'A positive payout amount is required.' });
-  if ((league.payouts ?? []).some((p) => p.week === week && p.pool === (request.body?.pool ?? 'weekly'))) {
+  const pool = ['weekly', 'survivor', 'season'].includes(request.body?.pool) ? request.body.pool : 'weekly';
+  if ((league.payouts ?? []).some((p) => p.week === week && p.pool === pool)) {
     return response.status(409).json({ error: `Week ${week} is already marked paid.` });
+  }
+  const submittedWinnerIds = Array.isArray(request.body?.winnerPlayerIds) ? request.body.winnerPlayerIds.map(String) : [];
+  if (pool === 'weekly') {
+    // A weekly payout may be recorded before every game is final only when the
+    // remaining picks cannot possibly change the winner. This is checked on
+    // the server so a modified browser cannot pay a current leader too early.
+    const paidSheets = (league.sheets ?? []).filter((sheet) => sheet.week === week && sheet.paid);
+    if (!paidSheets.length) return response.status(422).json({ error: `Week ${week} has no confirmed paid entries.` });
+    const games = getGames(week);
+    const { paths } = buildWinningPaths({ sheets: paidSheets, results: league.results ?? {} }, { week, games });
+    const clinched = paths.filter((path) => path.status === 'clinched');
+    if (clinched.length !== 1) {
+      return response.status(422).json({ error: `Week ${week} cannot be paid yet. A winner must be mathematically clinched, with no live tiebreaker.` });
+    }
+    if (submittedWinnerIds.length !== 1 || submittedWinnerIds[0] !== clinched[0].playerId) {
+      return response.status(422).json({ error: `Week ${week} payout must go to the clinched winner, ${clinched[0].name}.` });
+    }
   }
   const payout = {
     id: `payout-${randomUUID()}`,
     week,
-    pool: ['weekly', 'survivor', 'season'].includes(request.body?.pool) ? request.body.pool : 'weekly',
+    pool,
     amount,
     winnerNames: Array.isArray(request.body?.winnerNames) ? request.body.winnerNames.map((n) => String(n).slice(0, 50)).slice(0, 10) : [],
     winnerPlayerIds: Array.isArray(request.body?.winnerPlayerIds) ? request.body.winnerPlayerIds.map((id) => String(id).slice(0, 80)).slice(0, 10) : [],

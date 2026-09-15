@@ -596,6 +596,16 @@ function App() {
     return Object.fromEntries(snapshot.paths.map((p) => [p.entryId ?? p.playerId ?? p.name, p]));
   }, [paidWeekSheets, results, selectedWeek, currentGames, serverLeague]);
 
+  const clinchedWeeklyWinner = useMemo(
+    () => leaderboard.find((entry) => winPathsByEntry[entry.id]?.status === 'clinched') ?? null,
+    [leaderboard, winPathsByEntry],
+  );
+  const currentWeekPayout = useMemo(
+    () => (serverLeague?.payouts ?? []).find((p) => p.week === selectedWeek && (p.pool ?? 'weekly') === 'weekly') ?? null,
+    [serverLeague, selectedWeek],
+  );
+  const currentWeekPot = paidWeekSheets.length * ENTRY_FEE;
+
   // Season-long stats: weekly wins, totals, earnings, payout status
   const seasonStats = useMemo(() => {
     const weeks = [...new Set(sheets.map((s) => s.week))].sort((a, b) => a - b);
@@ -2474,10 +2484,10 @@ function App() {
                     <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
                     {mySheet && myCredit >= ENTRY_FEE && (
                       <button className="button button-primary" type="button" disabled={serverBusy === 'sheet-credit-pay'} onClick={() => paySheetWithCredit(mySheet.id)}>
-                        {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from my credit`}
+                        {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Use $${ENTRY_FEE} account credit`}
                       </button>
                     )}
-                    {!mySheet && myCredit >= ENTRY_FEE && <small className="muted">Lock in your sheet, then pay from credit in one tap.</small>}
+                    {!mySheet && myCredit >= ENTRY_FEE && <small className="muted">Lock in your sheet — your credit will pay the entry automatically.</small>}
                     {mySheet && myCredit < ENTRY_FEE && (
                       mySheet.paymentClaim
                         ? <span className="claim-waiting">⏳ Payment claim sent {new Date(mySheet.paymentClaim.claimedAt).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })} — waiting for commissioner</span>
@@ -2488,7 +2498,7 @@ function App() {
                   </div>
                 );
               })()}
-              {!mySheet?.paid && <PayOptions settings={serverLeague?.settings} amount={ENTRY_FEE} note={`405 BadGuys ${weekLabel}`} picked={payMethodUsed} onPick={setPayMethodUsed} />}
+              {!mySheet?.paid && myCredit < ENTRY_FEE && <PayOptions settings={serverLeague?.settings} amount={ENTRY_FEE} note={`405 BadGuys ${weekLabel}`} picked={payMethodUsed} onPick={setPayMethodUsed} />}
               <button ref={submitRef} className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Saving…' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
               <button className="ai-mini-button" type="button" onClick={analyzePicks} disabled={aiLoading === 'picks'}><span>✦</span>{aiLoading === 'picks' ? 'Reviewing…' : 'Ask Jack to check my picks'}</button>
               {aiResult.picks && <div className="ai-slip-result">{aiResult.picks}</div>}
@@ -2895,7 +2905,7 @@ function App() {
                       <span className="credit-chip">💳 Your credit: <strong>${myCredit}</strong></span>
                       {myCredit >= ENTRY_FEE && (
                         <button className="button button-primary" type="button" disabled={serverBusy === 'sheet-credit-pay'} onClick={() => paySheetWithCredit(mySheet.id)}>
-                          {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Pay $${ENTRY_FEE} from my credit`}
+                          {serverBusy === 'sheet-credit-pay' ? 'Paying…' : `Use $${ENTRY_FEE} account credit`}
                         </button>
                       )}
                       {myCredit < ENTRY_FEE && (
@@ -3205,6 +3215,14 @@ function App() {
                   {weekTiebreaker.total != null ? ` Final total: ${weekTiebreaker.total}.` : " Awaiting that game's final score."}
                 </p>
               )}
+              {isComm && clinchedWeeklyWinner && !currentWeekPayout && (
+                <section className="panel compact-panel payout-ready-card">
+                  <div className="panel-heading"><div><span className="eyebrow dark">EARLY PAYOUT READY</span><h2>{clinchedWeeklyWinner.name} has clinched Week {selectedWeek}</h2></div><StatusPill state="pass">Math confirmed</StatusPill></div>
+                  <p className="muted">No remaining game or tiebreaker can change this result. You can pay the ${currentWeekPot} weekly pot now and record it here.</p>
+                  <button className="button button-primary" type="button" disabled={serverBusy === `payout-${selectedWeek}`} onClick={() => markWeekPaid({ week: selectedWeek, pot: currentWeekPot, winners: [clinchedWeeklyWinner.name] })}>{serverBusy === `payout-${selectedWeek}` ? 'Saving…' : `Mark $${currentWeekPot} paid`}</button>
+                </section>
+              )}
+              {currentWeekPayout && <p className="success-note">✓ Week {selectedWeek} payout recorded for {currentWeekPayout.winnerNames?.join(' & ') || 'the winner'}.</p>}
               {leaderboard.some((entry) => !entry.picksHidden) && <p className="board-hint">👆 Tap anybody to see every pick they made.</p>}
               <div className="table-head"><span>Rank</span><span>Player</span><span>Tiebreaker</span><span>Correct</span></div>
               {leaderboard.map((entry, index) => {

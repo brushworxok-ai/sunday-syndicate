@@ -180,6 +180,10 @@ main { padding: 24px 0 40px; }
 /* ── Panels ── */
 .section-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; }
 .panel { background: var(--card); border: 1px solid var(--glass-border); border-radius: 14px; padding: 26px; min-height: 230px; }
+.compact-panel { min-height: 0; }
+.payout-ready-card { margin: 14px 0; border-color: rgba(55, 255, 102, .42); background: linear-gradient(135deg, rgba(20, 82, 44, .28), var(--card)); }
+.payout-ready-card .button { margin-top: 4px; }
+.success-note { margin: 14px 0; color: #41f76f; font-weight: 700; overflow-wrap: anywhere; }
 .panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .panel h2 { margin: 0; font-size: 24px; letter-spacing: -.035em; color: #fff; }
 .panel .muted, .ai-copy { color: var(--muted); line-height: 1.7; font-size: 14px; white-space: pre-line; max-width: 650px; }
