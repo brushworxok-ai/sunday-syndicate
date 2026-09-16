@@ -607,11 +607,11 @@ function App() {
   }, [paidWeekSheets, results, selectedWeek, currentGames, serverLeague]);
 
   const clinchedWeeklyWinner = useMemo(
-    () => leaderboard.find((entry) => winPathsByEntry[entry.id]?.status === 'clinched') ?? null,
-    [leaderboard, winPathsByEntry],
+    () => completedGames > 0 && paidWeekSheets.length >= 2 ? leaderboard.find((entry) => winPathsByEntry[entry.id]?.status === 'clinched') ?? null : null,
+    [completedGames, leaderboard, paidWeekSheets.length, winPathsByEntry],
   );
   const currentWeekPayout = useMemo(
-    () => (serverLeague?.payouts ?? []).find((p) => p.week === selectedWeek && (p.pool ?? 'weekly') === 'weekly') ?? null,
+    () => (serverLeague?.payouts ?? []).find((p) => p.week === selectedWeek && (p.pool ?? 'weekly') === 'weekly' && !p.voidedAt) ?? null,
     [serverLeague, selectedWeek],
   );
   const currentWeekPot = paidWeekSheets.length * ENTRY_FEE;
@@ -633,7 +633,7 @@ function App() {
         ? scored.filter((s) => s.score === top.score && tiebreakerRank(s.tiebreaker, tbTotal) === tiebreakerRank(top.tiebreaker, tbTotal))
         : [];
       const weekPot = ws.filter((s) => s.paid).length * ENTRY_FEE;
-      const payout = (serverLeague?.payouts ?? []).find((p) => p.week === week && (p.pool ?? 'weekly') === 'weekly');
+      const payout = (serverLeague?.payouts ?? []).find((p) => p.week === week && (p.pool ?? 'weekly') === 'weekly' && !p.voidedAt);
       // A verified clinch is an official award even if an unrelated game has
       // not gone final yet. Payout records are the durable source of truth.
       const winners = payout && !complete
@@ -682,7 +682,7 @@ function App() {
   const proofLeague = serverLeague ?? { ...DEMO_LEAGUE, latestRecap: DEMO_LEAGUE.recap, latestBroadcast: DEMO_LEAGUE.broadcast, recaps: [DEMO_LEAGUE.recap], broadcasts: [DEMO_LEAGUE.broadcast], chat: DEMO_CHAT };
   const demoPlayerName = (playerId) => proofLeague.players.find((player) => player.id === playerId)?.name ?? 'Unknown player';
   const latestWeeklyPayout = useMemo(() => (proofLeague.payouts ?? [])
-    .filter((payout) => (payout.pool ?? 'weekly') === 'weekly')
+    .filter((payout) => (payout.pool ?? 'weekly') === 'weekly' && !payout.voidedAt)
     .sort((a, b) => Number(b.week) - Number(a.week) || Date.parse(b.paidAt ?? 0) - Date.parse(a.paidAt ?? 0))[0] ?? null, [proofLeague.payouts]);
 
   const notify = (message) => setToast(message);

@@ -532,6 +532,9 @@ app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   let league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
   if (!league) return response.status(404).json({ error: 'League not found.' });
   await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
+  // Repair the legacy no-results auto-payout bug before any public response is
+  // built. It only targets automatic weekly credits whose week has zero finals.
+  await voidPrematureWeeklyPayouts(league.id, 'league-refresh');
   // A clinched result does not need to wait for unrelated games to go final.
   // The settlement helper is idempotent, so this is safe on every refresh.
   await settleClinchedWeeklyPayout({ leagueId: league.id, week: Number(league.week) || getCurrentWeek(), actor: 'league-refresh' });
@@ -2793,8 +2796,13 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
     // remaining picks cannot possibly change the winner. This is checked on
     // the server so a modified browser cannot pay a current leader too early.
     const paidSheets = (league.sheets ?? []).filter((sheet) => sheet.week === week && sheet.paid);
-    if (!paidSheets.length) return response.status(422).json({ error: `Week ${week} has no confirmed paid entries.` });
+    if (paidSheets.length < 2) return response.status(422).json({ error: `Week ${week} needs at least two confirmed paid entries before a payout can be recorded.` });
     const games = getGames(week);
+    const verifiedFinals = games.filter((game) => {
+      const result = (league.results ?? {})[game.id];
+      return result?.winner && result?.verifiedAt;
+    });
+    if (!verifiedFinals.length) return response.status(422).json({ error: `Week ${week} has not started — at least one final score is required before a payout can be recorded.` });
     const { paths } = buildWinningPaths({ sheets: paidSheets, results: league.results ?? {} }, { week, games });
     const clinched = paths.filter((path) => path.status === 'clinched');
     if (clinched.length !== 1) {
@@ -3234,17 +3242,20 @@ async function sweepPriorCfbPools({ lid, currentWeek, actions }) {
 async function settleClinchedWeeklyPayout({ leagueId: lid, week, actor = 'auto-clinch' }) {
   const league = await store.getLeague(lid);
   if (!league) return { settled: false, reason: 'league_not_found' };
-  if ((league.payouts ?? []).some((payout) => payout.week === week && (payout.pool ?? 'weekly') === 'weekly')) return { settled: false, reason: 'already_paid' };
+  if ((league.payouts ?? []).some((payout) => payout.week === week && (payout.pool ?? 'weekly') === 'weekly' && !payout.voidedAt)) return { settled: false, reason: 'already_paid' };
 
   const games = getGames(week);
   const paidSheets = (league.sheets ?? []).filter((sheet) => sheet.week === week && sheet.paid);
-  if (!games.length || !paidSheets.length) return { settled: false, reason: 'no_paid_entries' };
+  if (!games.length || paidSheets.length < 2) return { settled: false, reason: 'not_enough_paid_entries' };
 
   // Only results which the app has verified can move real money.
   const verifiedResults = Object.fromEntries(games.flatMap((game) => {
     const result = (league.results ?? {})[game.id];
     return result?.winner && result?.verifiedAt ? [[game.id, result]] : [];
   }));
+  // A lone entrant can look mathematically unbeatable before kickoff. A weekly
+  // winner never exists until at least one verified final is on the board.
+  if (Object.keys(verifiedResults).length === 0) return { settled: false, reason: 'week_not_started' };
   const { paths } = buildWinningPaths({ sheets: paidSheets, results: verifiedResults }, { week, games });
   const clinched = paths.filter((path) => path.status === 'clinched');
   if (clinched.length !== 1) return { settled: false, reason: 'not_clinched' };
@@ -3275,6 +3286,52 @@ async function settleClinchedWeeklyPayout({ leagueId: lid, week, actor = 'auto-c
     await store.releaseClaim(lid, `weekly-pot-${week}`).catch(() => {});
     throw error;
   }
+}
+
+/* Legacy safety net: remove an automatic credit award that was created before
+   any game in that week was final. The payout is retained as a voided audit
+   record and the corresponding balance entry is reversed exactly once. */
+async function voidPrematureWeeklyPayouts(leagueId, actor = 'system') {
+  const league = await store.getLeague(leagueId);
+  if (!league) return [];
+  const repaired = [];
+  for (const payout of league.payouts ?? []) {
+    if ((payout.pool ?? 'weekly') !== 'weekly' || payout.method !== 'credit' || payout.voidedAt) continue;
+    const games = getGames(payout.week);
+    const finals = games.filter((game) => {
+      const result = (league.results ?? {})[game.id];
+      return result?.winner && result?.verifiedAt;
+    });
+    if (games.length === 0 || finals.length > 0) continue;
+    const winnerId = payout.winnerPlayerIds?.[0];
+    const amount = Number(payout.amount);
+    if (!winnerId || !Number.isFinite(amount) || amount <= 0) continue;
+    if (!await store.claimOnce(leagueId, `void-premature-weekly-payout-${payout.id}`)) continue;
+    const fresh = await store.getLeague(leagueId);
+    const current = (fresh?.payouts ?? []).find((item) => item.id === payout.id);
+    if (!current || current.voidedAt) continue;
+    const { creditBalance } = await import('../src/credits.js');
+    const balance = creditBalance(fresh.creditLedger ?? [], winnerId);
+    if (balance < amount) {
+      await store.releaseClaim(leagueId, `void-premature-weekly-payout-${payout.id}`).catch(() => {});
+      continue;
+    }
+    const at = new Date().toISOString();
+    const reversal = { id: randomUUID(), playerId: winnerId, amount: -amount, reason: `Reversal: Week ${current.week} payout was created before kickoff`, by: actor, at };
+    await store.addCreditEntry(leagueId, reversal);
+    await store.updatePayout(leagueId, {
+      ...current,
+      method: 'voided',
+      note: 'Voided automatically: no Week results were final when this payout was created.',
+      voidedAt: at,
+      voidReason: 'week_not_started',
+      voidedBy: actor,
+      creditReversalEntryId: reversal.id,
+      correctedBy: actor,
+    });
+    repaired.push(current.id);
+  }
+  return repaired;
 }
 
 async function runAutoPilot({ source = 'traffic' } = {}) {
