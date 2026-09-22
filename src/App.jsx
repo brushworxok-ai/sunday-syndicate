@@ -2302,7 +2302,7 @@ function App() {
                   {activeRollover && (
                     <section className="panel compact-panel rollover-card" aria-label="Active carryover pot">
                       <div className="panel-heading"><div><span className="eyebrow dark">CARRYOVER POT</span><h2>${rolloverPot.toLocaleString()} is still up for grabs</h2></div><StatusPill state="warn">Reserved</StatusPill></div>
-                      <p className="muted">It came from Week {activeRollover.sourceWeeks?.join(' & ') ?? activeRollover.sourceWeek} after the top players all busted the tiebreaker. Only {activeRollover.eligibleNames?.join(', ') || 'the original tied players'} can claim it by winning a future week. Everyone else can still win that week’s regular pot.</p>
+                      <p className="muted">It came from Week {activeRollover.sourceWeeks?.join(' & ') ?? activeRollover.sourceWeek} after the top players all busted the tiebreaker. Every confirmed player from that no-winner week — {activeRollover.eligibleNames?.join(', ') || 'the prior-week crew'} — can claim it by winning a future week. Players who did not play that week can still win the regular weekly pot.</p>
                     </section>
                   )}
 
@@ -3925,7 +3925,7 @@ function App() {
               <Rule number="01" title="Entry" text={`Each weekly entry costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE cash out (60/30/10 unless the commissioner changes the split).`} />
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. You can change your picks anytime until the week locks — after that they're final.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
-              <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If every player tied for first goes over, no winner is declared: that week’s pot carries forward. Only those tied-and-busted players can later claim the carryover by winning a future week; everyone else can still win the regular weekly pot." />
+              <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If every player tied for first goes over, no winner is declared and that week’s pot carries forward. Every confirmed player from that no-winner week can later claim the carryover by winning a future week; players who did not play that week can still win the regular weekly pot." />
               <Rule number="05" title="Deadline" text={`Picks lock ${DEADLINE_LABEL} before the week's first game (not at kickoff). Late picks are rejected — no exceptions. The exact time and a countdown are always on the Picks page.`} />
             </div>
           </StandardPage>

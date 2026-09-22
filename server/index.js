@@ -1154,7 +1154,7 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
       `WEEKLY ENTRY FEE: $${league.settings?.entryFee ?? 20} per weekly sheet.`,
       `Pick one winner for every game (straight up, no spread).`,
       `One point per correct pick. Highest total wins the weekly pot. A game that ends in a TIE counts as no point for anyone.`,
-      `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If every player tied for first goes over, no winner is declared: that week's pot becomes a carryover reserved for those tied-and-busted players. A later weekly winner who is not eligible receives only that later week's regular pot; the carryover stays active until an eligible player wins. Identical non-bust guesses split the regular pot.`,
+      `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If every player tied for first goes over, no winner is declared: that week's pot becomes a carryover open to every confirmed player from that no-winner week. A later weekly winner who did not play that no-winner week receives only that later week's regular pot; the carryover stays active until an eligible player wins. Identical non-bust guesses split the regular pot.`,
       `DEADLINE: sheets lock ${DEADLINE_LABEL} before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
       `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. Standings are the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week. Pays THREE places: ${(league.settings?.seasonPool?.payoutSplit ?? [60, 30, 10]).map((pct, i) => `${['1st', '2nd', '3rd'][i]} gets ${pct}%`).join(', ')} of the pot. Paid out after Week 18.`,
       `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you; a TIE counts as surviving. Last one standing wins.`,
@@ -3301,10 +3301,22 @@ async function recordAllBustRollover({ leagueId: lid, league, allBust, paidSheet
     // The same completed week can be inspected by every open phone. Persist it
     // only once; the merge protects us from concurrent score refreshes.
     if (current?.sourceWeeks.includes(allBust.week)) {
-      rollover = current;
+      // Migrate carryovers created under the older tied-leaders-only rule.
+      // The source week is still available, so we can safely widen it to all
+      // confirmed players without changing the money amount or creating a
+      // duplicate rollover event.
+      const allConfirmed = paidSheets.filter((sheet) => sheet.playerId);
+      const eligiblePlayerIds = [...new Set([...current.eligiblePlayerIds, ...allConfirmed.map((sheet) => String(sheet.playerId))])];
+      const eligibleNames = [...new Set([...(current.eligibleNames ?? []), ...allConfirmed.map((sheet) => sheet.name)])];
+      rollover = { ...current, eligiblePlayerIds, eligibleNames, updatedAt: new Date().toISOString() };
+      settings.weeklyRollover = rollover;
       return;
     }
-    const eligiblePlayerIds = [...new Set([...(current?.eligiblePlayerIds ?? []), ...allBust.tiedLeaders.map((sheet) => String(sheet.playerId)).filter(Boolean)])];
+    // A no-winner week gives every confirmed participant another shot at its
+    // carryover. The tiebreaker only decides that no one won; it does not
+    // narrow eligibility to the tied leaders.
+    const eligiblePlayers = paidSheets.filter((sheet) => sheet.playerId);
+    const eligiblePlayerIds = [...new Set([...(current?.eligiblePlayerIds ?? []), ...eligiblePlayers.map((sheet) => String(sheet.playerId))])];
     rollover = {
       id: current?.id ?? `rollover-${randomUUID()}`,
       status: 'active',
@@ -3312,7 +3324,7 @@ async function recordAllBustRollover({ leagueId: lid, league, allBust, paidSheet
       sourceWeek: current?.sourceWeek ?? allBust.week,
       sourceWeeks: [...(current?.sourceWeeks ?? []), allBust.week],
       eligiblePlayerIds,
-      eligibleNames: [...new Set([...(current?.eligibleNames ?? []), ...allBust.tiedLeaders.map((sheet) => sheet.name)])],
+      eligibleNames: [...new Set([...(current?.eligibleNames ?? []), ...eligiblePlayers.map((sheet) => sheet.name)])],
       createdAt: current?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       lastBustedWeek: allBust.week,
@@ -3324,14 +3336,15 @@ async function recordAllBustRollover({ leagueId: lid, league, allBust, paidSheet
 
   const names = rollover.eligibleNames.join(' & ');
   const source = prior ? `Week ${allBust.week}'s $${weeklyPot} joined the existing carryover` : `Week ${allBust.week}'s $${weeklyPot} rolled over`;
-  await store.addChatMessage(lid, { id: `chat-rollover-w${allBust.week}`, playerId: null, name: 'Jack', msg: `💥 TIEBREAKER BUST: ${allBust.tiedLeaders.map((sheet) => sheet.name.split(' ')[0]).join(' & ')} all went over ${allBust.total}. ${source} to $${rollover.amount}. Only ${names} can claim the carryover by winning a future week.`, time: new Date().toISOString() });
-  await saveNotification(lid, { kind: 'rollover', title: `Week ${allBust.week} pot rolls over`, body: `$${rollover.amount} is reserved for ${names}. Win a future week to claim it.`, metadata: { week: allBust.week, amount: rollover.amount, eligiblePlayerIds: rollover.eligiblePlayerIds } });
+  await store.addChatMessage(lid, { id: `chat-rollover-w${allBust.week}`, playerId: null, name: 'Jack', msg: `💥 TIEBREAKER BUST: ${allBust.tiedLeaders.map((sheet) => sheet.name.split(' ')[0]).join(' & ')} all went over ${allBust.total}. ${source} to $${rollover.amount}. Every confirmed Week ${allBust.week} player (${names}) can claim it by winning a future week.`, time: new Date().toISOString() });
+  await saveNotification(lid, { kind: 'rollover', title: `Week ${allBust.week} pot rolls over`, body: `$${rollover.amount} is open to every confirmed Week ${allBust.week} player. Win a future week to claim it.`, metadata: { week: allBust.week, amount: rollover.amount, eligiblePlayerIds: rollover.eligiblePlayerIds } });
   return rollover;
 }
 
 /* Settle a weekly pot as soon as the verified score/pick math produces one
    undisputed winner. An all-bust top-score tie is the exception: its pot is
-   carried forward and may only be claimed by those tied players. */
+   carried forward and may only be claimed by players confirmed in that
+   no-winner week. */
 async function settleClinchedWeeklyPayout({ leagueId: lid, week, actor = 'auto-clinch' }) {
   const league = await store.getLeague(lid);
   if (!league) return { settled: false, reason: 'league_not_found' };
