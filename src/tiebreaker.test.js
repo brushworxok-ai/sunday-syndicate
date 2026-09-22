@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateTiebreaker, tiebreakerRank, tiebreakerBusted, TIEBREAKER_STEP } from './tiebreaker.js';
+import { allTiedLeadersBusted, validateTiebreaker, tiebreakerRank, tiebreakerBusted, TIEBREAKER_STEP } from './tiebreaker.js';
 
 test('tiebreaker accepts whole and half points, rejects anything finer', () => {
   assert.equal(TIEBREAKER_STEP, 0.5);
@@ -10,6 +10,14 @@ test('tiebreaker accepts whole and half points, rejects anything finer', () => {
   }
   assert.equal(validateTiebreaker('47.5').value, 47.5);
   assert.equal(validateTiebreaker(201, { max: 200 }).ok, false); // CFB pools cap at 200
+});
+
+test('all-bust detection only applies to a genuine top-score tie', () => {
+  const tied = [{ tiebreaker: 51 }, { tiebreaker: 55 }];
+  assert.equal(allTiedLeadersBusted(tied, 50), true);
+  assert.equal(allTiedLeadersBusted([{ tiebreaker: 51 }], 50), false);
+  assert.equal(allTiedLeadersBusted([{ tiebreaker: 49 }, { tiebreaker: 51 }], 50), false);
+  assert.equal(allTiedLeadersBusted(tied, null), false);
 });
 
 test('half-point guesses rank and bust correctly against a whole-number total', () => {

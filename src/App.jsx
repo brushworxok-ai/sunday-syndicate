@@ -21,7 +21,7 @@ import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
 import { deriveSurvivorPool, findTeamGame } from './survivor.js';
 import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
-import { getTiebreakerActual, tiebreakerRank, tiebreakerBusted, validateTiebreaker, TIEBREAKER_STEP } from './tiebreaker.js';
+import { allTiedLeadersBusted, getTiebreakerActual, tiebreakerRank, tiebreakerBusted, validateTiebreaker, TIEBREAKER_STEP } from './tiebreaker.js';
 import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
 import { PAY_METHODS, PAY_ORDER, preferredHandle, hasPaymentHandle, messagesLink } from './payment.js';
@@ -123,7 +123,7 @@ function App() {
   const [results, setResults] = useState(DEMO_LEAGUE.results);
   const resultsRef = useRef(results);
   const [chatMsgs, setChatMsgs] = useState(DEMO_CHAT);
-  const [rolloverPot, setRolloverPot] = useState(0);
+  const [manualRolloverPot] = useState(0);
   const [serverLeague, setServerLeague] = useState(null);
   const [serverBusy, setServerBusy] = useState('');
   const [serverError, setServerError] = useState('');
@@ -577,7 +577,13 @@ function App() {
   // other weeks (e.g. leftover demo data) must not inflate the "X of Y final" label.
   const completedGames = currentGames.filter((game) => results[game.id]?.winner).length;
   const pot = weekSheets.filter((sheet) => sheet.paid).length * ENTRY_FEE;
-  const totalPot = pot + Number(rolloverPot || 0);
+  const activeRollover = serverLeague?.settings?.weeklyRollover?.status === 'active'
+    ? serverLeague.settings.weeklyRollover
+    : null;
+  const rolloverPot = Number(activeRollover?.amount ?? serverLeague?.settings?.rollover ?? manualRolloverPot ?? 0);
+  // A carryover is reserved for a prior all-bust tie, so it is intentionally
+  // not included in the current open weekly pot seen by every player.
+  const totalPot = pot;
 
   const calcScore = (sheet) => Object.entries(sheet.picks).reduce(
     (score, [gameId, pick]) => score + (results[gameId]?.winner === pick ? 1 : 0),
@@ -629,8 +635,10 @@ function App() {
       const scored = ws.map((s) => ({ ...s, score: calcScore(s) }))
         .sort((a, b) => b.score - a.score || tiebreakerRank(a.tiebreaker, tbTotal) - tiebreakerRank(b.tiebreaker, tbTotal));
       const top = scored[0];
+      const topScoreTied = top ? scored.filter((s) => s.score === top.score) : [];
+      const allBustTie = complete && allTiedLeadersBusted(topScoreTied, tbTotal);
       const scoredWinners = complete && top
-        ? scored.filter((s) => s.score === top.score && tiebreakerRank(s.tiebreaker, tbTotal) === tiebreakerRank(top.tiebreaker, tbTotal))
+        ? (allBustTie ? [] : scored.filter((s) => s.score === top.score && tiebreakerRank(s.tiebreaker, tbTotal) === tiebreakerRank(top.tiebreaker, tbTotal)))
         : [];
       const weekPot = ws.filter((s) => s.paid).length * ENTRY_FEE;
       const payout = (serverLeague?.payouts ?? []).find((p) => p.week === week && (p.pool ?? 'weekly') === 'weekly' && !p.voidedAt);
@@ -639,7 +647,7 @@ function App() {
       const winners = payout && !complete
         ? scored.filter((s) => (payout.winnerPlayerIds ?? []).includes(s.playerId) || (payout.winnerNames ?? []).includes(s.name))
         : scoredWinners;
-      weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete: complete || Boolean(payout), clinchedEarly: Boolean(payout) && !complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
+      weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete: complete || Boolean(payout), allBustTie, clinchedEarly: Boolean(payout) && !complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
       for (const s of scored) {
         const key = s.playerId ?? s.name;
         if (!players.has(key)) players.set(key, { key, name: s.name, weeksPlayed: 0, totalCorrect: 0, totalPicks: 0, weeklyWins: 0, earnings: 0 });
@@ -2287,9 +2295,16 @@ function App() {
                       <span className="scorecard-label">This week's pot</span>
                       <strong>${totalPot.toLocaleString()}</strong>
                       <div><span>{weekSheets.length} {weekSheets.length === 1 ? 'entry' : 'entries'}</span><span>{completedGames}/{currentGames.length} final</span></div>
-                      {rolloverPot > 0 && <p>Includes ${Number(rolloverPot).toLocaleString()} rollover</p>}
+                      {rolloverPot > 0 && <p>${Number(rolloverPot).toLocaleString()} carryover is reserved separately</p>}
                     </div>
                   </section>
+
+                  {activeRollover && (
+                    <section className="panel compact-panel rollover-card" aria-label="Active carryover pot">
+                      <div className="panel-heading"><div><span className="eyebrow dark">CARRYOVER POT</span><h2>${rolloverPot.toLocaleString()} is still up for grabs</h2></div><StatusPill state="warn">Reserved</StatusPill></div>
+                      <p className="muted">It came from Week {activeRollover.sourceWeeks?.join(' & ') ?? activeRollover.sourceWeek} after the top players all busted the tiebreaker. Only {activeRollover.eligibleNames?.join(', ') || 'the original tied players'} can claim it by winning a future week. Everyone else can still win that week’s regular pot.</p>
+                    </section>
+                  )}
 
                   {/* ── Champions: who's winning ── */}
                   <section className="champ-row" aria-label="League leaders">
@@ -3267,7 +3282,7 @@ function App() {
             {paidWeekSheets.length ? <div className="standings-table">
               {weekTiebreaker.game && (
                 <p className="tb-status">
-                  ★ Tiebreaker: total points in {weekTiebreaker.game.away} @ {weekTiebreaker.game.home} — closest without going over wins ties.
+                  ★ Tiebreaker: total points in {weekTiebreaker.game.away} @ {weekTiebreaker.game.home} — closest without going over wins ties. If every tied leader goes over, that week’s pot carries forward.
                   {weekTiebreaker.total != null ? ` Final total: ${weekTiebreaker.total}.` : " Awaiting that game's final score."}
                 </p>
               )}
@@ -3910,7 +3925,7 @@ function App() {
               <Rule number="01" title="Entry" text={`Each weekly entry costs $${ENTRY_FEE}. Pay from your credit balance in one tap, or through the league's Cash App Pool link. The $25 season pool is separate — one payment for the whole year, standings are your total correct picks combined across all 18 weeks, and the top THREE cash out (60/30/10 unless the commissioner changes the split).`} />
               <Rule number="02" title="Picks" text={`Select one winner for all ${currentGames.length} games. You can change your picks anytime until the week locks — after that they're final.`} />
               <Rule number="03" title="Scoring" text="Every correct winner earns one point. The highest total after every game wins the weekly pot. A game that ends in a tie counts as no point for anyone." />
-              <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess takes it. Identical guesses split the pot." />
+              <Rule number="04" title="Tiebreaker" text="Guess the total points of the tiebreaker game (the week's last kickoff — marked with a ★ on the picks page). Closest without going over wins. Going over busts — any under-guess beats any bust. If every player tied for first goes over, no winner is declared: that week’s pot carries forward. Only those tied-and-busted players can later claim the carryover by winning a future week; everyone else can still win the regular weekly pot." />
               <Rule number="05" title="Deadline" text={`Picks lock ${DEADLINE_LABEL} before the week's first game (not at kickoff). Late picks are rejected — no exceptions. The exact time and a countdown are always on the Picks page.`} />
             </div>
           </StandardPage>
@@ -4158,7 +4173,7 @@ function App() {
               onSavePlayer={saveJackPlayerPolicy}
             />
             <div className="admin-toolbar">
-              <label>Rollover pot ($)<input type="number" min="0" value={rolloverPot} onChange={(event) => setRolloverPot(Number(event.target.value || 0))} /></label>
+              <p>{activeRollover ? `Automatic carryover: $${rolloverPot} reserved for ${activeRollover.eligibleNames?.join(', ') || 'eligible players'}.` : 'No active carryover pot.'}</p>
               <p>{completedGames} results posted</p>
               <button className="button button-ghost-dark" type="button" onClick={syncFinals} disabled={serverBusy === 'sync-finals'}>{serverBusy === 'sync-finals' ? 'Syncing…' : '⚡ Sync finals from live feed'}</button>
               <button className="button button-ghost-dark" type="button" onClick={sendPickReminders} disabled={serverBusy === 'reminders' || weekLocked}>{serverBusy === 'reminders' ? 'Publishing…' : '⏰ Send pick reminders'}</button>

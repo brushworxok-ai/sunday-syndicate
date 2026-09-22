@@ -34,7 +34,7 @@ function validateAvatar(value) {
   return { error: 'Invalid profile picture.' };
 }
 import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
-import { validateTiebreaker } from '../src/tiebreaker.js';
+import { allTiedLeadersBusted, getTiebreakerActual, validateTiebreaker } from '../src/tiebreaker.js';
 import { createHash } from 'node:crypto';
 import { createLeagueStore } from './storeFactory.js';
 import { buildLeagueView } from './publicLeagueView.js';
@@ -1057,6 +1057,13 @@ function computeWinnerRecognition(league, currentWeek) {
       };
     }
     if (!verified) continue;
+    const allBust = getAllBustTie(league, w, weekSheets, weekGames);
+    if (allBust) {
+      return {
+        status: 'rollover', winners: [], protectedPlayerIds: [], week: w, reigning: w < currentWeek,
+        message: `Week ${w} rolled over after ${allBust.tiedLeaders.map((sheet) => sheet.name).join(' & ')} all busted the tiebreaker.`,
+      };
+    }
     const leaderboard = buildLeaderboard(league.players, weekSheets, league.results);
     const recognition = buildWeeklyWinnerRecognition({
       leaderboard: leaderboard.map((e) => ({ playerId: e.playerId, name: e.name, score: e.score, tiebreaker: e.tiebreaker, tiebreakerRank: e.tiebreakerRank })),
@@ -1147,7 +1154,7 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
       `WEEKLY ENTRY FEE: $${league.settings?.entryFee ?? 20} per weekly sheet.`,
       `Pick one winner for every game (straight up, no spread).`,
       `One point per correct pick. Highest total wins the weekly pot. A game that ends in a TIE counts as no point for anyone.`,
-      `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If everyone tied goes over, the least-over guess wins. Identical guesses split the pot.`,
+      `Tiebreaker: guess the total points of the week's LAST game (usually Monday night). Closest without going over wins ties. Going over busts — any under-guess beats any bust. If every player tied for first goes over, no winner is declared: that week's pot becomes a carryover reserved for those tied-and-busted players. A later weekly winner who is not eligible receives only that later week's regular pot; the carryover stays active until an eligible player wins. Identical non-bust guesses split the regular pot.`,
       `DEADLINE: sheets lock ${DEADLINE_LABEL} before the first kickoff of each week${(() => { const d = getWeekDeadline(currentWeek); return d ? ` — ${weekLabel} locks ${d.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET` : ''; })()}. Late sheets are rejected — remind players who haven't submitted.`,
       `SEASON POOL: $${league.settings?.seasonPool?.entryFee ?? 25} per player, ONE-TIME for the whole season. Standings are the best COMBINED record across ALL weekly sheets — total correct picks added up over the entire season — NOT the best single week. Pays THREE places: ${(league.settings?.seasonPool?.payoutSplit ?? [60, 30, 10]).map((pct, i) => `${['1st', '2nd', '3rd'][i]} gets ${pct}%`).join(', ')} of the pot. Paid out after Week 18.`,
       `SURVIVOR POOL: pick one team to win each week, never reuse a team all season. A loss eliminates you; a TIE counts as surviving. Last one standing wins.`,
@@ -2791,6 +2798,7 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
     return response.status(409).json({ error: `Week ${week} is already marked paid.` });
   }
   const submittedWinnerIds = Array.isArray(request.body?.winnerPlayerIds) ? request.body.winnerPlayerIds.map(String) : [];
+  let claimedRollover = null;
   if (pool === 'weekly') {
     // A weekly payout may be recorded before every game is final only when the
     // remaining picks cannot possibly change the winner. This is checked on
@@ -2811,6 +2819,14 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
     if (submittedWinnerIds.length !== 1 || submittedWinnerIds[0] !== clinched[0].playerId) {
       return response.status(422).json({ error: `Week ${week} payout must go to the clinched winner, ${clinched[0].name}.` });
     }
+    const weeklyPot = paidSheets.length * (Number(league.settings?.entryFee) || ENTRY_FEE);
+    const rollover = activeWeeklyRollover(league.settings);
+    const rolloverAmount = rollover?.eligiblePlayerIds.includes(clinched[0].playerId) ? rollover.amount : 0;
+    const requiredAmount = Math.round((weeklyPot + rolloverAmount) * 100) / 100;
+    if (Math.abs(amount - requiredAmount) > 0.001) {
+      return response.status(422).json({ error: rolloverAmount ? `This eligible winner must receive the $${weeklyPot} weekly pot plus the $${rolloverAmount} carryover ($${requiredAmount} total).` : `Week ${week}'s payout must equal its $${weeklyPot} confirmed-entry pot.` });
+    }
+    if (rolloverAmount) claimedRollover = rollover;
   }
   const payout = {
     id: `payout-${randomUUID()}`,
@@ -2825,6 +2841,12 @@ app.post('/api/leagues/:leagueId/payouts', auth.requireAdmin, asyncRoute(async (
     paidBy: request.actor,
   };
   await store.savePayout(request.params.leagueId, payout);
+  if (claimedRollover) {
+    await store.mergeLeagueSettings(request.params.leagueId, (settings) => {
+      const current = activeWeeklyRollover(settings);
+      if (current?.id === claimedRollover.id) settings.weeklyRollover = { ...current, status: 'claimed', claimedAt: payout.paidAt, claimedBy: payout.winnerPlayerIds[0], claimedWeek: week, amount: 0 };
+    });
+  }
   await saveNotification(request.params.leagueId, { kind: 'payout', title: `Week ${payout.week} payout — $${payout.amount}`, body: `${payout.winnerNames?.join(' & ') || 'Winner'} received $${payout.amount} for Week ${payout.week}.`, metadata: { week: payout.week, amount: payout.amount, payoutId: payout.id } });
   return response.status(201).json(payout);
 }));
@@ -3236,9 +3258,80 @@ async function sweepPriorCfbPools({ lid, currentWeek, actions }) {
   } catch (error) { console.error('Auto-pilot CFB sweep failed:', error.message); }
 }
 
+function activeWeeklyRollover(settings = {}) {
+  const rollover = settings.weeklyRollover;
+  const amount = Number(rollover?.amount);
+  if (!rollover || rollover.status !== 'active' || !Number.isFinite(amount) || amount <= 0) return null;
+  return {
+    ...rollover,
+    amount: Math.round(amount * 100) / 100,
+    eligiblePlayerIds: [...new Set((rollover.eligiblePlayerIds ?? []).map(String))],
+    sourceWeeks: [...new Set((rollover.sourceWeeks ?? [rollover.sourceWeek]).map(Number).filter(Number.isInteger))],
+  };
+}
+
+/* A full week is the only time an all-bust tiebreak can be decided. It is
+   intentionally based on PAID sheets: unpaid sheets are never in the pot. */
+function getAllBustTie(league, week, paidSheets, games) {
+  const allFinal = games.length > 0 && games.every((game) => {
+    const result = (league.results ?? {})[game.id];
+    return result?.winner && result?.verifiedAt;
+  });
+  if (!allFinal || paidSheets.length < 2) return null;
+  const total = getTiebreakerActual(games, league.results).total;
+  if (total == null) return null;
+  const scored = paidSheets.map((sheet) => ({
+    ...sheet,
+    score: games.reduce((sum, game) => sum + (sheet.picks?.[game.id] === league.results?.[game.id]?.winner ? 1 : 0), 0),
+  }));
+  const topScore = Math.max(...scored.map((sheet) => sheet.score));
+  const tiedLeaders = scored.filter((sheet) => sheet.score === topScore);
+  if (!allTiedLeadersBusted(tiedLeaders, total)) return null;
+  return { week, total, topScore, tiedLeaders };
+}
+
+async function recordAllBustRollover({ leagueId: lid, league, allBust, paidSheets, actor }) {
+  const weeklyPot = paidSheets.length * (Number(league.settings?.entryFee) || ENTRY_FEE);
+  if (weeklyPot <= 0) return null;
+  const prior = activeWeeklyRollover(league.settings);
+  let created = false;
+  let rollover = null;
+  await store.mergeLeagueSettings(lid, (settings) => {
+    const current = activeWeeklyRollover(settings);
+    // The same completed week can be inspected by every open phone. Persist it
+    // only once; the merge protects us from concurrent score refreshes.
+    if (current?.sourceWeeks.includes(allBust.week)) {
+      rollover = current;
+      return;
+    }
+    const eligiblePlayerIds = [...new Set([...(current?.eligiblePlayerIds ?? []), ...allBust.tiedLeaders.map((sheet) => String(sheet.playerId)).filter(Boolean)])];
+    rollover = {
+      id: current?.id ?? `rollover-${randomUUID()}`,
+      status: 'active',
+      amount: Math.round(((current?.amount ?? 0) + weeklyPot) * 100) / 100,
+      sourceWeek: current?.sourceWeek ?? allBust.week,
+      sourceWeeks: [...(current?.sourceWeeks ?? []), allBust.week],
+      eligiblePlayerIds,
+      eligibleNames: [...new Set([...(current?.eligibleNames ?? []), ...allBust.tiedLeaders.map((sheet) => sheet.name)])],
+      createdAt: current?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastBustedWeek: allBust.week,
+    };
+    settings.weeklyRollover = rollover;
+    created = true;
+  });
+  if (!created || !rollover) return rollover;
+
+  const names = rollover.eligibleNames.join(' & ');
+  const source = prior ? `Week ${allBust.week}'s $${weeklyPot} joined the existing carryover` : `Week ${allBust.week}'s $${weeklyPot} rolled over`;
+  await store.addChatMessage(lid, { id: `chat-rollover-w${allBust.week}`, playerId: null, name: 'Jack', msg: `💥 TIEBREAKER BUST: ${allBust.tiedLeaders.map((sheet) => sheet.name.split(' ')[0]).join(' & ')} all went over ${allBust.total}. ${source} to $${rollover.amount}. Only ${names} can claim the carryover by winning a future week.`, time: new Date().toISOString() });
+  await saveNotification(lid, { kind: 'rollover', title: `Week ${allBust.week} pot rolls over`, body: `$${rollover.amount} is reserved for ${names}. Win a future week to claim it.`, metadata: { week: allBust.week, amount: rollover.amount, eligiblePlayerIds: rollover.eligiblePlayerIds } });
+  return rollover;
+}
+
 /* Settle a weekly pot as soon as the verified score/pick math produces one
-   undisputed winner. The atomic claim makes this safe to call from score polls,
-   app refreshes, cron, and manual auto-pilot without paying twice. */
+   undisputed winner. An all-bust top-score tie is the exception: its pot is
+   carried forward and may only be claimed by those tied players. */
 async function settleClinchedWeeklyPayout({ leagueId: lid, week, actor = 'auto-clinch' }) {
   const league = await store.getLeague(lid);
   if (!league) return { settled: false, reason: 'league_not_found' };
@@ -3247,6 +3340,12 @@ async function settleClinchedWeeklyPayout({ leagueId: lid, week, actor = 'auto-c
   const games = getGames(week);
   const paidSheets = (league.sheets ?? []).filter((sheet) => sheet.week === week && sheet.paid);
   if (!games.length || paidSheets.length < 2) return { settled: false, reason: 'not_enough_paid_entries' };
+
+  const allBust = getAllBustTie(league, week, paidSheets, games);
+  if (allBust) {
+    const rollover = await recordAllBustRollover({ leagueId: lid, league, allBust, paidSheets, actor });
+    return { settled: false, reason: 'all_tiebreakers_busted', rollover };
+  }
 
   // Only results which the app has verified can move real money.
   const verifiedResults = Object.fromEntries(games.flatMap((game) => {
@@ -3262,8 +3361,11 @@ async function settleClinchedWeeklyPayout({ leagueId: lid, week, actor = 'auto-c
 
   const winner = clinched[0];
   if (!winner.playerId || !paidSheets.some((sheet) => sheet.playerId === winner.playerId)) return { settled: false, reason: 'winner_not_eligible' };
-  const pot = paidSheets.length * (Number(league.settings?.entryFee) || ENTRY_FEE);
-  if (pot <= 0) return { settled: false, reason: 'empty_pot' };
+  const weeklyPot = paidSheets.length * (Number(league.settings?.entryFee) || ENTRY_FEE);
+  if (weeklyPot <= 0) return { settled: false, reason: 'empty_pot' };
+  const rollover = activeWeeklyRollover(league.settings);
+  const rolloverAmount = rollover?.eligiblePlayerIds.includes(String(winner.playerId)) ? rollover.amount : 0;
+  const pot = Math.round((weeklyPot + rolloverAmount) * 100) / 100;
   if (!await store.claimOnce(lid, `weekly-pot-${week}`)) return { settled: false, reason: 'settling_elsewhere' };
 
   try {
@@ -3271,16 +3373,25 @@ async function settleClinchedWeeklyPayout({ leagueId: lid, week, actor = 'auto-c
     const verdict = validateCreditEntry({ amount: pot, reason: `Week ${week} winnings` });
     if (!verdict.ok) throw new Error('The clinched payout amount could not be validated.');
     const at = new Date().toISOString();
-    await store.addCreditEntry(lid, { id: randomUUID(), playerId: winner.playerId, amount: verdict.value, reason: `Week ${week} winnings — clinched early`, by: actor, at });
+    const reason = rolloverAmount ? `Week ${week} winnings + carryover from Week ${rollover.sourceWeeks.join(', ')}` : `Week ${week} winnings — clinched early`;
+    await store.addCreditEntry(lid, { id: randomUUID(), playerId: winner.playerId, amount: verdict.value, reason, by: actor, at });
+    if (rolloverAmount) {
+      await store.mergeLeagueSettings(lid, (settings) => {
+        const current = activeWeeklyRollover(settings);
+        if (current?.id === rollover.id) settings.weeklyRollover = { ...current, status: 'claimed', claimedAt: at, claimedBy: winner.playerId, claimedWeek: week, amount: 0 };
+      });
+    }
     const payout = {
       id: `payout-${randomUUID()}`, week, pool: 'weekly', amount: pot,
       winnerNames: [winner.name], winnerPlayerIds: [winner.playerId], method: 'credit',
-      note: 'Automatic payout after mathematically verified clinch', paidAt: at, paidBy: actor,
+      weeklyAmount: weeklyPot, rolloverAmount,
+      note: rolloverAmount ? `Automatic payout after verified clinch, including $${rolloverAmount} carryover.` : 'Automatic payout after mathematically verified clinch', paidAt: at, paidBy: actor,
     };
     await store.savePayout(lid, payout);
-    await store.addChatMessage(lid, { id: `chat-payout-w${week}`, playerId: null, name: 'Jack', msg: `🏆 WEEK ${week} CLINCHED: ${winner.name.split(' ')[0]} locked up the $${pot} pot with ${winner.remainingGames} game${winner.remainingGames === 1 ? '' : 's'} still left. $${pot} is now in their account credit.`, time: at });
-    await saveNotification(lid, { playerId: winner.playerId, kind: 'payout', title: `You clinched Week ${week}!`, body: `$${pot} was added to your account credit.`, metadata: { week, amount: pot, earlyClinch: true } });
-    await saveNotification(lid, { kind: 'payout', title: `Week ${week} winner: ${winner.name}`, body: `${winner.name} clinched the $${pot} pot. Winnings are in their account credit.`, metadata: { week, amount: pot, winnerId: winner.playerId, earlyClinch: true } });
+    const carryoverNote = rolloverAmount ? ` That includes the $${rolloverAmount} carryover from Week ${rollover.sourceWeeks.join(', ')}.` : '';
+    await store.addChatMessage(lid, { id: `chat-payout-w${week}`, playerId: null, name: 'Jack', msg: `🏆 WEEK ${week} CLINCHED: ${winner.name.split(' ')[0]} locked up the $${weeklyPot} weekly pot${carryoverNote} $${pot} is now in their account credit.`, time: at });
+    await saveNotification(lid, { playerId: winner.playerId, kind: 'payout', title: `You clinched Week ${week}!`, body: `$${pot} was added to your account credit.${carryoverNote}`, metadata: { week, amount: pot, weeklyAmount: weeklyPot, rolloverAmount, earlyClinch: true } });
+    await saveNotification(lid, { kind: 'payout', title: `Week ${week} winner: ${winner.name}`, body: `${winner.name} clinched the $${pot} pot.${carryoverNote}`, metadata: { week, amount: pot, winnerId: winner.playerId, rolloverAmount, earlyClinch: true } });
     return { settled: true, payout, winner };
   } catch (error) {
     await store.releaseClaim(lid, `weekly-pot-${week}`).catch(() => {});

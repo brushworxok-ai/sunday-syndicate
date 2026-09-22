@@ -28,8 +28,9 @@ export function getTiebreakerActual(games, results) {
 /**
  * Sort key for closest-without-going-over. Lower = better.
  * - Not over: distance below the actual total (0 = nailed it).
- * - Over ("busted"): ranks after EVERY not-over guess, closest-over first
- *   (so if everyone busts, the least-over guess still wins the tiebreak).
+ * - Over ("busted"): ranks after EVERY not-over guess, closest-over first.
+ *   The league settlement layer detects an all-bust tie and rolls that pot
+ *   forward instead of selecting a least-over winner.
  * - Actual unknown (tiebreaker game not final): everyone ranks equal — a tie
  *   stays a tie until the tiebreaker game's score is in.
  */
@@ -43,6 +44,16 @@ export function tiebreakerRank(guess, actualTotal) {
 /** True once the actual total is known and this guess went over it. */
 export function tiebreakerBusted(guess, actualTotal) {
   return actualTotal != null && Number.isFinite(Number(guess)) && Number(guess) > actualTotal;
+}
+
+/** True only when every player tied for the top score went over the total.
+ * This is deliberately separate from rank: a normal standings table can still
+ * order busted guesses, while the server applies the league's rollover rule. */
+export function allTiedLeadersBusted(entries, actualTotal) {
+  return actualTotal != null
+    && Array.isArray(entries)
+    && entries.length > 1
+    && entries.every((entry) => tiebreakerBusted(entry?.tiebreaker, actualTotal));
 }
 
 /** Convenience: actual tiebreaker total for a week number. */
