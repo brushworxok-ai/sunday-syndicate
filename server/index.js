@@ -535,6 +535,7 @@ app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   // Repair the legacy no-results auto-payout bug before any public response is
   // built. It only targets automatic weekly credits whose week has zero finals.
   await voidPrematureWeeklyPayouts(league.id, 'league-refresh');
+  await hydrateActiveRolloverDetails(league.id, 'league-refresh');
   // A clinched result does not need to wait for unrelated games to go final.
   // The settlement helper is idempotent, so this is safe on every refresh.
   await settleClinchedWeeklyPayout({ leagueId: league.id, week: Number(league.week) || getCurrentWeek(), actor: 'league-refresh' });
@@ -3308,7 +3309,18 @@ async function recordAllBustRollover({ leagueId: lid, league, allBust, paidSheet
       const allConfirmed = paidSheets.filter((sheet) => sheet.playerId);
       const eligiblePlayerIds = [...new Set([...current.eligiblePlayerIds, ...allConfirmed.map((sheet) => String(sheet.playerId))])];
       const eligibleNames = [...new Set([...(current.eligibleNames ?? []), ...allConfirmed.map((sheet) => sheet.name)])];
-      rollover = { ...current, eligiblePlayerIds, eligibleNames, updatedAt: new Date().toISOString() };
+      rollover = {
+        ...current,
+        eligiblePlayerIds,
+        eligibleNames,
+        updatedAt: new Date().toISOString(),
+        lastBustedWeek: allBust.week,
+        lastWeekPot: weeklyPot,
+        lastTopScore: allBust.topScore,
+        lastTiebreakerTotal: allBust.total,
+        lastTiedLeaderNames: allBust.tiedLeaders.map((sheet) => sheet.name),
+        lastParticipantNames: allConfirmed.map((sheet) => sheet.name),
+      };
       settings.weeklyRollover = rollover;
       return;
     }
@@ -3328,6 +3340,11 @@ async function recordAllBustRollover({ leagueId: lid, league, allBust, paidSheet
       createdAt: current?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       lastBustedWeek: allBust.week,
+      lastWeekPot: weeklyPot,
+      lastTopScore: allBust.topScore,
+      lastTiebreakerTotal: allBust.total,
+      lastTiedLeaderNames: allBust.tiedLeaders.map((sheet) => sheet.name),
+      lastParticipantNames: eligiblePlayers.map((sheet) => sheet.name),
     };
     settings.weeklyRollover = rollover;
     created = true;
@@ -3339,6 +3356,20 @@ async function recordAllBustRollover({ leagueId: lid, league, allBust, paidSheet
   await store.addChatMessage(lid, { id: `chat-rollover-w${allBust.week}`, playerId: null, name: 'Jack', msg: `💥 TIEBREAKER BUST: ${allBust.tiedLeaders.map((sheet) => sheet.name.split(' ')[0]).join(' & ')} all went over ${allBust.total}. ${source} to $${rollover.amount}. Every confirmed Week ${allBust.week} player (${names}) can claim it by winning a future week.`, time: new Date().toISOString() });
   await saveNotification(lid, { kind: 'rollover', title: `Week ${allBust.week} pot rolls over`, body: `$${rollover.amount} is open to every confirmed Week ${allBust.week} player. Win a future week to claim it.`, metadata: { week: allBust.week, amount: rollover.amount, eligiblePlayerIds: rollover.eligiblePlayerIds } });
   return rollover;
+}
+
+/* Carryovers made before the result-card fields existed are safe to enrich
+   from their immutable source week. This does not change the amount or send a
+   second announcement; it only makes the outcome transparent to players. */
+async function hydrateActiveRolloverDetails(lid, actor = 'system') {
+  const league = await store.getLeague(lid);
+  const rollover = activeWeeklyRollover(league?.settings);
+  if (!league || !rollover || rollover.lastTiebreakerTotal != null) return;
+  const sourceWeek = rollover.sourceWeeks.at(-1) ?? rollover.sourceWeek;
+  const games = getGames(sourceWeek);
+  const paidSheets = (league.sheets ?? []).filter((sheet) => sheet.week === sourceWeek && sheet.paid);
+  const allBust = getAllBustTie(league, sourceWeek, paidSheets, games);
+  if (allBust) await recordAllBustRollover({ leagueId: lid, league, allBust, paidSheets, actor });
 }
 
 /* Settle a weekly pot as soon as the verified score/pick math produces one

@@ -193,6 +193,10 @@ main { padding: 24px 0 40px; }
 .jack-board-recap { align-items: flex-start; margin: 0 0 2px; border-color: rgba(57, 255, 20, .34); background: linear-gradient(135deg, rgba(57, 255, 20, .10), var(--card)); }
 .jack-board-recap-mark { flex: 0 0 48px; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: var(--neon); color: #061008; font-size: 1.25rem; font-weight: 900; box-shadow: 0 0 20px rgba(57,255,20,.38); }
 .jack-board-recap .text-button { min-height: 44px; margin-top: 8px; }
+.rollover-result-card { align-items: flex-start; margin: 0 0 2px; border-color: rgba(255, 190, 45, .56); background: linear-gradient(135deg, rgba(255, 190, 45, .12), var(--card)); }
+.rollover-result-mark { flex: 0 0 48px; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: #ffbe2d; color: #151108; font-size: 1.35rem; font-weight: 900; box-shadow: 0 0 20px rgba(255,190,45,.28); }
+.rollover-result-card > div:last-child { min-width: 0; }
+.rollover-result-card p { overflow-wrap: anywhere; }
 .panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .panel h2 { margin: 0; font-size: 24px; letter-spacing: -.035em; color: #fff; }
 .panel .muted, .ai-copy { color: var(--muted); line-height: 1.7; font-size: 14px; white-space: pre-line; max-width: 650px; }

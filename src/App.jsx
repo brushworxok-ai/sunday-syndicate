@@ -2306,6 +2306,25 @@ function App() {
                     </section>
                   )}
 
+                  {activeRollover && (() => {
+                    const resultWeek = activeRollover.lastBustedWeek ?? activeRollover.sourceWeeks?.at(-1) ?? activeRollover.sourceWeek;
+                    const leaders = activeRollover.lastTiedLeaderNames?.join(' & ') || 'The tied leaders';
+                    const finalTotal = activeRollover.lastTiebreakerTotal;
+                    const score = activeRollover.lastTopScore;
+                    const weekPot = Number(activeRollover.lastWeekPot ?? 0);
+                    return (
+                      <section className="week-winner-card rollover-result-card" aria-label={`Week ${resultWeek} result: no winner`}>
+                        <div className="rollover-result-mark" aria-hidden="true">!</div>
+                        <div>
+                          <span>WEEK {resultWeek} RESULT · NO WINNER</span>
+                          <h2>The pot rolled over</h2>
+                          <p>{leaders}{score != null ? ` tied at ${score} correct` : ' finished tied'}, then all went over the {finalTotal != null ? `${finalTotal}-point` : ''} tiebreaker. ${weekPot > 0 ? `$${weekPot.toLocaleString()} carries forward.` : 'The pot carries forward.'} Every confirmed Week {resultWeek} player gets another shot at it.</p>
+                          <button className="text-button recap-show-btn" type="button" onClick={() => { if (resultWeek) setSelectedWeek(Number(resultWeek)); setView('results'); }}>See Week {resultWeek} results</button>
+                        </div>
+                      </section>
+                    );
+                  })()}
+
                   {/* ── Champions: who's winning ── */}
                   <section className="champ-row" aria-label="League leaders">
                     <button type="button" className={`champ-card ${lastWon ? 'lit' : ''}`} onClick={() => setView('season')}>
