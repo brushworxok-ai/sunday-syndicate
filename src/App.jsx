@@ -689,6 +689,13 @@ function App() {
   const gameContext = currentGames.map((game) => ({ ...game, ...results[game.id] }));
   const proofLeague = serverLeague ?? { ...DEMO_LEAGUE, latestRecap: DEMO_LEAGUE.recap, latestBroadcast: DEMO_LEAGUE.broadcast, recaps: [DEMO_LEAGUE.recap], broadcasts: [DEMO_LEAGUE.broadcast], chat: DEMO_CHAT };
   const demoPlayerName = (playerId) => proofLeague.players.find((player) => player.id === playerId)?.name ?? 'Unknown player';
+  // Highlight fan-vs-fan games before kickoff, but never reveal picks.
+  const rivalryWatch = useMemo(() => currentGames.flatMap((game) => {
+    const favoriteTeamOf = (player) => player?.trashTalk?.jackPolicy?.favoriteTeam ?? player?.favoriteTeam ?? null;
+    const awayFans = (proofLeague.players ?? []).filter((player) => favoriteTeamOf(player) === game.away);
+    const homeFans = (proofLeague.players ?? []).filter((player) => favoriteTeamOf(player) === game.home);
+    return awayFans.length && homeFans.length ? [{ game, awayFans, homeFans }] : [];
+  }), [currentGames, proofLeague.players]);
   const latestWeeklyPayout = useMemo(() => (proofLeague.payouts ?? [])
     .filter((payout) => (payout.pool ?? 'weekly') === 'weekly' && !payout.voidedAt)
     .sort((a, b) => Number(b.week) - Number(a.week) || Date.parse(b.paidAt ?? 0) - Date.parse(a.paidAt ?? 0))[0] ?? null, [proofLeague.payouts]);
@@ -779,6 +786,15 @@ function App() {
   const cfbPaidCount = useMemo(
     () => Object.values(cfbPool?.entries ?? {}).filter((entry) => entry.paid).length,
     [cfbPool],
+  );
+  // The College page contains the full board, but the latest official outcome
+  // belongs on Home too so nobody has to hunt for who won.
+  const latestFinalCfbPool = useMemo(() => [...(serverLeague?.cfbPools ?? [])]
+    .filter((pool) => pool.status === 'final' || pool.potCredited || pool.noContest)
+    .sort((a, b) => Number(b.week) - Number(a.week))[0] ?? null, [serverLeague]);
+  const latestFinalCfbBoard = useMemo(
+    () => (latestFinalCfbPool ? gradeCfbPool(latestFinalCfbPool) : null),
+    [latestFinalCfbPool],
   );
   const cfbMinimumPlayers = 3;
 
@@ -2324,6 +2340,49 @@ function App() {
                       </section>
                     );
                   })()}
+
+                  {latestFinalCfbPool && latestFinalCfbBoard && (() => {
+                    const winners = latestFinalCfbBoard.winners ?? [];
+                    const winnerNames = winners.map((winner) => winner.name).join(' & ');
+                    const perfectNames = latestFinalCfbBoard.rows
+                      .filter((row) => latestFinalCfbBoard.gamesTotal > 0 && row.wins === latestFinalCfbBoard.gamesTotal && row.losses === 0)
+                      .map((row) => row.name);
+                    const paidCount = Object.values(latestFinalCfbPool.entries ?? {}).filter((entry) => entry.paid).length;
+                    const potAmount = paidCount * Number(latestFinalCfbPool.entryFee ?? 0);
+                    return (
+                      <section className={`week-winner-card college-result-card ${latestFinalCfbPool.noContest ? 'no-contest' : ''}`} aria-label={`College Pick-Em Week ${latestFinalCfbPool.week} result`}>
+                        <div className="college-result-mark" aria-hidden="true">CFB</div>
+                        <div>
+                          <span>COLLEGE PICK-EM · WEEK {latestFinalCfbPool.week} RESULT</span>
+                          <h2>{latestFinalCfbPool.noContest ? 'No contest this week' : `${winnerNames || 'Results'} ${winners.length === 1 ? 'won' : 'won'}`}</h2>
+                          <p>{latestFinalCfbPool.noContest
+                            ? 'Fewer than 3 paid players entered, so no college pot was awarded.'
+                            : `${winnerNames || 'The winner'} finished ${winners[0] ? `${winners[0].wins}-${winners[0].losses}${winners[0].pushes ? `-${winners[0].pushes}` : ''} ATS` : 'on top'} and ${latestFinalCfbPool.potCredited ? `was credited the $${potAmount.toLocaleString()} college pot.` : `has a $${potAmount.toLocaleString()} college pot awaiting commissioner credit.`}`}</p>
+                          {perfectNames.length > 0 && <p className="perfect-sheet-note">Perfect sheet: {perfectNames.join(' & ')} went {latestFinalCfbBoard.gamesTotal}-0 ATS. Jack has the receipt.</p>}
+                          <button className="text-button recap-show-btn" type="button" onClick={() => { setCfbWeek(latestFinalCfbPool.week); setView('cfb'); }}>See College results</button>
+                        </div>
+                      </section>
+                    );
+                  })()}
+
+                  {rivalryWatch.length > 0 && (
+                    <section className="panel compact-panel rivalry-watch-card" aria-labelledby="rivalry-watch-title">
+                      <div className="panel-heading">
+                        <div><span className="eyebrow dark">JACK'S RIVALRY WATCH</span><h2 id="rivalry-watch-title">Bragging rights are on the schedule</h2></div>
+                        <StatusPill state="online">Game week</StatusPill>
+                      </div>
+                      <p className="muted">Jack will post the final receipt after the game. Picks stay private.</p>
+                      <div className="rivalry-watch-list">
+                        {rivalryWatch.map(({ game, awayFans, homeFans }) => (
+                          <article className="rivalry-watch-row" key={game.id}>
+                            <div><strong>{game.away} at {game.home}</strong><small>{game.time}</small></div>
+                            <p><b>{awayFans.map((player) => player.name.split(' ')[0]).join(' & ')}</b> backs {game.away} · <b>{homeFans.map((player) => player.name.split(' ')[0]).join(' & ')}</b> backs {game.home}</p>
+                          </article>
+                        ))}
+                      </div>
+                      <button className="text-button recap-show-btn" type="button" onClick={() => setView('picks')}>Open this week's picks</button>
+                    </section>
+                  )}
 
                   {/* ── Champions: who's winning ── */}
                   <section className="champ-row" aria-label="League leaders">

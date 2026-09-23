@@ -197,6 +197,21 @@ main { padding: 24px 0 40px; }
 .rollover-result-mark { flex: 0 0 48px; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: #ffbe2d; color: #151108; font-size: 1.35rem; font-weight: 900; box-shadow: 0 0 20px rgba(255,190,45,.28); }
 .rollover-result-card > div:last-child { min-width: 0; }
 .rollover-result-card p { overflow-wrap: anywhere; }
+.college-result-card { align-items: flex-start; margin: 0 0 2px; border-color: rgba(0, 212, 255, .48); background: linear-gradient(135deg, rgba(0, 212, 255, .10), var(--card)); }
+.college-result-card.no-contest { border-color: rgba(255, 190, 45, .56); background: linear-gradient(135deg, rgba(255, 190, 45, .10), var(--card)); }
+.college-result-mark { flex: 0 0 48px; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: var(--blue); color: #061018; font-family: 'DM Mono'; font-size: .72rem; font-weight: 900; letter-spacing: .04em; box-shadow: 0 0 20px rgba(0,212,255,.25); }
+.college-result-card > div:last-child { min-width: 0; }
+.college-result-card p, .perfect-sheet-note { overflow-wrap: anywhere; }
+.perfect-sheet-note { color: var(--gold) !important; font-weight: 700; }
+.rivalry-watch-card { border-color: rgba(255, 215, 0, .34); background: linear-gradient(135deg, rgba(255, 215, 0, .07), var(--card)); }
+.rivalry-watch-list { display: grid; gap: 8px; margin-top: 14px; }
+.rivalry-watch-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(0, 1.2fr); gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--glass-border); border-radius: 10px; background: rgba(0,0,0,.14); }
+.rivalry-watch-row > div, .rivalry-watch-row p { min-width: 0; }
+.rivalry-watch-row strong, .rivalry-watch-row small { display: block; overflow-wrap: anywhere; }
+.rivalry-watch-row strong { color: #fff; font-size: .9rem; }
+.rivalry-watch-row small { margin-top: 3px; color: var(--muted); font-family: 'DM Mono'; font-size: .68rem; }
+.rivalry-watch-row p { margin: 0; color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.rivalry-watch-row p b { color: var(--gold); }
 .panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .panel h2 { margin: 0; font-size: 24px; letter-spacing: -.035em; color: #fff; }
 .panel .muted, .ai-copy { color: var(--muted); line-height: 1.7; font-size: 14px; white-space: pre-line; max-width: 650px; }
@@ -1578,6 +1593,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .admin-payment-shortcut { align-items: stretch; flex-direction: column; }
   .admin-payment-shortcut .button { width: 100%; }
   .week-winner-card, .jack-board-recap { align-items: flex-start; }
+  .college-result-mark { flex-basis: 42px; width: 42px; height: 42px; font-size: .64rem; }
+  .rivalry-watch-row { grid-template-columns: 1fr; gap: 7px; }
 }
 
 /* Tiebreaker — closest without going over */

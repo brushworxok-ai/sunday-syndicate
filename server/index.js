@@ -3172,6 +3172,26 @@ async function appendAutoPilotLog(league, entries) {
   await store.mergeLeagueSettings(leagueId, (s) => { s.autoPilotLog = [...stamped, ...(s.autoPilotLog ?? [])].slice(0, 30); });
 }
 
+async function publishCfbFinal(lid, pool, credit) {
+  const names = credit.winners.join(' & ');
+  const split = credit.winners.length > 1 ? ` ($${credit.share} each)` : '';
+  try {
+    await store.addChatMessage(lid, {
+      id: `chat-cfb-final-w${pool.week}`,
+      playerId: null,
+      name: 'Jack',
+      msg: `CFB Week ${pool.week} is official: ${names} take${credit.winners.length > 1 ? '' : 's'} the $${credit.pot} college pot${split}. The result is posted on the College board.`,
+      time: new Date().toISOString(),
+    });
+  } catch { /* chat is non-critical */ }
+  await saveNotification(lid, {
+    kind: 'cfb_result',
+    title: `College Week ${pool.week}: ${names} win${credit.winners.length > 1 ? '' : 's'}`,
+    body: `$${credit.pot} college pot credited${credit.winners.length > 1 ? ` ($${credit.share} each)` : ''}. Open the College board for the full ATS results.`,
+    metadata: { week: pool.week, pot: credit.pot, winnerNames: credit.winners },
+  });
+}
+
 /* Weekly College Pick-Em on autopilot: open each week's pool from the Top 25,
    lock at kickoff, then finalize and pay the pot — all hands-free. Gated by
    settings.cfbAuto (on unless the commissioner turns it off). */
@@ -3220,9 +3240,7 @@ async function autoManageCfb({ leagueId: lid, actions }) {
         const credit = await creditCfbPoolWinners(lid, pool, 'auto-pilot');
         if (credit.ok) {
           const names = credit.winners.join(' & ');
-          try {
-            await store.addChatMessage(lid, { id: `chat-cfb-final-w${week}`, playerId: null, name: 'Jack 🤖', msg: `🎓🏁 CFB Week ${week} is official: ${names} take${credit.winners.length > 1 ? '' : 's'} the $${credit.pot} college pot${credit.winners.length > 1 ? ` ($${credit.share} each)` : ''}. Dropped straight into the balance. 💰`, time: new Date().toISOString() });
-          } catch { /* chat is non-critical */ }
+          await publishCfbFinal(lid, pool, credit);
           actions.push(`Finalized CFB Week ${week} and credited $${credit.pot} to ${names}.`);
         } else if (credit.noContest) {
           actions.push(`Finalized CFB Week ${week} as no contest: ${credit.error}`);
@@ -3248,7 +3266,7 @@ async function sweepPriorCfbPools({ lid, currentWeek, actions }) {
           const credit = await creditCfbPoolWinners(lid, p, 'auto-pilot');
           if (credit.ok) {
             const names = credit.winners.join(' & ');
-            try { await store.addChatMessage(lid, { id: `chat-cfb-final-w${p.week}`, playerId: null, name: 'Jack 🤖', msg: `🎓🏁 CFB Week ${p.week} is official: ${names} take${credit.winners.length > 1 ? '' : 's'} the $${credit.pot} college pot${credit.winners.length > 1 ? ` ($${credit.share} each)` : ''}. 💰`, time: new Date().toISOString() }); } catch { /* chat non-critical */ }
+            await publishCfbFinal(lid, p, credit);
             actions.push(`Finalized CFB Week ${p.week} and credited $${credit.pot} to ${names}.`);
           } else if (credit.noContest) {
             actions.push(`Finalized CFB Week ${p.week} as no contest: ${credit.error}`);
