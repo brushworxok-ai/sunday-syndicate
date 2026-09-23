@@ -66,13 +66,13 @@ import { hasCurrentSmsConsent, SMS_CONSENT_VERSION } from '../src/smsCompliance.
 import { parseNflInjuries } from './nflInjuries.js';
 import { validatePushSubscription, savePlayerSubscription, removePlayerSubscription, deliverPush, subscriptionsFor } from './pushService.js';
 import { randomInt } from 'node:crypto';
-import { DEFAULT_JACK_MODEL, formatNflNews, jackGenerationTuning, questionNeedsNflNews } from './jackAssistant.js';
+import { formatNflNews, questionNeedsNflNews } from './jackAssistant.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = express();
 const port = Number(process.env.PORT) || 8787;
 const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const jackModel = process.env.JACK_GEMINI_MODEL || DEFAULT_JACK_MODEL;
+const grokModel = process.env.GROK_MODEL || 'grok-4.7';
 // Paid pick'em messaging is not eligible for carrier delivery. Keep this
 // explicit so an old hosting variable can never reactivate SMS accidentally.
 const SMS_DISABLED = true;
@@ -115,6 +115,8 @@ const store = new Proxy({}, {
 
 const { makeGeminiKeyResolver, invalidateGeminiKeyCache } = await import('./geminiKey.js');
 const getGeminiKey = makeGeminiKeyResolver(store);
+const { makeGrokKeyResolver, invalidateGrokKeyCache } = await import('./grokKey.js');
+const getGrokKey = makeGrokKeyResolver(store);
 
 const isProduction = process.env.NODE_ENV === 'production';
 const isDeployed = isProduction || process.env.VERCEL === '1' || Boolean(process.env.REPL_ID || process.env.REPLIT_DEPLOYMENT);
@@ -264,13 +266,16 @@ app.get('/api/health', asyncRoute(async (_request, response) => {
     });
   }
   const geminiKey = await getGeminiKey().catch(() => ({ value: null, source: 'none' }));
+  const grokKey = await getGrokKey().catch(() => ({ value: null, source: 'none' }));
   response.json({
     ok: true,
     database: store.kind,
     geminiConfigured: Boolean(geminiKey.value),
     geminiKeySource: geminiKey.source,
     model,
-    jackModel,
+    grokConfigured: Boolean(grokKey.value),
+    grokKeySource: grokKey.source,
+    jackModel: grokModel,
     smsProvider: 'disabled',
     smsConfigured: false,
     adminConfigured: Boolean(process.env.ADMIN_PASSWORD || !isProduction),
@@ -283,13 +288,12 @@ app.get('/api/health', asyncRoute(async (_request, response) => {
   });
 }));
 
-/* ── Admin config overrides — lets the commissioner fix a stale hosting env var
-   (e.g. GEMINI_API_KEY on Vercel) from inside the app. The value is validated
-   with a live Gemini call before saving and is never echoed back. ── */
+/* ── Admin config overrides — keys are validated server-side, saved outside
+   browser code, and never echoed back to anyone. ── */
 app.patch('/api/admin/config', auth.requireAdmin, asyncRoute(async (request, response) => {
   const key = String(request.body?.key ?? '');
   const value = typeof request.body?.value === 'string' ? request.body.value.trim() : '';
-  const ALLOWED = new Set(['GEMINI_API_KEY']);
+  const ALLOWED = new Set(['GEMINI_API_KEY', 'XAI_API_KEY']);
   if (!ALLOWED.has(key)) return response.status(422).json({ error: 'That config key cannot be set here.' });
   if (key === 'GEMINI_API_KEY') {
     if (!value) {
@@ -305,8 +309,29 @@ app.patch('/api/admin/config', auth.requireAdmin, asyncRoute(async (request, res
       return response.status(422).json({ error: `That key did not work against Gemini (${String(error.message ?? error).slice(0, 120)}). Nothing saved.` });
     }
   }
+  if (key === 'XAI_API_KEY') {
+    if (!value) {
+      await store.setConfig(key, '');
+      invalidateGrokKeyCache();
+      return response.json({ ok: true, key, cleared: true });
+    }
+    try {
+      const probe = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${value}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: grokModel, messages: [{ role: 'user', content: 'Reply with ok.' }], max_tokens: 8 }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!probe.ok) throw new Error(`HTTP ${probe.status}`);
+      const data = await probe.json();
+      if (!data?.choices?.[0]?.message?.content) throw new Error('empty response');
+    } catch (error) {
+      return response.status(422).json({ error: `That key did not work against Grok (${String(error.message ?? error).slice(0, 120)}). Nothing saved.` });
+    }
+  }
   await store.setConfig(key, value);
-  invalidateGeminiKeyCache();
+  if (key === 'GEMINI_API_KEY') invalidateGeminiKeyCache();
+  if (key === 'XAI_API_KEY') invalidateGrokKeyCache();
   try { await store.writeAudit('league-sunday-syndicate-demo', 'admin.config_updated', `${key} updated via admin config (validated live)`, 'admin', { key }); } catch { /* audit is best-effort */ }
   return response.json({ ok: true, key, validated: true });
 }));
@@ -1087,8 +1112,8 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
   const league = await store.getLeague(targetLeagueId);
   if (!league) return { error: 'League not found.', status: 404 };
 
-  const geminiKeyValue = (await getGeminiKey()).value;
-  const geminiConfigured = Boolean(geminiKeyValue);
+  const grokKeyValue = (await getGrokKey()).value;
+  const grokConfigured = Boolean(grokKeyValue);
   const currentWeek = getCurrentWeek();
   const weekGames = getGames(currentWeek);
   const weekLabel = SCHEDULE.find((w) => w.week === currentWeek)?.label ?? `Week ${currentWeek}`;
@@ -1257,7 +1282,7 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
     text: String(m.text ?? '').slice(0, 500),
   })).filter((m) => m.text) : [];
 
-  if (!geminiConfigured) {
+  if (!grokConfigured) {
     const fallback = buildLocalAssistantFallback(question, context);
     return { text: fallback, source: 'local_fallback' };
   }
@@ -1265,16 +1290,22 @@ async function askJackAssistant({ leagueId: targetLeagueId, question: rawQuestio
   try {
     const { buildPrompt } = await import('./prompts.js');
     const { systemInstruction, prompt } = buildPrompt('assistant', { question, history, context });
-    const client = new GoogleGenAI({ apiKey: geminiKeyValue });
-    const result = await client.models.generateContent({
-      model: jackModel,
-      contents: prompt,
-      // Low thinking plus a compact answer ceiling keeps interactive chat fast.
-      config: { systemInstruction, temperature: 0.5, maxOutputTokens: 256, ...jackGenerationTuning(jackModel) },
+    const response = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${grokKeyValue}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: grokModel,
+        messages: [{ role: 'system', content: systemInstruction }, { role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 256,
+      }),
+      signal: AbortSignal.timeout(25_000),
     });
-    const text = result?.text?.trim();
+    if (!response.ok) throw new Error(`Grok request failed (${response.status})`);
+    const result = await response.json();
+    const text = result?.choices?.[0]?.message?.content?.trim();
     if (!text) throw new Error('Empty response from model.');
-    return { text, source: 'gemini', model: jackModel };
+    return { text, source: 'grok', model: grokModel };
   } catch (error) {
     console.error('Assistant error:', error.message);
     const fallback = buildLocalAssistantFallback(question, context);
@@ -1312,7 +1343,7 @@ function buildLocalAssistantFallback(question, context) {
     const top = memories.slice(0, 5).map((m) => `${m.name}: ${m.winPercentage}% (${m.correct}/${m.totalPicks}), streak ${m.currentStreak?.type} ${m.currentStreak?.length}`).join('\n');
     return `Season stats so far:\n${top}`;
   }
-  return "What's good — I'm Jack, your league's AI commissioner. I got standings, rules, schedules, season stats, all of it. The Gemini API ain't hooked up yet so I'm running on local smarts. Drop GEMINI_API_KEY in the env and watch me really go to work.";
+  return "What's good — I'm Jack, your league's AI commissioner. I got standings, rules, schedules, season stats, all of it. My Grok connection isn't set yet, so I'm running on local smarts. Commissioner can connect Grok in the app settings to unlock full chat.";
 }
 
 /* ── Jack Settings (Admin) ── */

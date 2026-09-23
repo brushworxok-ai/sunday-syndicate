@@ -135,7 +135,8 @@ function App() {
   const [playerSession, setPlayerSession] = useState({ authenticated: false, playerId: null, name: null });
   const [playerLogin, setPlayerLogin] = useState({ playerId: 'player-marcus', pin: '' });
   const [toast, setToast] = useState('');
-  const [aiStatus, setAiStatus] = useState({ checked: false, configured: false, model: '', jackModel: '', database: '', smsProvider: 'demo', twilioConfigured: false });
+  const [aiStatus, setAiStatus] = useState({ checked: false, configured: false, grokConfigured: false, model: '', jackModel: '', database: '', smsProvider: 'demo', twilioConfigured: false });
+  const [grokApiKeyDraft, setGrokApiKeyDraft] = useState('');
   const [aiResult, setAiResult] = useState({ recap: DEMO_LEAGUE.recap.finalText, picks: '', trashTalk: '' });
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
@@ -440,8 +441,8 @@ function App() {
 
   useEffect(() => {
     apiRequest('/api/health')
-      .then((data) => setAiStatus({ checked: true, configured: data.geminiConfigured, model: data.model, jackModel: data.jackModel || data.model, database: data.database, smsProvider: data.smsProvider, twilioConfigured: data.twilioConfigured }))
-      .catch(() => setAiStatus({ checked: true, configured: false, model: '', jackModel: '', database: '', smsProvider: 'offline', twilioConfigured: false }));
+      .then((data) => setAiStatus({ checked: true, configured: data.geminiConfigured, grokConfigured: data.grokConfigured, model: data.model, jackModel: data.jackModel || '', database: data.database, smsProvider: data.smsProvider, twilioConfigured: data.twilioConfigured }))
+      .catch(() => setAiStatus({ checked: true, configured: false, grokConfigured: false, model: '', jackModel: '', database: '', smsProvider: 'offline', twilioConfigured: false }));
     apiRequest('/api/auth/status').then((status) => setIsComm(status.authenticated)).catch(() => {});
     apiRequest('/api/auth/player/status').then(setPlayerSession).catch(() => {});
     loadLeague();
@@ -707,6 +708,21 @@ function App() {
     setView('admin');
     notify('Sign in as commissioner to complete that action.');
     return false;
+  };
+
+  const saveGrokApiKey = async (event) => {
+    event.preventDefault();
+    const value = grokApiKeyDraft.trim();
+    if (!value) { notify('Paste the xAI API key first.'); return; }
+    setServerBusy('grok-key');
+    try {
+      await apiRequest('/api/admin/config', { method: 'PATCH', body: JSON.stringify({ key: 'XAI_API_KEY', value }) });
+      setGrokApiKeyDraft('');
+      const status = await apiRequest('/api/health');
+      setAiStatus((current) => ({ ...current, checked: true, configured: status.geminiConfigured, grokConfigured: status.grokConfigured, model: status.model, jackModel: status.jackModel || '', database: status.database, smsProvider: status.smsProvider, twilioConfigured: status.twilioConfigured }));
+      notify('Grok is connected. Jack now uses Grok for player chat.');
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
   };
 
   const loginAdmin = async (event) => {
@@ -3656,14 +3672,14 @@ function App() {
         )}
 
         {view === 'ai' && (
-          <StandardPage eyebrow="POWERED BY GEMINI" title="Commissioner's room" subtitle="AI tools grounded in the league data already on this page. Nothing here fetches live sports news or odds.">
+          <StandardPage eyebrow="POWERED BY GEMINI" title="Commissioner's room" subtitle="Gemini runs these commissioner tools from the league data already on this page. Jack's player chat uses Grok separately.">
             <div className="ai-grid">
               <AiCard number="01" title="League recap" description="Summarize the current pot, entries, standings, and completed games into a shareable update." button={aiResult.recap ? 'Rewrite recap' : 'Write recap'} loading={aiLoading === 'recap'} disabled={!weekSheets.length} onClick={getRecap} result={aiResult.recap} />
               <AiCard number="02" title="Picks review" description="Jack checks your current picks for blanks, patterns, and tiebreaker readiness—without pretending to know the future." button={aiResult.picks ? 'Review again' : 'Review my picks'} loading={aiLoading === 'picks'} onClick={analyzePicks} result={aiResult.picks} />
               <AiCard number="03" title="Trash-talk assist" description="Draft friendly banter from the actual standings, then edit it before anything is posted." button="Open chat" onClick={() => setView('chat')} />
               <AiCard number="04" title="League assistant" description="Ask Jack about standings, rules, schedules, your entry credits, or where to find something in the app." button="Ask Jack" onClick={() => setAssistantOpen(true)} />
             </div>
-            <div className="ai-privacy"><span>✦</span><div><strong>{aiStatus.configured ? `Jack connected to ${aiStatus.jackModel || aiStatus.model}` : 'Jack is in fallback mode'}</strong><p>{aiStatus.configured ? 'Prompts are assembled on the server from league context. The API key never ships to the browser.' : 'Jack is running in fallback mode. Add a Gemini API key in the server settings to unlock his full commentary.'}</p></div></div>
+            <div className="ai-privacy"><span>✦</span><div><strong>{aiStatus.grokConfigured ? `Jack connected to ${aiStatus.jackModel || 'Grok'}` : 'Jack is in fallback mode'}</strong><p>{aiStatus.grokConfigured ? 'Jack receives the same server-built league context—standings, rules, results, payments, College pools, and rivalries. API keys never ship to the browser.' : 'Commissioner tools can use Gemini, but Jack needs a Grok key in Commissioner settings for full player chat.'}</p></div></div>
             {aiError && <p className="error-text standalone">{aiError}</p>}
           </StandardPage>
         )}
@@ -4057,9 +4073,18 @@ function App() {
               );
             })()}
             <section className="admin-command-grid">
-              <article><span className="eyebrow dark">PROVIDERS</span><h2>System readiness</h2><dl><div><dt>Database</dt><dd>{aiStatus.database === 'postgres' ? 'Neon Postgres · durable' : aiStatus.database === 'sqlite' ? 'SQLite · local' : 'Unavailable'}</dd></div><div><dt>Jack</dt><dd>{aiStatus.configured ? (aiStatus.jackModel || aiStatus.model) : 'Fallback mode'}</dd></div><div><dt>Alerts</dt><dd>{aiStatus.pushConfigured ? 'Browser push + in-app' : 'In-app notifications'}</dd></div></dl></article>
+              <article><span className="eyebrow dark">PROVIDERS</span><h2>System readiness</h2><dl><div><dt>Database</dt><dd>{aiStatus.database === 'postgres' ? 'Neon Postgres · durable' : aiStatus.database === 'sqlite' ? 'SQLite · local' : 'Unavailable'}</dd></div><div><dt>Jack chat</dt><dd>{aiStatus.grokConfigured ? (aiStatus.jackModel || 'Grok') : 'Fallback mode'}</dd></div><div><dt>App tools</dt><dd>{aiStatus.configured ? (aiStatus.model || 'Gemini') : 'Gemini not connected'}</dd></div><div><dt>Alerts</dt><dd>{aiStatus.pushConfigured ? 'Browser push + in-app' : 'In-app notifications'}</dd></div></dl></article>
               <article><span className="eyebrow dark">POLICY</span><h2>Send guardrails</h2><dl><div><dt>Recaps</dt><dd>Approval required</dd></div><div><dt>Reminders</dt><dd>Automatic · app alerts</dd></div><div><dt>Tone cap</dt><dd>{proofLeague.settings.maximumTone}</dd></div></dl></article>
               <article><span className="eyebrow dark">CURRENT</span><h2>Latest delivery</h2><dl><div><dt>Status</dt><dd>{proofLeague.latestBroadcast?.status?.replaceAll('_', ' ') ?? 'Not sent'}</dd></div><div><dt>Failures</dt><dd>{proofLeague.latestBroadcast?.deliveries?.filter((item) => item.status === 'failed').length ?? 0}</dd></div><div><dt>Suppressed</dt><dd>{proofLeague.latestBroadcast?.deliveries?.filter((item) => item.status === 'suppressed').length ?? 0}</dd></div></dl></article>
+            </section>
+            <section className="panel compact-panel provider-key-card">
+              <div className="panel-heading"><div><span className="eyebrow dark">JACK'S AI</span><h2>Connect Grok to Jack</h2></div><StatusPill state={aiStatus.grokConfigured ? 'pass' : 'warn'}>{aiStatus.grokConfigured ? 'Connected' : 'Needs key'}</StatusPill></div>
+              <p className="muted">Jack uses Grok only for player chat. Gemini remains the separate provider for commissioner tools, recaps, and app automation. The xAI key is validated on the server, never shown again, and never sent to players.</p>
+              <form className="provider-key-form" onSubmit={saveGrokApiKey}>
+                <label htmlFor="grok-api-key">xAI API key<input id="grok-api-key" type="password" value={grokApiKeyDraft} onChange={(event) => setGrokApiKeyDraft(event.target.value)} placeholder="xai-…" autoComplete="off" spellCheck="false" /></label>
+                <button className="button button-primary" disabled={serverBusy === 'grok-key'}>{serverBusy === 'grok-key' ? 'Checking…' : aiStatus.grokConfigured ? 'Replace Grok key' : 'Connect Grok'}</button>
+              </form>
+              <p className="provider-key-help">Create a key at console.x.ai → API Keys. If a key is ever exposed, disable it in xAI and replace it here.</p>
             </section>
             <section className="recap-workbench">
               <div className="panel-heading"><div><span className="eyebrow dark">WEEKLY WORKFLOW</span><h2>Recap review & send</h2></div><StatusPill state={proofLeague.latestRecap?.adminApproval?.status === 'approved' ? 'pass' : 'warn'}>{proofLeague.latestRecap?.adminApproval?.status ?? 'no draft'}</StatusPill></div>
