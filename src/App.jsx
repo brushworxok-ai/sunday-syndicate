@@ -582,6 +582,11 @@ function App() {
     ? serverLeague.settings.weeklyRollover
     : null;
   const rolloverPot = Number(activeRollover?.amount ?? serverLeague?.settings?.rollover ?? manualRolloverPot ?? 0);
+  const payoutBreakdownFor = (weeklyAmount, winnerNames = []) => {
+    const winnerIds = winnerNames.map((name) => (serverLeague?.players ?? []).find((player) => player.name === name)?.id).filter(Boolean);
+    const carryover = activeRollover && winnerIds.some((id) => activeRollover.eligiblePlayerIds?.includes(id)) ? rolloverPot : 0;
+    return { weekly: Number(weeklyAmount) || 0, carryover, total: (Number(weeklyAmount) || 0) + carryover };
+  };
   // A carryover is reserved for a prior all-bust tie, so it is intentionally
   // not included in the current open weekly pot seen by every player.
   const totalPot = pot;
@@ -648,7 +653,7 @@ function App() {
       const winners = payout && !complete
         ? scored.filter((s) => (payout.winnerPlayerIds ?? []).includes(s.playerId) || (payout.winnerNames ?? []).includes(s.name))
         : scoredWinners;
-      weekSummaries.push({ week, entries: ws.length, pot: weekPot, complete: complete || Boolean(payout), allBustTie, clinchedEarly: Boolean(payout) && !complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
+      weekSummaries.push({ week, entries: ws.length, pot: weekPot, awarded: Number(payout?.amount ?? weekPot), complete: complete || Boolean(payout), allBustTie, clinchedEarly: Boolean(payout) && !complete, winners: winners.map((w) => w.name), topScore: top?.score ?? 0, paid: Boolean(payout), payout });
       for (const s of scored) {
         const key = s.playerId ?? s.name;
         if (!players.has(key)) players.set(key, { key, name: s.name, weeksPlayed: 0, totalCorrect: 0, totalPicks: 0, weeklyWins: 0, earnings: 0 });
@@ -1706,10 +1711,10 @@ function App() {
     setServerBusy(`payout-${weekSummary.week}`);
     try {
       const winners = weekSummary.winners.map((name) => (serverLeague?.players ?? []).find((p) => p.name === name)).filter(Boolean);
-      const methods = [...new Set(winners.map((p) => preferredHandle(p)?.key).filter(Boolean))];
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/payouts`, { method: 'POST', body: JSON.stringify({ week: weekSummary.week, amount: weekSummary.pot, winnerNames: weekSummary.winners, winnerPlayerIds: winners.map((p) => p.id), method: methods.join('+') || 'cashapp_venmo' }) });
+      const breakdown = payoutBreakdownFor(weekSummary.pot, weekSummary.winners);
+      await apiRequest(`/api/leagues/${LEAGUE_ID}/payouts`, { method: 'POST', body: JSON.stringify({ week: weekSummary.week, amount: breakdown.total, winnerNames: weekSummary.winners, winnerPlayerIds: winners.map((p) => p.id), method: 'external_manual', note: breakdown.carryover ? `Includes $${breakdown.carryover} carryover` : '' }) });
       await loadLeague();
-      notify(`Week ${weekSummary.week} pot marked paid to ${weekSummary.winners.join(' & ')}.`);
+      notify(`Recorded $${breakdown.total} paid to ${weekSummary.winners.join(' & ')}${breakdown.carryover ? ` ($${breakdown.weekly} weekly + $${breakdown.carryover} rollover)` : ''}.`);
     } catch (error) { notify(error.message); }
     finally { setServerBusy(''); }
   };
@@ -2407,7 +2412,7 @@ function App() {
                       {lastWon ? (
                         <div className="champ-body">
                           <div className="champ-avatars">{lastWon.winners.slice(0, 3).map((name) => <PlayerAvatar key={name} player={byName(name) ?? { name }} size={40} />)}</div>
-                          <div><strong>{lastWon.winners.map((n) => n.split(' ')[0]).join(' & ')}</strong><small>Week {lastWon.week} · {lastWon.topScore}/{currentGames.length || 16} correct · ${lastWon.pot.toLocaleString()}</small></div>
+                          <div><strong>{lastWon.winners.map((n) => n.split(' ')[0]).join(' & ')}</strong><small>Week {lastWon.week} · {lastWon.topScore}/{getGames(lastWon.week).length || 16} correct · ${Number(lastWon.awarded ?? lastWon.pot).toLocaleString()} awarded</small></div>
                         </div>
                       ) : (
                         <div className="champ-body"><div className="champ-empty">?</div><div><strong>Up for grabs</strong><small>First pot decided after {weekLabel}</small></div></div>
@@ -2428,7 +2433,7 @@ function App() {
 
                   {lastWon && (() => {
                     const recap = (proofLeague.recaps ?? []).find((item) => item.week === lastWon.week && item.adminApproval?.status === 'approved');
-                    const recapText = recap?.finalText || `Jack's call: ${lastWon.winners.join(' & ')} took Week ${lastWon.week} with ${lastWon.topScore} correct and claimed the $${lastWon.pot.toLocaleString()} pot.`;
+                    const recapText = recap?.finalText || `Jack's call: ${lastWon.winners.join(' & ')} took Week ${lastWon.week} with ${lastWon.topScore} correct and claimed $${Number(lastWon.awarded ?? lastWon.pot).toLocaleString()}.`;
                     return (
                       <section className="jack-board-recap" aria-labelledby="jack-board-recap-title">
                         <div className="jack-board-recap-mark" aria-hidden="true">J</div>
@@ -2785,7 +2790,7 @@ function App() {
                       {w.paid
                         ? <StatusPill state="pass">Paid {w.payout?.paidAt ? new Date(w.payout.paidAt).toLocaleDateString() : ''}</StatusPill>
                         : w.complete && w.winners.length
-                          ? (isComm ? <button className="text-button" type="button" disabled={serverBusy === `payout-${w.week}`} onClick={() => markWeekPaid(w)}>{serverBusy === `payout-${w.week}` ? 'Saving…' : 'Mark paid ↗'}</button> : <StatusPill state="warn">Pending</StatusPill>)
+                          ? (isComm ? <button className="text-button" type="button" disabled={serverBusy === `payout-${w.week}`} onClick={() => markWeekPaid(w)}>{serverBusy === `payout-${w.week}` ? 'Saving…' : `Record $${payoutBreakdownFor(w.pot, w.winners).total} paid ↗`}</button> : <StatusPill state="warn">Pending</StatusPill>)
                           : <StatusPill state="neutral">Open</StatusPill>}
                     </article>
                   ))}
@@ -3380,13 +3385,14 @@ function App() {
                   {weekTiebreaker.total != null ? ` Final total: ${weekTiebreaker.total}.` : " Awaiting that game's final score."}
                 </p>
               )}
-              {isComm && clinchedWeeklyWinner && !currentWeekPayout && (
-                <section className="panel compact-panel payout-ready-card">
+              {isComm && clinchedWeeklyWinner && !currentWeekPayout && (() => {
+                const payout = payoutBreakdownFor(currentWeekPot, [clinchedWeeklyWinner.name]);
+                return <section className="panel compact-panel payout-ready-card">
                   <div className="panel-heading"><div><span className="eyebrow dark">EARLY PAYOUT READY</span><h2>{clinchedWeeklyWinner.name} has clinched Week {selectedWeek}</h2></div><StatusPill state="pass">Math confirmed</StatusPill></div>
-                  <p className="muted">No remaining game or tiebreaker can change this result. You can pay the ${currentWeekPot} weekly pot now and record it here.</p>
-                  <button className="button button-primary" type="button" disabled={serverBusy === `payout-${selectedWeek}`} onClick={() => markWeekPaid({ week: selectedWeek, pot: currentWeekPot, winners: [clinchedWeeklyWinner.name] })}>{serverBusy === `payout-${selectedWeek}` ? 'Saving…' : `Mark $${currentWeekPot} paid`}</button>
-                </section>
-              )}
+                  <p className="muted">No remaining game or tiebreaker can change this result. Record <strong>${payout.total}</strong>{payout.carryover ? ` total — $${payout.weekly} this week plus $${payout.carryover} carryover` : ' for the weekly pot'} as paid outside the app.</p>
+                  <button className="button button-primary" type="button" disabled={serverBusy === `payout-${selectedWeek}`} onClick={() => markWeekPaid({ week: selectedWeek, pot: currentWeekPot, winners: [clinchedWeeklyWinner.name] })}>{serverBusy === `payout-${selectedWeek}` ? 'Saving…' : `Record $${payout.total} paid`}</button>
+                </section>;
+              })()}
               {currentWeekPayout && <p className="success-note">✓ Week {selectedWeek} payout recorded for {currentWeekPayout.winnerNames?.join(' & ') || 'the winner'}.</p>}
               {leaderboard.some((entry) => !entry.picksHidden) && <p className="board-hint">👆 Tap anybody to see every pick they made.</p>}
               <div className="table-head"><span>Rank</span><span>Player</span><span>Tiebreaker</span><span>Correct</span></div>
