@@ -16,6 +16,8 @@
  * every remaining scenario.
  */
 
+import { allTiedLeadersBusted, getTiebreakerActual, tiebreakerRank } from './tiebreaker.js';
+
 /** Remaining games where `me` can gain a point that `rival` does not. */
 function swingGames(remaining, me, rival) {
   return remaining.filter((game) => {
@@ -46,6 +48,27 @@ export function buildWinningPaths(league, weekContext) {
   if (!scored.length) return { week, paths: [], completedCount, totalGames };
 
   const bestCurrentScore = Math.max(...scored.map((entry) => entry.score));
+  const finalLeaders = scored.filter((entry) => entry.score === bestCurrentScore);
+  // Once every game is final, equal pick scores are not a shared win. The
+  // league's "closest without going over" tiebreaker decides it. This used to
+  // leave every tied leader as "alive", which correctly showed the standings
+  // but prevented the commissioner from recording a perfectly valid payout.
+  const finalTiebreakerTotal = remaining.length === 0
+    ? getTiebreakerActual(games, results).total
+    : null;
+  const bestFinalTiebreakerRank = finalTiebreakerTotal == null
+    ? null
+    : Math.min(...finalLeaders.map((entry) => tiebreakerRank(entry.tiebreaker, finalTiebreakerTotal)));
+  const finalWinnersBeforeBustCheck = remaining.length === 0
+    ? finalTiebreakerTotal == null
+      ? (finalLeaders.length === 1 ? finalLeaders : [])
+      : finalLeaders.filter((entry) => tiebreakerRank(entry.tiebreaker, finalTiebreakerTotal) === bestFinalTiebreakerRank)
+    : [];
+  // When every tied leader went over, this is a true all-bust rollover—not a
+  // win for the player who missed by the least after busting.
+  const finalWinners = finalTiebreakerTotal != null && allTiedLeadersBusted(finalLeaders, finalTiebreakerTotal)
+    ? []
+    : finalWinnersBeforeBustCheck;
 
   const paths = scored.map((entry) => {
     const rivals = scored.filter((other) => other.entryId !== entry.entryId);
@@ -60,9 +83,10 @@ export function buildWinningPaths(league, weekContext) {
 
     const blockers = matchups.filter((m) => !m.canCatch)
       .sort((a, b) => (b.deficit - b.swing) - (a.deficit - a.swing));
-    const eliminated = blockers.length > 0;
+    const eliminated = blockers.length > 0
+      || (remaining.length === 0 && finalWinners.length === 1 && finalWinners[0].entryId !== entry.entryId);
     const clinched = remaining.length === 0
-      ? entry.score === bestCurrentScore && scored.filter((s) => s.score === bestCurrentScore).length === 1
+      ? finalWinners.length === 1 && finalWinners[0].entryId === entry.entryId
       : matchups.every((m) => m.safeFrom);
 
     /* Can I only draw level with my toughest live rival? Then the tiebreaker
@@ -101,7 +125,9 @@ function explain({ entry, blockers, tightest, clinched, eliminated, onTiebreaker
   const games = (n) => `${n} game${n === 1 ? '' : 's'}`;
 
   if (!remaining.length) {
-    return eliminated ? `Week's over — ${blockers[0].rival.name} finished ahead.` : 'Week complete.';
+    return eliminated
+      ? (blockers[0] ? `Week's over — ${blockers[0].rival.name} finished ahead.` : 'Week complete — the tiebreaker settled it.')
+      : 'Week complete.';
   }
 
   if (clinched) {

@@ -72,6 +72,22 @@ test('all-final week clinches the top score and eliminates trailing entries', ()
   assert.equal(snapshot.completedCount, 4);
 });
 
+test('an all-final tied score is settled by the closest non-busting tiebreaker', () => {
+  const tiedFinal = {
+    sheets: [
+      { id: 's-jack', playerId: 'jack', name: 'Jack', week: 1, tiebreaker: 31, picks: { g1: 'A', g2: 'D', g3: 'E', g4: 'G' } },
+      { id: 's-big', playerId: 'big', name: 'Big', week: 1, tiebreaker: 44, picks: { g1: 'A', g2: 'D', g3: 'E', g4: 'G' } },
+    ],
+    results: {
+      g1: { winner: 'A' }, g2: { winner: 'D' }, g3: { winner: 'E' },
+      g4: { winner: 'G', awayScore: 14, homeScore: 20 },
+    },
+  };
+  const { paths } = buildWinningPaths(tiedFinal, { week: 1, games });
+  assert.equal(paths.find((path) => path.playerId === 'jack').status, 'clinched');
+  assert.equal(paths.find((path) => path.playerId === 'big').status, 'eliminated');
+});
+
 test('elimination math respects maximum possible score mid-week', () => {
   const midLeague = {
     ...league,
