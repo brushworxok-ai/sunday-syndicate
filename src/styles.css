@@ -2056,12 +2056,20 @@ main section, .page-grid, .standard-page, .hero, .hero-actions,
 .home-head-copy > p { color: rgba(255,255,255,.6); line-height: 1.55; font-size: 15px; margin: 12px 0 18px; }
 .home-head .hero-scorecard { justify-self: end; }
 .home-head .hero-scorecard > strong { font-size: 46px; margin: 4px 0 10px; }
+.jack-home-mic { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid rgba(57,255,20,.38); border-radius: 14px; background: linear-gradient(100deg, rgba(57,255,20,.11), rgba(0,212,255,.05), var(--card)); }
+.jack-home-mic .jack-avatar { margin: 0; flex: 0 0 auto; }
+.jack-home-mic > div { min-width: 0; }
+.jack-home-mic h2 { margin: 3px 0; color: var(--ink); font-size: clamp(1rem, 3vw, 1.18rem); overflow-wrap: anywhere; }
+.jack-home-mic p { margin: 0; color: var(--muted); font-size: .85rem; line-height: 1.45; overflow-wrap: anywhere; }
+.jack-home-mic .text-button { min-height: 44px; white-space: nowrap; }
 @media (max-width: 760px) {
   .home-head { grid-template-columns: 1fr; gap: 16px; }
   .home-head .hero-scorecard { justify-self: stretch; width: 100%; padding: 16px 18px; display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 14px; }
   .home-head .hero-scorecard .scorecard-label { grid-column: 1 / -1; }
   .home-head .hero-scorecard > strong { font-size: 38px; margin: 0; }
   .home-head .hero-scorecard > div { flex-direction: column; gap: 2px; align-items: flex-end; text-align: right; }
+  .jack-home-mic { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .jack-home-mic .text-button { grid-column: 2; justify-self: start; margin-top: 2px; }
 }
 
 .champ-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

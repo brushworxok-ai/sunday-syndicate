@@ -2318,6 +2318,32 @@ function App() {
               const leader = seasonStats.table[0];
               const byName = (name) => crew.find((p) => p.name === name);
               const openWeek = !weekLocked;
+              const jackLandingComment = (() => {
+                if (activeRollover) return {
+                  headline: 'That carryover got everybody watching.',
+                  text: `$${rolloverPot.toLocaleString()} is sitting there for an eligible Week ${activeRollover.sourceWeek} player. Don’t get cute with the tiebreaker this time—Jack is keeping every receipt.`,
+                };
+                if (!weekSheets.length) return {
+                  headline: `${weekLabel} is way too quiet.`,
+                  text: `Nobody has put a sheet in yet. Somebody set the tone before the crew starts acting like they forgot how this works.`,
+                };
+                if (openWeek) return {
+                  headline: `${weekSheets.length} in. Who’s really about it?`,
+                  text: `Picks are still open, but the clock is not your cousin. Lock your card, set that tiebreaker, then come talk your talk.`,
+                };
+                if (completedGames > 0 && completedGames < currentGames.length) return {
+                  headline: 'The board is moving now.',
+                  text: `${completedGames} game${completedGames === 1 ? '' : 's'} final and everybody suddenly has explanations. Keep your eye on the Board—Jack sees who is sweating.`,
+                };
+                if (lastWon) return {
+                  headline: `${lastWon.winners[0]?.split(' ')[0] || 'The champ'} still has the floor.`,
+                  text: `Week ${lastWon.week} is in the books. Respect the winner, then make sure your own sheet gives Jack something better to talk about.`,
+                };
+                return {
+                  headline: 'Jack has the room.',
+                  text: 'Picks, standings, rivalries, and receipts are all on the board. Pull up and ask what you need.',
+                };
+              })();
               return (
                 <>
                   <section className="home-head">
@@ -2338,6 +2364,16 @@ function App() {
                       <div><span>{weekSheets.length} {weekSheets.length === 1 ? 'entry' : 'entries'}</span><span>{completedGames}/{currentGames.length} final</span></div>
                       {rolloverPot > 0 && <p>${Number(rolloverPot).toLocaleString()} carryover is reserved separately</p>}
                     </div>
+                  </section>
+
+                  <section className="jack-home-mic" aria-labelledby="jack-home-mic-title">
+                    <JackAvatar state={gamesInProgress ? 'live' : 'idle'} settings={serverLeague?.settings} compact caption={gamesInProgress ? 'Live on the board' : 'On the mic'} />
+                    <div>
+                      <span className="eyebrow dark">JACK’S MIC · {weekLabel.toUpperCase()}</span>
+                      <h2 id="jack-home-mic-title">{jackLandingComment.headline}</h2>
+                      <p>{jackLandingComment.text}</p>
+                    </div>
+                    <button className="text-button" type="button" onClick={() => { setAssistantOpen(true); setAssistantInput(`What’s the real story for ${weekLabel}?`); }}>Talk to Jack</button>
                   </section>
 
                   {activeRollover && (
