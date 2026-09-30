@@ -128,6 +128,7 @@ function App() {
   const [serverBusy, setServerBusy] = useState('');
   const [serverError, setServerError] = useState('');
   const [chatInput, setChatInput] = useState('');
+  const [chatSending, setChatSending] = useState(false);
   const [chatName, setChatName] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
   const [isComm, setIsComm] = useState(false);
@@ -1233,13 +1234,16 @@ function App() {
 
   const sendChat = async () => {
     if (!playerSession.authenticated) { setWelcomeMode('signin'); setShowWelcome(true); return notify('Sign in to post in the chat.'); }
-    if (!chatInput.trim()) return;
+    if (!chatInput.trim() || chatSending) return;
+    setChatSending(true);
     try {
-      await apiRequest(`/api/leagues/${LEAGUE_ID}/chat`, { method: 'POST', body: JSON.stringify({ name: chatName.trim(), msg: chatInput.trim() }) });
+      const data = await apiRequest(`/api/leagues/${LEAGUE_ID}/chat`, { method: 'POST', body: JSON.stringify({ name: chatName.trim(), msg: chatInput.trim() }) });
       await loadLeague();
       setChatInput('');
       setAiResult((current) => ({ ...current, trashTalk: '' }));
+      if (data.jackReply) notify('Jack jumped in.');
     } catch (error) { notify(error.message); }
+    finally { setChatSending(false); }
   };
 
   const askGemini = async (action, payload, resultKey) => {
@@ -3694,6 +3698,11 @@ function App() {
           <StandardPage eyebrow="KEEP IT FRIENDLY" title="League chat" subtitle="The place for victory laps, questionable predictions, and receipts.">
             <div className="chat-layout">
               <section className="chat-panel">
+                <div className="jack-chat-presence" role="status">
+                  <JackAvatar state={chatSending ? 'thinking' : 'live'} settings={serverLeague?.settings} compact caption={chatSending ? 'Reading your message' : 'In the chat'} />
+                  <div><strong>Jack is watching the room</strong><p>Say “Jack” or ask a question and he’ll jump in with the real standings, rules, or a little pressure.</p></div>
+                  <button className="text-button" type="button" onClick={() => setAssistantOpen(true)}>Ask privately</button>
+                </div>
                 <div className="messages">
                   {chatMsgs.length ? chatMsgs.map((message) => {
                     const isJack = message.playerId == null;
@@ -3705,7 +3714,7 @@ function App() {
                 {playerSession.authenticated ? (
                   <div className="composer">
                     {showEmoji && <div className="emoji-row">{EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => setChatInput((current) => current + emoji)}>{emoji}</button>)}</div>}
-                    <div className="message-input"><button type="button" onClick={() => setShowEmoji((current) => !current)} aria-label="Emoji">☺</button><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && sendChat()} placeholder="Write something you can defend later…" maxLength="400" /><button className="send" type="button" onClick={sendChat}>Send ↑</button></div>
+                    <div className="message-input"><button type="button" onClick={() => setShowEmoji((current) => !current)} aria-label="Emoji">☺</button><input value={chatInput} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && sendChat()} placeholder="Say “Jack” or write something you can defend later…" maxLength="400" disabled={chatSending} /><button className="send" type="button" onClick={sendChat} disabled={!chatInput.trim() || chatSending}>{chatSending ? 'Jack…' : 'Send ↑'}</button></div>
                   </div>
                 ) : (
                   <div className="composer composer-signed-out">

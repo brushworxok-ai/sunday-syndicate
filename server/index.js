@@ -901,7 +901,33 @@ app.post('/api/leagues/:leagueId/chat', playerAuth.requirePlayer, asyncRoute(asy
   if (!name || !msg) return response.status(422).json({ error: 'Message is required.' });
   const message = { id: `chat-${randomUUID()}`, playerId: request.player.id, name, msg, time: new Date().toISOString() };
   await store.addChatMessage(request.params.leagueId, message);
-  return response.status(201).json(message);
+
+  // Jack is a participant in the league room, not just a button hidden in a
+  // separate drawer. He answers direct calls and questions, while a short
+  // room-wide cooldown prevents a busy chat from turning into an AI monologue.
+  const asksJack = /(?:^|\s)@?jack(?:[!?.,\s]|$)|\?/.test(msg.toLowerCase());
+  let jackReply = null;
+  if (asksJack) {
+    const league = await store.getLeague(request.params.leagueId);
+    const jackEnabled = league?.settings?.jack?.enabled !== false;
+    const lastJackMessage = [...(league?.chat ?? [])].reverse().find((entry) => entry.playerId == null && entry.name === 'Jack');
+    const lastJackAt = lastJackMessage ? Date.parse(lastJackMessage.time) : 0;
+    const roomCoolingDown = Number.isFinite(lastJackAt) && Date.now() - lastJackAt < 90_000;
+    if (jackEnabled && !roomCoolingDown) {
+      const history = (league.chat ?? []).slice(-6).map((entry) => ({ role: entry.playerId == null ? 'assistant' : 'user', text: entry.msg }));
+      const result = await askJackAssistant({
+        leagueId: request.params.leagueId,
+        playerId: request.player.id,
+        history,
+        question: `Public league-chat reply to ${name}: “${msg}”. Reply directly in Jack's voice in no more than two short sentences. Use only league facts. Do not mention any player's private credit, payment status, phone, or account information.`,
+      });
+      if (result.text) {
+        jackReply = { id: `chat-jack-${randomUUID()}`, playerId: null, name: 'Jack', msg: String(result.text).slice(0, 400), time: new Date().toISOString() };
+        await store.addChatMessage(request.params.leagueId, jackReply);
+      }
+    }
+  }
+  return response.status(201).json({ ...message, jackReply });
 }));
 
 app.post('/api/webhooks/twilio/status', asyncRoute(async (request, response) => {
