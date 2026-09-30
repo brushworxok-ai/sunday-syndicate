@@ -212,6 +212,8 @@ main { padding: 24px 0 40px; }
 .rivalry-watch-row small { margin-top: 3px; color: var(--muted); font-family: 'DM Mono'; font-size: .68rem; }
 .rivalry-watch-row p { margin: 0; color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
 .rivalry-watch-row p b { color: var(--gold); }
+.rivalry-watch-action { display: grid; gap: 10px; min-width: 0; }
+.rivalry-challenge-button { width: fit-content; min-height: 44px; max-width: 100%; white-space: normal; text-align: left; }
 .panel-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .panel h2 { margin: 0; font-size: 24px; letter-spacing: -.035em; color: #fff; }
 .panel .muted, .ai-copy { color: var(--muted); line-height: 1.7; font-size: 14px; white-space: pre-line; max-width: 650px; }
@@ -1610,6 +1612,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .week-winner-card, .jack-board-recap { align-items: flex-start; }
   .college-result-mark { flex-basis: 42px; width: 42px; height: 42px; font-size: .64rem; }
   .rivalry-watch-row { grid-template-columns: 1fr; gap: 7px; }
+  .rivalry-challenge-button { width: 100%; justify-content: center; text-align: center; }
 }
 
 /* Tiebreaker — closest without going over */

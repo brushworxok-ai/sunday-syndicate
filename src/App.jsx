@@ -1604,6 +1604,41 @@ function App() {
     finally { setServerBusy(''); }
   };
 
+  const openRivalryChallenge = ({ game, awayFans, homeFans }) => {
+    if (!playerSession.authenticated) {
+      setWelcomeMode('signin');
+      setShowWelcome(true);
+      notify('Sign in to start a rivalry challenge.');
+      return;
+    }
+
+    const awayFan = awayFans.find((player) => player.id === playerSession.playerId);
+    const homeFan = homeFans.find((player) => player.id === playerSession.playerId);
+    const creator = awayFan ?? homeFan;
+    if (!creator) {
+      setView('bets');
+      notify('Only a fan in this matchup can send its rivalry challenge.');
+      return;
+    }
+
+    const opponent = creator.id === awayFan?.id ? homeFans[0] : awayFans[0];
+    if (!opponent) return notify('Jack could not find an opposing fan for this game.');
+    const matchup = `${game.away} at ${game.home}`;
+    setBetForm({
+      creatorId: creator.id,
+      opponentId: opponent.id,
+      event: `${matchup} rivalry challenge`,
+      terms: `The fan whose favorite team wins ${matchup} wins. A tied game voids this non-cash challenge; the commissioner records the final result.`,
+      settlementRule: 'manual_review',
+      stakeType: 'virtual_tokens',
+      stakeAmount: 10,
+      stakeLabel: '10 Syndicate tokens',
+      optionalMessage: `Jack's rivalry call: ${creator.name.split(' ')[0]} vs ${opponent.name.split(' ')[0]}. Settle it on the field.`,
+    });
+    setView('bets');
+    notify(`Jack set up a 10-token challenge for ${creator.name.split(' ')[0]} and ${opponent.name.split(' ')[0]}. Review it, then send it privately.`);
+  };
+
   const respondBet = async (bet, decision) => {
     if (playerSession.playerId !== bet.opponentId) return notify('Only the invited opponent can respond.');
     setServerBusy(`bet-${bet.id}`);
@@ -2432,12 +2467,15 @@ function App() {
                         <div><span className="eyebrow dark">JACK'S RIVALRY WATCH</span><h2 id="rivalry-watch-title">Bragging rights are on the schedule</h2></div>
                         <StatusPill state="online">Game week</StatusPill>
                       </div>
-                      <p className="muted">Jack will post the final receipt after the game. Picks stay private.</p>
+                      <p className="muted">Jack spotted the matchup. Start a private, non-cash 10-token challenge and let the game settle the talk. Picks stay private.</p>
                       <div className="rivalry-watch-list">
                         {rivalryWatch.map(({ game, awayFans, homeFans }) => (
                           <article className="rivalry-watch-row" key={game.id}>
                             <div><strong>{game.away} at {game.home}</strong><small>{game.time}</small></div>
-                            <p><b>{awayFans.map((player) => player.name.split(' ')[0]).join(' & ')}</b> backs {game.away} · <b>{homeFans.map((player) => player.name.split(' ')[0]).join(' & ')}</b> backs {game.home}</p>
+                            <div className="rivalry-watch-action">
+                              <p><b>{awayFans.map((player) => player.name.split(' ')[0]).join(' & ')}</b> backs {game.away} · <b>{homeFans.map((player) => player.name.split(' ')[0]).join(' & ')}</b> backs {game.home}</p>
+                              <button type="button" className="button button-secondary rivalry-challenge-button" onClick={() => openRivalryChallenge({ game, awayFans, homeFans })}>Jack: start 10-token challenge</button>
+                            </div>
                           </article>
                         ))}
                       </div>
