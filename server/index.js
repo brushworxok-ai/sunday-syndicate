@@ -1711,6 +1711,12 @@ app.get('/api/nfl-injuries', asyncRoute(async (_request, response) => response.j
 const liveScoreCache = new Map();
 const ESPN_ABBR_FIXES = { WSH: 'WAS' };
 
+function seasonRecordFor(competitor) {
+  const records = Array.isArray(competitor?.records) ? competitor.records : [];
+  const overall = records.find((record) => record?.type === 'total' || record?.name === 'overall') ?? records[0];
+  return typeof overall?.summary === 'string' ? overall.summary.trim() : '';
+}
+
 async function fetchLiveScores(week) {
   const cached = liveScoreCache.get(week);
   if (cached && Date.now() - cached.at < 30_000) return cached.data;
@@ -1746,6 +1752,8 @@ async function fetchLiveScores(week) {
         gameId,
         away: awayAbbr,
         home: homeAbbr,
+        awayRecord: seasonRecordFor(away),
+        homeRecord: seasonRecordFor(home),
         awayScore: Number(away.score ?? 0),
         homeScore: Number(home.score ?? 0),
         state: statusType.state ?? 'pre', // pre | in | post
