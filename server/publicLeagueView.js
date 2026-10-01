@@ -46,7 +46,19 @@ export function buildLeagueView(league, { playerId = null, isAdmin = false, lock
   /* Every player can see what everyone has on the books — balances only, never
      each other's ledger entries (those stay owner-only below). */
   const balances = creditBalances(league.creditLedger ?? [], league.players ?? []);
-  if (isAdmin) return { ...view, players: slimAvatars(league.players ?? [], league.id), creditBalances: balances };
+  // A commissioner can manage the league, but cannot inspect anyone's NFL
+  // selections before that week's deadline. Keeping this server-side means a
+  // privileged browser session cannot bypass the sealed-sheet rule.
+  if (isAdmin) return {
+    ...view,
+    players: slimAvatars(league.players ?? [], league.id),
+    sheets: (league.sheets ?? []).map((sheet) => ({
+      ...sheet,
+      pickCount: Object.keys(sheet.picks ?? {}).length,
+      ...(!locked(sheet.week) ? { picks: {}, tiebreaker: null, picksHidden: true } : {}),
+    })),
+    creditBalances: balances,
+  };
   const owns = (item) => Boolean(playerId) && item.playerId === playerId;
   const entryView = (entry, revealed) => {
     const { handle, paymentClaim, paymentReview, paidVia, ...safe } = entry;

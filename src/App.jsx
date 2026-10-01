@@ -708,6 +708,7 @@ function App() {
     .sort((a, b) => Number(b.week) - Number(a.week) || Date.parse(b.paidAt ?? 0) - Date.parse(a.paidAt ?? 0))[0] ?? null, [proofLeague.payouts]);
 
   const notify = (message) => setToast(message);
+  const canReadSheet = (sheet) => sheet.playerId === playerSession.playerId || (!sheet.picksHidden && weekLocked);
 
   const ensureAdmin = async () => {
     if (isComm) return true;
@@ -3410,9 +3411,9 @@ function App() {
         )}
 
         {view === 'entries' && (
-          <StandardPage eyebrow={weekLabel.toUpperCase()} title="Who's in" subtitle={weekLocked ? 'Picks are open — tap anybody to see the sheet they turned in.' : 'Everyone with picks in for this week. Sheets stay sealed until the deadline, then everybody can read everybody.'}>
+          <StandardPage eyebrow={weekLabel.toUpperCase()} title="Who's in" subtitle={weekLocked ? 'The deadline has passed — everybody can read the sheets that were turned in.' : 'Everyone with picks in for this week. Sheets stay sealed until the deadline, then everybody can read everybody.'}>
             {weekSheets.length ? <div className="entry-list">{weekSheets.map((sheet, index) => (
-              <article className={`entry-row ${sheet.picksHidden ? '' : 'readable'} ${openSheetId === sheet.id ? 'open' : ''}`} key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div className="entry-who" role={sheet.picksHidden ? undefined : 'button'} tabIndex={sheet.picksHidden ? undefined : 0} onClick={() => { if (!sheet.picksHidden) setOpenSheetId((id) => (id === sheet.id ? '' : sheet.id)); }} onKeyDown={(e) => { if (!sheet.picksHidden && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpenSheetId((id) => (id === sheet.id ? '' : sheet.id)); } }}><strong>{sheet.name}{!sheet.picksHidden && <span className="entry-caret">{openSheetId === sheet.id ? '▾' : '▸'}</span>}</strong><p>{sheet.pickCount ?? Object.keys(sheet.picks).length} picks · {sheet.picksHidden ? '🔒 Sealed until the deadline' : `TB ${sheet.tiebreaker} · tap to open`}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b>{isComm && (
+              <article className={`entry-row ${canReadSheet(sheet) ? 'readable' : ''} ${openSheetId === sheet.id ? 'open' : ''}`} key={sheet.id}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><div className="entry-who" role={canReadSheet(sheet) ? 'button' : undefined} tabIndex={canReadSheet(sheet) ? 0 : undefined} onClick={() => { if (canReadSheet(sheet)) setOpenSheetId((id) => (id === sheet.id ? '' : sheet.id)); }} onKeyDown={(e) => { if (canReadSheet(sheet) && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpenSheetId((id) => (id === sheet.id ? '' : sheet.id)); } }}><strong>{sheet.name}{canReadSheet(sheet) && <span className="entry-caret">{openSheetId === sheet.id ? '▾' : '▸'}</span>}</strong><p>{sheet.pickCount ?? Object.keys(sheet.picks).length} picks · {!canReadSheet(sheet) ? '🔒 Sealed until the deadline' : `TB ${sheet.tiebreaker} · tap to open`}</p></div><time>{sheet.submittedAt ? new Date(sheet.submittedAt).toLocaleDateString() : weekLabel}</time><b className={`paid-pill ${sheet.paid ? '' : 'unpaid'}`}>{sheet.paid ? 'PAID' : 'UNPAID'}</b>{isComm && (
                 <button className="entry-remove" type="button" title="Remove sheet" disabled={serverBusy === `del-${sheet.id}`} onClick={async () => {
                   if (!window.confirm(`Remove ${sheet.name}'s ${weekLabel} sheet? This can't be undone.`)) return;
                   setServerBusy(`del-${sheet.id}`);
@@ -3424,7 +3425,7 @@ function App() {
                   finally { setServerBusy(''); }
                 }}>{serverBusy === `del-${sheet.id}` ? '…' : '✕'}</button>
               )}
-              {openSheetId === sheet.id && !sheet.picksHidden && <SheetPicks sheet={sheet} games={currentGames} results={results} weekLabel={weekLabel} />}
+              {openSheetId === sheet.id && canReadSheet(sheet) && <SheetPicks sheet={sheet} games={currentGames} results={results} weekLabel={weekLabel} />}
               </article>
             ))}</div> : <EmptyState icon="◎" title="Nobody's in yet" text="Be the first to get your picks in this week." action="Make picks" onAction={() => setView('picks')} />}
           </StandardPage>
@@ -3472,11 +3473,11 @@ function App() {
                 </section>;
               })()}
               {currentWeekPayout && <p className="success-note">✓ Week {selectedWeek} payout recorded for {currentWeekPayout.winnerNames?.join(' & ') || 'the winner'}.</p>}
-              {leaderboard.some((entry) => !entry.picksHidden) && <p className="board-hint">👆 Tap anybody to see every pick they made.</p>}
+              {leaderboard.some((entry) => canReadSheet(entry)) && <p className="board-hint">👆 Tap a player to see their sheet after the deadline. Your own sheet is always visible to you.</p>}
               <div className="table-head"><span>Rank</span><span>Player</span><span>Tiebreaker</span><span>Correct</span></div>
               {leaderboard.map((entry, index) => {
                 const path = winPathsByEntry[entry.id];
-                const readable = !entry.picksHidden;
+                const readable = canReadSheet(entry);
                 const open = openSheetId === entry.id;
                 const toggle = () => { if (readable) setOpenSheetId((id) => (id === entry.id ? '' : entry.id)); };
                 return <div className={`standing-row ${index === 0 && completedGames ? 'leader' : ''} ${readable ? 'readable' : ''} ${open ? 'open' : ''} ${path?.status === 'eliminated' ? 'is-out' : ''}`} key={entry.id} role={readable ? 'button' : undefined} tabIndex={readable ? 0 : undefined} onClick={toggle} onKeyDown={(e) => { if (readable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } }}>

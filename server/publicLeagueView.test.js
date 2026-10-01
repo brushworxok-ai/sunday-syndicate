@@ -26,9 +26,12 @@ test('League HTTP view hides unlocked rivals, private balances, draft recaps and
   assert.equal(view.settings.propPicks[1].p2.passing, undefined);
   assert.equal(JSON.stringify(view).includes('private'), false);
   assert.deepEqual(buildLeagueView(league, { locked: () => true }).sheets[1].picks, { g1: 'BUF' });
-  const admin = buildLeagueView(league, { isAdmin: true });
+  const admin = buildLeagueView(league, { isAdmin: true, locked: () => false });
   assert.equal(admin.settings.pushSubscriptions, undefined);
-  assert.deepEqual(admin.sheets[1].picks, { g1: 'BUF' });
+  assert.deepEqual(admin.sheets[1].picks, {});
+  assert.equal(admin.sheets[1].picksHidden, true);
+  const adminAfterDeadline = buildLeagueView(league, { isAdmin: true, locked: () => true });
+  assert.deepEqual(adminAfterDeadline.sheets[1].picks, { g1: 'BUF' });
   assert.deepEqual(league.sheets[1].picks, { g1: 'BUF' });
 });
 
