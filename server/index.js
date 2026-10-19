@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { normalizePayment, preferredHandle, PAY_METHODS } from '../src/payment.js';
 import { creditBalance } from '../src/credits.js';
+import { isCfbPoolLocked } from '../src/cfbPool.js';
 
 /* Profile pictures: a short emoji or a small data-URL image (the client
    downsizes to 256px JPEG, ~30 KB). Never silently truncate a data URL —
@@ -3278,7 +3279,7 @@ async function autoManageCfb({ leagueId: lid, actions }) {
       pool = assembleCfbPool({ existing: null, week, season: scoreboard.season, entryFee: settings.cfbAutoFee ?? 10, gameIds, byId });
       await store.saveCfbPool(lid, pool);
       try {
-        await store.addChatMessage(lid, { id: `chat-cfb-open-w${week}`, playerId: null, name: 'Jack 🤖', msg: `🏟️ College Pick-Em is LIVE for Week ${week} — ${gameIds.length} games on the board, $${pool.entryFee} to get in. Pick every game against the spread before kickoff. 🎓`, time: new Date().toISOString() });
+        await store.addChatMessage(lid, { id: `chat-cfb-open-w${week}`, playerId: null, name: 'Jack 🤖', msg: `🏟️ College Pick-Em is LIVE for Week ${week} — ${gameIds.length} games on the board, $${pool.entryFee} to get in. Pick every game against the spread at least 1 hour before the first kickoff. 🎓`, time: new Date().toISOString() });
       } catch { /* chat is non-critical */ }
       actions.push(`Auto-opened CFB Week ${week} pool from the Top 25 (${gameIds.length} games).`);
     }
@@ -3286,14 +3287,13 @@ async function autoManageCfb({ leagueId: lid, actions }) {
     return; // freshly opened — let players pick; still sweep older weeks above
   }
 
-  // 2. Auto-lock once the first game kicks off
+  // 2. Persist the same lock that pick submission enforces independently of cron.
   if (pool.status === 'open') {
-    const firstKick = pool.games.reduce((min, g) => Math.min(min, new Date(g.date).getTime()), Infinity);
-    if (Number.isFinite(firstKick) && Date.now() >= firstKick) {
+    if (isCfbPoolLocked(pool)) {
       pool.status = 'locked';
       pool.updatedAt = new Date().toISOString();
       await store.saveCfbPool(lid, pool);
-      actions.push(`Locked CFB Week ${week} pool at kickoff.`);
+      actions.push(`Locked CFB Week ${week} pool 1 hour before first kickoff.`);
     }
   }
 
