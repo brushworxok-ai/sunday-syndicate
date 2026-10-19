@@ -2,6 +2,38 @@
 // Pools grade picks against the spread (ATS) using the spread snapshotted at pool creation.
 import { validateTiebreaker } from './tiebreaker.js';
 
+export const CFB_DEADLINE_MINUTES = 60;
+
+/** One deadline for the whole sheet, derived without changing stored games or picks. */
+export function getCfbDeadline(pool) {
+  const kickoffs = (pool?.games ?? [])
+    .filter((game) => game.date != null && game.date !== '')
+    .map((game) => new Date(game.date).getTime())
+    .filter(Number.isFinite);
+  return kickoffs.length ? new Date(Math.min(...kickoffs) - CFB_DEADLINE_MINUTES * 60_000) : null;
+}
+
+export function isCfbPoolLocked(pool, now = new Date()) {
+  const deadline = getCfbDeadline(pool);
+  return pool?.status !== 'open' || Boolean(deadline && now >= deadline);
+}
+
+// Omitted timeZone uses the viewer's browser-local timezone for both labels.
+export function formatCfbDeadline(deadline, timeZone) {
+  return deadline ? deadline.toLocaleString('en-US', {
+    timeZone, timeZoneName: 'short',
+    weekday: 'long', year: 'numeric', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  }) : 'Awaiting a valid kickoff time';
+}
+
+export function formatCfbKickoff(kickoff, timeZone) {
+  return kickoff && Number.isFinite(kickoff.getTime()) ? kickoff.toLocaleString('en-US', {
+    timeZone, timeZoneName: 'short', weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  }) : 'Kickoff time pending';
+}
+
 /**
  * Grade a single game ATS.
  * homeSpread is the home team's line (negative = home favored, e.g. -6.5).
@@ -25,10 +57,7 @@ export function gradeGameAts(game, score) {
 export function validateCfbPicks({ pool, picks, tiebreaker, now = new Date() }) {
   if (!pool) return { ok: false, error: 'Pool not found.' };
   if (pool.status !== 'open') return { ok: false, error: 'This pool is locked — picks can no longer be changed.' };
-  // Auto-lock at the first kickoff even if the commissioner forgot to lock —
-  // nobody gets to pick after games have started.
-  const firstKick = (pool.games ?? []).map((g) => new Date(g.date)).filter((d) => !Number.isNaN(d.getTime())).sort((a, b) => a - b)[0];
-  if (firstKick && now >= firstKick) return { ok: false, error: 'This pool locked at the first kickoff — picks can no longer be changed.' };
+  if (isCfbPoolLocked(pool, now)) return { ok: false, error: 'This pool locked 1 hour before the first kickoff - picks can no longer be changed.' };
   if (!picks || typeof picks !== 'object' || Array.isArray(picks)) return { ok: false, error: 'Picks are required.' };
   const gameIds = new Set((pool.games ?? []).map((g) => g.id));
   const entries = Object.entries(picks);
