@@ -20,7 +20,7 @@ import { DEMO_CHAT, DEMO_LEAGUE } from './demoLeague.js';
 import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
 import { deriveSurvivorPool, findTeamGame } from './survivor.js';
-import { gradeCfbPool, getTiebreakerGame } from './cfbPool.js';
+import { gradeCfbPool, getTiebreakerGame, getCfbDeadline, isCfbPoolLocked, formatCfbDeadline, formatCfbKickoff, validateCfbPicks } from './cfbPool.js';
 import { allTiedLeadersBusted, getTiebreakerActual, tiebreakerRank, tiebreakerBusted, validateTiebreaker, TIEBREAKER_STEP } from './tiebreaker.js';
 import { creditBalance } from './credits.js';
 import { setSfxEnabled, isSfxEnabled, unlockSfx, tapSound, primarySound, pickSound } from './sfx.js';
@@ -804,6 +804,22 @@ function App() {
     [serverLeague, cfbWeek],
   );
   const cfbBoard = useMemo(() => (cfbPool ? gradeCfbPool(cfbPool) : null), [cfbPool]);
+  const cfbDeadline = useMemo(() => getCfbDeadline(cfbPool), [cfbPool]);
+  const cfbLocked = isCfbPoolLocked(cfbPool, new Date(nowTick));
+  // Refresh at the exact cutoff and after a sleeping/background tab resumes.
+  useEffect(() => {
+    const refresh = () => setNowTick(Date.now());
+    refresh();
+    const remaining = cfbDeadline ? cfbDeadline.getTime() - Date.now() : 0;
+    const timer = remaining > 0 && remaining <= 2_147_483_647 ? setTimeout(refresh, remaining) : null;
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      if (timer !== null) clearTimeout(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [cfbDeadline]);
   const cfbMyEntry = cfbPool?.entries?.[playerSession.playerId] ?? null;
   const cfbTbGame = useMemo(() => (cfbPool ? getTiebreakerGame(cfbPool) : null), [cfbPool]);
   const cfbPaidCount = useMemo(
@@ -923,6 +939,8 @@ function App() {
   const submitCfbPicks = async () => {
     if (!cfbPool) return;
     if (!playerSession.authenticated) return notify('Sign in as a player to lock in your CFB picks.');
+    const verdict = validateCfbPicks({ pool: cfbPool, picks: cfbMyPicks, tiebreaker: cfbTiebreaker });
+    if (!verdict.ok) return notify(verdict.error);
     setServerBusy('cfb-picks');
     try {
       await apiRequest(`/api/leagues/${LEAGUE_ID}/cfb-pool/${cfbPool.id}/picks`, {
@@ -1123,7 +1141,7 @@ function App() {
   };
 
   const chooseCfbPick = (gameId, side) => {
-    if (cfbPool?.status !== 'open') return;
+    if (isCfbPoolLocked(cfbPool)) return;
     setCfbMyPicks((current) => {
       const next = { ...current };
       if (next[gameId] === side) delete next[gameId];
@@ -3884,8 +3902,14 @@ function App() {
                     <h2 className="cfb-section-title">🏆 Week {cfbPool.week} Pick-Em Pool</h2>
                     <small className="muted">{cfbPool.games.length} games · ${cfbPool.entryFee} entry · Pot ${cfbPaidCount * cfbPool.entryFee}</small>
                   </div>
-                  <span className={`cfb-pool-status ${cfbPool.noContest ? 'no-contest' : cfbPool.status}`}>{cfbPool.noContest ? '↩ No contest' : cfbPool.status === 'open' ? '🟢 Open for picks' : cfbPool.status === 'locked' ? '🔒 Locked' : '🏁 Final'}</span>
+                  <span className={`cfb-pool-status ${cfbPool.noContest ? 'no-contest' : cfbPool.status === 'open' && cfbLocked ? 'locked' : cfbPool.status}`}>{cfbPool.noContest ? '↩ No contest' : cfbPool.status === 'open' && !cfbLocked ? '🟢 Open for picks' : cfbLocked && cfbPool.status !== 'final' ? '🔒 Locked' : '🏁 Final'}</span>
                 </div>
+
+                <p className="cfb-deadline" role="status">
+                  <strong>{cfbLocked ? 'Picks closed. ' : 'Pick deadline: '}</strong>
+                  {cfbDeadline ? <time dateTime={cfbDeadline.toISOString()}>{formatCfbDeadline(cfbDeadline)}</time> : formatCfbDeadline(null)}
+                  {' — 1 hour before the first game kickoff. Applies to all picks and updates.'}
+                </p>
 
                 <div className={`cfb-minimum-note ${cfbPaidCount >= cfbMinimumPlayers ? 'met' : 'pending'}`}>
                   {cfbPaidCount >= cfbMinimumPlayers
@@ -3924,23 +3948,23 @@ function App() {
                     <div className="cfb-pick-flow">
                       <div className="cfb-pick-progress">
                         <strong>{Object.keys(cfbMyPicks).length}/{cfbPool.games.length} picked</strong>
-                        {cfbMyEntry && <span className="cfb-entry-in">✓ Picks in — edit anytime before lock</span>}
+                        {cfbMyEntry && <span className="cfb-entry-in">{cfbLocked ? 'Picks saved — editing closed' : 'Picks saved — edit before the deadline'}</span>}
                       </div>
                       <div className="cfb-pick-grid">
                         {cfbPool.games.map((g) => (
                           <article className="cfb-pick-card" key={g.id}>
                             <div className="cfb-pick-meta">
                               <span className="cfb-pick-spread">{g.spreadLabel}</span>
-                              <span className="cfb-pick-date">{new Date(g.date).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })}</span>
+                              <span className="cfb-pick-date">{formatCfbKickoff(new Date(g.date))}</span>
                               {cfbTbGame?.id === g.id && <span className="cfb-tb-tag">TIEBREAKER</span>}
                             </div>
                             <div className="cfb-pick-buttons">
-                              <button type="button" className={`cfb-pick-team ${cfbMyPicks[g.id] === 'away' ? 'picked' : ''}`} onClick={() => chooseCfbPick(g.id, 'away')}>
+                              <button type="button" disabled={cfbLocked} className={`cfb-pick-team ${cfbMyPicks[g.id] === 'away' ? 'picked' : ''}`} onClick={() => chooseCfbPick(g.id, 'away')}>
                                 {g.away.logo && <img src={g.away.logo} alt="" loading="lazy" />}
                                 <span>{g.away.rank ? `#${g.away.rank} ` : ''}{g.away.abbr}</span>
                               </button>
                               <span className="cfb-at">@</span>
-                              <button type="button" className={`cfb-pick-team ${cfbMyPicks[g.id] === 'home' ? 'picked' : ''}`} onClick={() => chooseCfbPick(g.id, 'home')}>
+                              <button type="button" disabled={cfbLocked} className={`cfb-pick-team ${cfbMyPicks[g.id] === 'home' ? 'picked' : ''}`} onClick={() => chooseCfbPick(g.id, 'home')}>
                                 {g.home.logo && <img src={g.home.logo} alt="" loading="lazy" />}
                                 <span>{g.home.rank ? `#${g.home.rank} ` : ''}{g.home.abbr}</span>
                               </button>
@@ -3950,11 +3974,11 @@ function App() {
                       </div>
                       <div className="cfb-tb-row">
                         <label>Tiebreaker — total points in {cfbTbGame ? `${cfbTbGame.away.abbr} @ ${cfbTbGame.home.abbr}` : 'the last game'}
-                          <input type="number" min="0" max="250" inputMode="numeric" value={cfbTiebreaker} onChange={(e) => setCfbTiebreaker(e.target.value)} placeholder="e.g. 52" />
+                          <input type="number" min="0" max="250" inputMode="numeric" disabled={cfbLocked} value={cfbTiebreaker} onChange={(e) => setCfbTiebreaker(e.target.value)} placeholder="e.g. 52" />
                         </label>
                       </div>
-                      <button className="button button-primary full" type="button" disabled={serverBusy === 'cfb-picks'} onClick={submitCfbPicks}>
-                        {serverBusy === 'cfb-picks' ? 'Locking in…' : cfbMyEntry ? 'Update My Picks' : `Lock In My ${cfbPool.games.length} Picks`}
+                      <button className="button button-primary full" type="button" disabled={cfbLocked || serverBusy === 'cfb-picks'} onClick={submitCfbPicks}>
+                        {cfbLocked ? 'Picks closed' : serverBusy === 'cfb-picks' ? 'Locking in…' : cfbMyEntry ? 'Update My Picks' : `Lock In My ${cfbPool.games.length} Picks`}
                       </button>
                     </div>
                   ) : (
