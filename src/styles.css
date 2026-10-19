@@ -1475,6 +1475,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .cfb-pool-card.final { border-color: rgba(255, 215, 0, 0.4); }
 .cfb-pool-card.builder { border-color: rgba(255, 215, 0, 0.35); border-style: dashed; }
 .cfb-pool-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.cfb-deadline { margin: 0; padding: 12px; border: 1px solid rgba(255, 215, 0, 0.4); border-radius: 10px; color: #ffe08a; background: rgba(255, 215, 0, 0.08); line-height: 1.5; }
+.cfb-pick-team:disabled { cursor: not-allowed; opacity: 0.65; }
 .cfb-pool-head .cfb-section-title { margin: 0 0 2px; }
 .cfb-pool-status { font-size: 0.74rem; font-weight: 700; letter-spacing: 0.04em; padding: 5px 10px; border-radius: 999px; background: #1a1a1a; border: 1px solid var(--line); white-space: nowrap; }
 .cfb-pool-status.open { color: var(--neon, #39ff14); border-color: rgba(57, 255, 20, 0.4); }
