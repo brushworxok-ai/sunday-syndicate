@@ -1,4 +1,5 @@
 import { isWeekLocked } from '../src/data.js';
+import { isCfbPoolLocked } from '../src/cfbPool.js';
 import { creditBalances } from '../src/credits.js';
 import { createHash } from 'node:crypto';
 
@@ -84,7 +85,7 @@ export function buildLeagueView(league, { playerId = null, isAdmin = false, lock
     }), league.id),
     sheets: (league.sheets ?? []).map((sheet) => entryView(sheet, locked(sheet.week))),
     cfbPools: (league.cfbPools ?? []).map((pool) => {
-      const revealed = pool.status !== 'open' || (pool.games ?? []).some((game) => Number.isFinite(Date.parse(game.date)) && Date.parse(game.date) <= now);
+      const revealed = isCfbPoolLocked(pool, new Date(now));
       return { ...pool, entries: Object.fromEntries(Object.entries(pool.entries ?? {}).map(([id, entry]) => [id, entryView(entry, revealed)])) };
     }),
     survivorPicks: (league.survivorPicks ?? []).map((pick) => locked(pick.week) || owns(pick) ? pick : { playerId: pick.playerId, week: pick.week, pickedAt: pick.pickedAt, team: null }),
