@@ -1,3 +1,4 @@
+import { createLeagueLoader, bindLeagueResume } from './leagueRefresh.js';
 import { isRetiredCarryoverPromotion } from './carryoverDisplay.js';
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -128,6 +129,7 @@ function App() {
   const [serverLeague, setServerLeague] = useState(null);
   const [serverBusy, setServerBusy] = useState('');
   const [serverError, setServerError] = useState('');
+  const [leagueRefresh, setLeagueRefresh] = useState({ loading: true, error: '', lastSuccessAt: null });
   const [chatInput, setChatInput] = useState('');
   const [chatSending, setChatSending] = useState(false);
   const [chatName, setChatName] = useState('');
@@ -342,12 +344,10 @@ function App() {
   // Player credit form (admin)
   const [creditForm, setCreditForm] = useState({ playerId: '', amount: '', reason: '' });
 
-  const leagueRequestRef = useRef(0);
-  const loadLeague = useCallback(async () => {
-    const requestVersion = ++leagueRequestRef.current;
-    try {
-      const league = await apiRequest(`/api/leagues/${LEAGUE_ID}`);
-      if (requestVersion !== leagueRequestRef.current) return null;
+  const leagueLoader = useMemo(() => createLeagueLoader({
+    request: (options) => apiRequest(`/api/leagues/${LEAGUE_ID}`, options),
+    onStatus: (status) => { setLeagueRefresh(status); setServerError(status.error); },
+    onSnapshot: (league) => {
       setServerLeague(league);
       setSheets(league.sheets);
       setResults(league.results);
@@ -361,14 +361,10 @@ function App() {
         setAiResult((current) => ({ ...current, recap: '' }));
         setRecapEdit('');
       }
-      setServerError('');
-      return league;
-    } catch (error) {
-      if (requestVersion !== leagueRequestRef.current) return null;
-      setServerError(error.message);
-      return null;
-    }
-  }, []);
+    },
+  }), []);
+  const loadLeague = useCallback(() => leagueLoader.load(), [leagueLoader]);
+  useEffect(() => () => leagueLoader.dispose(), [leagueLoader]);
 
   const loadPaymentHistory = useCallback(async () => {
     if (!playerSession.authenticated) return;
@@ -1227,24 +1223,7 @@ function App() {
     return () => clearInterval(timer);
   }, [view, gamesInProgress]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* Coming back to the app is the moment people most expect fresh numbers —
-     phone unlocked, tab re-focused. Throttled so flipping tabs can't spam. */
-  useEffect(() => {
-    let last = 0;
-    const refreshIfStale = () => {
-      if (document.hidden) return;
-      const now = Date.now();
-      if (now - last < 10_000) return;
-      last = now;
-      loadLeague();
-    };
-    document.addEventListener('visibilitychange', refreshIfStale);
-    window.addEventListener('focus', refreshIfStale);
-    return () => {
-      document.removeEventListener('visibilitychange', refreshIfStale);
-      window.removeEventListener('focus', refreshIfStale);
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => bindLeagueResume({ load: loadLeague }), [loadLeague]);
 
   // Auto-scroll chat to bottom when messages change
   useEffect(() => {
@@ -2364,7 +2343,8 @@ function App() {
       )}
 
       <main>
-        {serverError && <div className="server-banner"><strong>Server connection unavailable.</strong><span>{serverError} {serverLeague ? 'Previously loaded league data remains visible and may be out of date.' : 'League standings are unavailable until the connection returns.'}</span><button type="button" onClick={loadLeague}>Retry</button></div>}
+        {serverLeague && <section className="server-banner" aria-label="League refresh status" role="status"><span>{leagueRefresh.loading ? 'Refreshing league information… ' : ''}Snapshot received {leagueRefresh.lastSuccessAt ? new Date(leagueRefresh.lastSuccessAt).toLocaleString() : 'earlier'}.{serverError || (leagueRefresh.lastSuccessAt && nowTick - leagueRefresh.lastSuccessAt > 120000) ? ' Displayed information may be out of date.' : ' Changes since that time may not be reflected.'}</span><button type="button" onClick={loadLeague} disabled={leagueRefresh.loading}>Refresh now</button></section>}
+        {serverError && <div className="server-banner"><strong>League update unavailable.</strong><span>{serverError} {serverLeague ? 'Previously loaded league data remains visible and may be out of date.' : 'League standings are unavailable until the connection returns.'}</span><button type="button" onClick={loadLeague}>Retry</button></div>}
 
         {view === 'home' && !serverLeague && <div className="server-banner"><strong>{serverError ? 'League information unavailable.' : 'Loading league information…'}</strong><span>Entries, pot and league updates will appear after league data loads.</span></div>}
         {view === 'home' && serverLeague && (
