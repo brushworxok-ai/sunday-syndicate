@@ -2366,7 +2366,8 @@ function App() {
       <main>
         {serverError && <div className="server-banner"><strong>Server connection unavailable.</strong><span>{serverError} {serverLeague ? 'Previously loaded league data remains visible and may be out of date.' : 'League standings are unavailable until the connection returns.'}</span><button type="button" onClick={loadLeague}>Retry</button></div>}
 
-        {view === 'home' && (
+        {view === 'home' && !serverLeague && <div className="server-banner"><strong>{serverError ? 'League information unavailable.' : 'Loading league information…'}</strong><span>Entries, pot and league updates will appear after league data loads.</span></div>}
+        {view === 'home' && serverLeague && (
           <div className="stack-lg">
             {(() => {
               const crew = proofLeague.players ?? [];
