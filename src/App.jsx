@@ -1,3 +1,4 @@
+import { isRetiredCarryoverPromotion } from './carryoverDisplay.js';
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 class ErrorBoundary extends Component {
@@ -119,8 +120,8 @@ function App() {
   const [picks, setPicks] = useState({});
   const [tiebreaker, setTiebreaker] = useState('');
   const [paid, setPaid] = useState(false);
-  const [sheets, setSheets] = useState(DEMO_LEAGUE.sheets);
-  const [results, setResults] = useState(DEMO_LEAGUE.results);
+  const [sheets, setSheets] = useState([]);
+  const [results, setResults] = useState({});
   const resultsRef = useRef(results);
   const [chatMsgs, setChatMsgs] = useState(DEMO_CHAT);
   const [manualRolloverPot] = useState(0);
@@ -583,6 +584,7 @@ function App() {
     ? serverLeague.settings.weeklyRollover
     : null;
   const rolloverPot = Number(activeRollover?.amount ?? serverLeague?.settings?.rollover ?? manualRolloverPot ?? 0);
+  const showCarryoverPromotion = !isRetiredCarryoverPromotion(SEASON, activeRollover);
   const payoutBreakdownFor = (weeklyAmount, winnerNames = []) => {
     const winnerIds = winnerNames.map((name) => (serverLeague?.players ?? []).find((player) => player.name === name)?.id).filter(Boolean);
     const carryover = activeRollover && winnerIds.some((id) => activeRollover.eligiblePlayerIds?.includes(id)) ? rolloverPot : 0;
@@ -2362,7 +2364,7 @@ function App() {
       )}
 
       <main>
-        {serverError && <div className="server-banner"><strong>Server connection unavailable.</strong><span>{serverError} The seeded read-only fixture remains visible.</span><button type="button" onClick={loadLeague}>Retry</button></div>}
+        {serverError && <div className="server-banner"><strong>Server connection unavailable.</strong><span>{serverError} {serverLeague ? 'Previously loaded league data remains visible and may be out of date.' : 'League standings are unavailable until the connection returns.'}</span><button type="button" onClick={loadLeague}>Retry</button></div>}
 
         {view === 'home' && (
           <div className="stack-lg">
@@ -2373,7 +2375,7 @@ function App() {
               const byName = (name) => crew.find((p) => p.name === name);
               const openWeek = !weekLocked;
               const jackLandingComment = (() => {
-                if (activeRollover) return {
+                if (activeRollover && showCarryoverPromotion) return {
                   headline: 'That carryover got everybody watching.',
                   text: `$${rolloverPot.toLocaleString()} is sitting there for an eligible Week ${activeRollover.sourceWeek} player. Don’t get cute with the tiebreaker this time—Jack is keeping every receipt.`,
                 };
@@ -2416,7 +2418,7 @@ function App() {
                       <span className="scorecard-label">This week's pot</span>
                       <strong>${totalPot.toLocaleString()}</strong>
                       <div><span>{weekSheets.length} {weekSheets.length === 1 ? 'entry' : 'entries'}</span><span>{completedGames}/{currentGames.length} final</span></div>
-                      {rolloverPot > 0 && <p>${Number(rolloverPot).toLocaleString()} carryover is reserved separately</p>}
+                      {rolloverPot > 0 && showCarryoverPromotion && <p>${Number(rolloverPot).toLocaleString()} carryover is reserved separately</p>}
                     </div>
                   </section>
 
@@ -2430,14 +2432,14 @@ function App() {
                     <button className="text-button" type="button" onClick={() => { setAssistantOpen(true); setAssistantInput(`What’s the real story for ${weekLabel}?`); }}>Talk to Jack</button>
                   </section>
 
-                  {activeRollover && (
+                  {activeRollover && showCarryoverPromotion && (
                     <section className="panel compact-panel rollover-card" aria-label="Active carryover pot">
                       <div className="panel-heading"><div><span className="eyebrow dark">CARRYOVER POT</span><h2>${rolloverPot.toLocaleString()} is still up for grabs</h2></div><StatusPill state="warn">Reserved</StatusPill></div>
                       <p className="muted">It came from Week {activeRollover.sourceWeeks?.join(' & ') ?? activeRollover.sourceWeek} after the top players all busted the tiebreaker. Every confirmed player from that no-winner week — {activeRollover.eligibleNames?.join(', ') || 'the prior-week crew'} — can claim it by winning a future week. Players who did not play that week can still win the regular weekly pot.</p>
                     </section>
                   )}
 
-                  {activeRollover && (() => {
+                  {activeRollover && showCarryoverPromotion && (() => {
                     const resultWeek = activeRollover.lastBustedWeek ?? activeRollover.sourceWeeks?.at(-1) ?? activeRollover.sourceWeek;
                     const leaders = activeRollover.lastTiedLeaderNames?.join(' & ') || 'The tied leaders';
                     const finalTotal = activeRollover.lastTiebreakerTotal;
@@ -3046,7 +3048,8 @@ function App() {
           </StandardPage>
         )}
 
-        {view === 'live' && (
+        {['live', 'results'].includes(view) && !serverLeague && <div className="server-banner"><strong>{serverError ? 'League standings unavailable.' : 'Loading league standings…'}</strong><span>Standings will appear after league data loads.</span></div>}
+        {view === 'live' && serverLeague && (
           <StandardPage eyebrow={`${weekLabel.toUpperCase()} · ${liveScores.anyLive ? '🔴 LIVE' : 'GAME DAY'}`} title="Game day live" subtitle={liveScores.anyLive ? 'Games in progress — picks and standings update every 30 seconds.' : 'No games in progress right now. Scores go live at kickoff.'}>
             <section className="live-standings">
               <div className="proof-heading"><div><span className="proof-step">PROJECTED</span><h2>If games ended now</h2></div>{liveScores.anyLive && <StatusPill state="warn">LIVE</StatusPill>}</div>
@@ -3449,7 +3452,7 @@ function App() {
           </StandardPage>
         )}
 
-        {view === 'results' && (
+        {view === 'results' && serverLeague && (
           <StandardPage eyebrow={`${completedGames} OF ${currentGames.length} FINAL`} title="League standings" subtitle="One point per correct pick. Tiebreakers settle equal scores once the featured game is final.">
             {(liveScores.scores ?? []).some((s) => s.state !== 'pre') && (
               <section className="live-strip" aria-label="Live scores">
