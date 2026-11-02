@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DEMO_CHAT, DEMO_LEAGUE } from '../src/demoLeague.js';
 import { SMS_CONSENT_VERSION } from '../src/smsCompliance.js';
 import { hashPin, normalizeCredential } from './auth.js';
@@ -257,6 +257,16 @@ export class LeagueStore {
       this.db.exec('ROLLBACK');
       throw error;
     }
+  }
+
+  /* sqlite is the local/dev store and keeps no write counter, so the
+     "version" is a fingerprint of the league as the app would see it. It only
+     has to change whenever the league changes. */
+  getLeagueVersion(leagueId) {
+    const league = this.getLeague(leagueId);
+    if (!league) return null;
+    const digest = createHash('sha1').update(JSON.stringify(league)).digest('hex').slice(0, 13);
+    return { version: parseInt(digest, 16), updatedAt: null, week: Number(league.week) || null };
   }
 
   getLeague(leagueId) {

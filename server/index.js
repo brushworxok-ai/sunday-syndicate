@@ -554,21 +554,69 @@ async function advanceWeekAfterFinal(league, actor = 'week-finalizer') {
   return week === league.week ? league : await store.getLeague(league.id);
 }
 
-app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
-  let league = await autoStartSeasonIfDue(await store.getLeague(request.params.leagueId));
-  if (!league) return response.status(404).json({ error: 'League not found.' });
-  await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
+/* ── League maintenance: run once per change, not once per poll ──
+   Every league read used to re-run the settlement / rollover / week-advance
+   helpers, and each of those re-read the whole league document from Neon.
+   With phones polling, that was 5–7 full reads (a megabyte and a couple of
+   seconds) per refresh. The helpers only depend on league state, so they only
+   need to run again when the stored version moves. Each serverless instance
+   remembers the last version it maintained and skips the pass otherwise; a
+   10-minute ceiling re-runs it anyway in case anything is clock-driven. */
+const maintainedLeagues = new Map(); // leagueId -> { version, at }
+const MAINTENANCE_MAX_AGE_MS = 10 * 60_000;
+
+async function leagueStamp(leagueId) {
+  if (typeof store.getLeagueVersion !== 'function') return null;
+  return store.getLeagueVersion(leagueId);
+}
+
+async function maintainLeague(leagueId, actor = 'league-refresh') {
+  const before = await leagueStamp(leagueId);
+  const memo = maintainedLeagues.get(leagueId);
+  if (before && memo && memo.version === before.version && Date.now() - memo.at < MAINTENANCE_MAX_AGE_MS) {
+    return { stamp: before, changed: false, found: true };
+  }
+  let league = await autoStartSeasonIfDue(await store.getLeague(leagueId));
+  if (!league) return { stamp: null, changed: false, found: false };
   // Repair the legacy no-results auto-payout bug before any public response is
   // built. It only targets automatic weekly credits whose week has zero finals.
-  await voidPrematureWeeklyPayouts(league.id, 'league-refresh');
-  await hydrateActiveRolloverDetails(league.id, 'league-refresh');
+  await voidPrematureWeeklyPayouts(league.id, actor);
+  await hydrateActiveRolloverDetails(league.id, actor);
   // A clinched result does not need to wait for unrelated games to go final.
   // The settlement helper is idempotent, so this is safe on every refresh.
-  await settleClinchedWeeklyPayout({ leagueId: league.id, week: Number(league.week) || getCurrentWeek(), actor: 'league-refresh' });
-  league = await advanceWeekAfterFinal(await store.getLeague(request.params.leagueId), 'league-refresh');
+  await settleClinchedWeeklyPayout({ leagueId: league.id, week: Number(league.week) || getCurrentWeek(), actor });
+  league = await advanceWeekAfterFinal(league, actor);
+  const after = (await leagueStamp(leagueId)) ?? { version: null, week: league?.week ?? null, updatedAt: new Date().toISOString() };
+  maintainedLeagues.set(leagueId, { version: after.version, at: Date.now() });
+  return { stamp: after, changed: Boolean(before) && before.version !== after.version, found: true };
+}
+
+/* Tiny heartbeat: ~80 bytes, one indexed row, no league document. Phones poll
+   this every few seconds and only fetch the full league when `version` moves. */
+app.get('/api/leagues/:leagueId/pulse', asyncRoute(async (request, response) => {
+  const stamp = await leagueStamp(request.params.leagueId);
+  if (!stamp) return response.status(404).json({ error: 'League not found.' });
+  response.set('Cache-Control', 'private, no-cache');
+  return response.json({ version: stamp.version, updatedAt: stamp.updatedAt, week: stamp.week, now: new Date().toISOString() });
+}));
+
+app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
+  const maintenance = await maintainLeague(request.params.leagueId, 'league-refresh');
+  if (!maintenance.found) return response.status(404).json({ error: 'League not found.' });
+  await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
+  // Version first, document second: if a write lands in between, the client
+  // holds an older version than the content and simply refetches on its next
+  // pulse. The other order could leave a phone believing it is current when
+  // it is not.
+  const stamp = await leagueStamp(request.params.leagueId);
+  const [league, player] = await Promise.all([
+    store.getLeague(request.params.leagueId),
+    playerAuth.playerFromRequest(request),
+  ]);
   if (!league) return response.status(404).json({ error: 'League not found.' });
-  const player = await playerAuth.playerFromRequest(request);
   const view = buildLeagueView(league, { playerId: player?.leagueId === league.id ? player.id : null, isAdmin: auth.isAuthenticated(request) });
+  view.version = stamp?.version ?? null;
+  view.updatedAt = stamp?.updatedAt ?? null;
 
   /* Phones poll this every few seconds. When nothing has changed since their
      last read, answer 304 with no body: a poll costs a few hundred bytes
@@ -1774,34 +1822,50 @@ async function fetchLiveScores(week) {
   }
 }
 
+/* Finals this instance has already written (or found already verified). A
+   final never un-finals, so there is no reason to re-read the league for it
+   on every poll for the rest of the week. Cold instances check once. */
+const verifiedFinals = new Set(); // `${leagueId}:${gameId}`
+
 app.get('/api/leagues/:leagueId/live-scores', asyncRoute(async (request, response) => {
   const week = Number(request.query.week) || getCurrentWeek();
+  const leagueId = request.params.leagueId;
   const data = await fetchLiveScores(week);
 
   // AUTO-SCORING: the app keeps score on its own. Any game the feed reports
   // as final is verified automatically the next time anyone loads scores.
   // The commissioner's manual entry still works and always wins (it re-verifies).
-  const finals = data.scores.filter((s) => s.state === 'post' && s.completed);
+  const finals = data.scores.filter((s) => s.state === 'post' && s.completed && !verifiedFinals.has(`${leagueId}:${s.gameId}`));
   let autoVerified = 0;
   if (finals.length) {
-    const league = await store.getLeague(request.params.leagueId);
+    const league = await store.getLeague(leagueId);
     if (league) {
       for (const score of finals) {
         const existing = (league.results ?? {})[score.gameId];
-        if (existing?.winner && existing?.verifiedAt) continue;
+        if (existing?.winner && existing?.verifiedAt) { verifiedFinals.add(`${leagueId}:${score.gameId}`); continue; }
         const winner = score.awayScore === score.homeScore ? 'TIE' : (score.awayScore > score.homeScore ? score.away : score.home);
-        await store.upsertResult(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner }, 'live_feed_auto');
-        await maybePostRivalryChat(request.params.leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner });
+        await store.upsertResult(leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner }, 'live_feed_auto');
+        await maybePostRivalryChat(leagueId, score.gameId, { awayScore: score.awayScore, homeScore: score.homeScore, winner });
+        verifiedFinals.add(`${leagueId}:${score.gameId}`);
         autoVerified += 1;
       }
     }
   }
-  // Re-evaluate the week on every score refresh. A clinch can happen while
-  // another game is still live, so waiting for an all-final sweep is wrong.
-  const settlement = await settleClinchedWeeklyPayout({ leagueId: request.params.leagueId, week, actor: 'live-score-refresh' });
-  const beforeAdvance = await store.getLeague(request.params.leagueId);
-  const advancedLeague = await advanceWeekAfterFinal(beforeAdvance, 'live-score-refresh');
-  return response.json({ ...data, autoVerified, payoutSettled: settlement.settled, weekAdvanced: advancedLeague?.week !== beforeAdvance?.week, activeWeek: advancedLeague?.week ?? week });
+  // Re-evaluate the week whenever the league has changed since this instance
+  // last looked (a clinch can happen while another game is still live). When
+  // nothing changed, this is a single tiny version read, not a settlement pass.
+  const maintenance = await maintainLeague(leagueId, 'live-score-refresh');
+  const stamp = maintenance.stamp;
+  return response.json({
+    ...data,
+    autoVerified,
+    changed: autoVerified > 0 || maintenance.changed,
+    version: stamp?.version ?? null,
+    activeWeek: stamp?.week ?? week,
+    // Kept for older clients still looking at these flags.
+    payoutSettled: maintenance.changed,
+    weekAdvanced: Boolean(stamp?.week) && stamp.week !== week && stamp.week > week,
+  });
 }));
 
 /* ── Auto score verification: pull finals from the live feed ── */

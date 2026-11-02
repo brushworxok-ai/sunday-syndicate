@@ -202,16 +202,40 @@ export class PostgresLeagueStore {
     return state ? publicLeague(state) : null;
   }
 
+  /* A few bytes that answer "has anything changed?" without pulling the league
+     document. Every write bumps `version`, so phones can poll this every few
+     seconds and only fetch the full league when the number moves. */
+  async getLeagueVersion(leagueId) {
+    const rows = await this.sql`
+      SELECT version, updated_at, data->>'week' AS week
+      FROM league_states WHERE league_id = ${leagueId}
+    `;
+    if (!rows[0]) return null;
+    return { version: Number(rows[0].version), updatedAt: new Date(rows[0].updated_at).toISOString(), week: Number(rows[0].week) || null };
+  }
+
+  /* Session checks run on every authenticated request, so they must not read
+     the whole league document (hundreds of KB, twice, per request). Postgres
+     plucks the one player / one credential out of the JSONB instead. */
   async getPlayer(playerId) {
-    const state = await this.findStateContaining('players', playerId);
-    const player = state?.players.find((item) => item.id === playerId);
-    return player ? authenticatedPlayer(player) : null;
+    const rows = await this.sql`
+      SELECT player
+      FROM league_states, LATERAL jsonb_array_elements(COALESCE(data->'players', '[]'::jsonb)) AS player
+      WHERE player->>'id' = (${playerId}::text)
+      LIMIT 1
+    `;
+    const player = rows[0]?.player;
+    return player ? authenticatedPlayer(clone(player)) : null;
   }
 
   async getPlayerCredential(playerId) {
-    const states = await this.readAllStates();
-    const credential = states.map((state) => state.playerCredentials?.[playerId]).find(Boolean);
-    return normalizeCredential(clone(credential));
+    const rows = await this.sql`
+      SELECT data->'playerCredentials'->(${playerId}::text) AS credential
+      FROM league_states
+      WHERE data->'playerCredentials' ? (${playerId}::text)
+      LIMIT 1
+    `;
+    return normalizeCredential(clone(rows[0]?.credential ?? undefined));
   }
 
   /* Reset a player's PIN (phone-verified self-reset or commissioner reset). */

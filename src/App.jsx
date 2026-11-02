@@ -1,4 +1,4 @@
-import { createLeagueLoader, bindLeagueResume } from './leagueRefresh.js';
+import { createLeagueLoader, bindLeagueResume, bindLeaguePulse } from './leagueRefresh.js';
 import { isRetiredCarryoverPromotion } from './carryoverDisplay.js';
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -344,10 +344,13 @@ function App() {
   // Player credit form (admin)
   const [creditForm, setCreditForm] = useState({ playerId: '', amount: '', reason: '' });
 
+  // The league's write counter from the last snapshot; the pulse compares against it.
+  const leagueVersionRef = useRef(null);
   const leagueLoader = useMemo(() => createLeagueLoader({
     request: (options) => apiRequest(`/api/leagues/${LEAGUE_ID}`, options),
     onStatus: (status) => { setLeagueRefresh(status); setServerError(status.error); },
     onSnapshot: (league) => {
+      leagueVersionRef.current = league.version ?? null;
       setServerLeague(league);
       setSheets(league.sheets);
       setResults(league.results);
@@ -405,7 +408,7 @@ function App() {
     if (!playerSession.authenticated) return;
     try { setNotifsSeenAt(localStorage.getItem(`notifs-seen-at:${playerSession.playerId}`) || ''); } catch { /* private mode */ }
     const refresh = () => { if (document.visibilityState !== 'hidden') loadNotifications(); };
-    const onPush = (event) => { if (event.data?.type === 'league-notification') refresh(); };
+    const onPush = (event) => { if (event.data?.type === 'league-notification') { refresh(); loadLeague(); } };
     refresh();
     const timer = setInterval(refresh, 60_000);
     window.addEventListener('focus', refresh);
@@ -417,7 +420,7 @@ function App() {
       document.removeEventListener('visibilitychange', refresh);
       navigator.serviceWorker?.removeEventListener('message', onPush);
     };
-  }, [playerSession.authenticated, playerSession.playerId, loadNotifications]);
+  }, [playerSession.authenticated, playerSession.playerId, loadNotifications, loadLeague]);
 
   useEffect(() => {
     if (view !== 'notifs' || !playerSession.playerId || notificationDataOwnerRef.current !== playerSession.playerId || !notifications.length) return;
@@ -503,7 +506,8 @@ function App() {
            the league. This is what makes the board move when a game ends. */
         const feedFinals = (data.scores ?? []).filter((score) => score.state === 'post' && score.completed);
         const missingLocally = feedFinals.some((score) => !resultsRef.current?.[score.gameId]?.winner);
-        if (data.autoVerified > 0 || data.payoutSettled || data.weekAdvanced || missingLocally) loadLeague();
+        const versionMoved = data.version != null && data.version !== leagueVersionRef.current;
+        if (data.autoVerified > 0 || data.changed || versionMoved || missingLocally) loadLeague();
         // Keep the Board fresh during a game window or while a weekly result
         // is waiting to settle. Once the slate is entirely quiet, back off.
         const scoreWindowActive = data.anyLive || (data.scores ?? []).some((score) => score.state === 'post');
@@ -1205,23 +1209,21 @@ function App() {
 
   const chatEndRef = useRef(null);
 
-  /* Keep the app live. Scores land in the league doc (results) via the auto
-     sync, so any screen that shows a score or a standing has to re-read the
-     league — otherwise the scoreboard card up top says FINAL while the board
-     underneath is frozen at whatever it was when the page loaded. */
-  /* Polls are cheap now (unchanged ones come back 304 with no body), but there
-     is no reason to ask every 30s when nothing is playing. Lean in during
-     games, back off otherwise. */
+  /* Keep the app live. Scores, chat and payments all land in the league doc,
+     so every screen is current as long as the league snapshot is. Instead of
+     each screen re-downloading the league on its own timer, one heartbeat asks
+     the server "did anything change?" (~80 bytes) and fetches the league only
+     when the answer is yes. Chat listens a little harder. The 5-minute
+     fallback covers the rare case where the counter and the content disagree. */
   const gamesInProgress = Boolean(liveScores.anyLive);
-  const LEAGUE_REFRESH_MS = gamesInProgress
-    ? { chat: 12_000, results: 30_000, live: 30_000, home: 45_000, entries: 60_000, season: 60_000, survivor: 60_000 }
-    : { chat: 15_000, results: 120_000, live: 120_000, home: 180_000, entries: 180_000, season: 300_000, survivor: 300_000 };
-  useEffect(() => {
-    const every = LEAGUE_REFRESH_MS[view];
-    if (!every) return undefined;
-    const timer = setInterval(() => { if (!document.hidden) loadLeague(); }, every);
-    return () => clearInterval(timer);
-  }, [view, gamesInProgress]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pulseEveryMs = view === 'chat' ? 6_000 : 10_000;
+  useEffect(() => bindLeaguePulse({
+    fetchPulse: () => apiRequest(`/api/leagues/${LEAGUE_ID}/pulse`, { cache: 'no-store' }),
+    load: loadLeague,
+    getVersion: () => leagueVersionRef.current,
+    intervalMs: pulseEveryMs,
+    fallbackMs: 300_000,
+  }), [loadLeague, pulseEveryMs]);
 
   useEffect(() => bindLeagueResume({ load: loadLeague }), [loadLeague]);
 
@@ -2343,7 +2345,20 @@ function App() {
       )}
 
       <main>
-        {serverLeague && <section className="server-banner" aria-label="League refresh status" role="status"><span>{leagueRefresh.loading ? 'Refreshing league information… ' : ''}Snapshot received {leagueRefresh.lastSuccessAt ? new Date(leagueRefresh.lastSuccessAt).toLocaleString() : 'earlier'}.{serverError || (leagueRefresh.lastSuccessAt && nowTick - leagueRefresh.lastSuccessAt > 120000) ? ' Displayed information may be out of date.' : ' Changes since that time may not be reflected.'}</span><button type="button" onClick={loadLeague} disabled={leagueRefresh.loading}>Refresh now</button></section>}
+        {serverLeague && (() => {
+          /* Quiet while things are live; only speaks up when the snapshot is
+             genuinely old or the server is unreachable. */
+          const ageMs = leagueRefresh.lastSuccessAt ? nowTick - leagueRefresh.lastSuccessAt : null;
+          const stale = Boolean(serverError) || ageMs == null || ageMs > 120_000;
+          const ageLabel = ageMs == null ? 'not yet' : ageMs < 15_000 ? 'just now' : ageMs < 60_000 ? `${Math.round(ageMs / 1000)}s ago` : `${Math.round(ageMs / 60_000)} min ago`;
+          return (
+            <div className={`sync-pill${stale ? ' is-stale' : ''}${leagueRefresh.loading ? ' is-loading' : ''}`} role="status" aria-label="League sync status">
+              <span className="sync-dot" aria-hidden="true" />
+              <span>{stale ? `Last synced ${ageLabel} — may be out of date` : `Live · synced ${ageLabel}`}</span>
+              <button type="button" onClick={loadLeague} disabled={leagueRefresh.loading}>{leagueRefresh.loading ? 'Syncing…' : 'Refresh'}</button>
+            </div>
+          );
+        })()}
         {serverError && <div className="server-banner"><strong>League update unavailable.</strong><span>{serverError} {serverLeague ? 'Previously loaded league data remains visible and may be out of date.' : 'League standings are unavailable until the connection returns.'}</span><button type="button" onClick={loadLeague}>Retry</button></div>}
 
         {view === 'home' && !serverLeague && <div className="server-banner"><strong>{serverError ? 'League information unavailable.' : 'Loading league information…'}</strong><span>Entries, pot and league updates will appear after league data loads.</span></div>}
