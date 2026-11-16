@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLeagueLoader, bindLeagueResume, bindLeaguePulse } from './leagueRefresh.js';
+import { createLeagueLoader, bindLeagueResume, bindLeaguePulse, readCachedSnapshot, writeCachedSnapshot, clearCachedSnapshot } from './leagueRefresh.js';
 
 const snapshot = (id) => ({ id, players: [], sheets: [], results: {}, chat: [] });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
@@ -165,4 +165,46 @@ test('explicit read supersedes pending background work and background retry reco
   old.resolve(snapshot('old')); await Promise.resolve();
   assert.equal(h.state.snapshot.id, 'new');
   await h.load({ reuseInFlight: true }); assert.equal(calls, 3);
+});
+
+function memoryStorage() {
+  const map = new Map();
+  return { getItem: (k) => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k), map };
+}
+
+test('snapshot cache round-trips, is scoped to the viewer, and expires', () => {
+  const storage = memoryStorage();
+  const league = { ...snapshot('real'), viewerId: 'p1', version: 7 };
+  assert.equal(writeCachedSnapshot(storage, 'real', league, 1000), true);
+  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: 'p1', now: () => 2000 })?.league.version, 7);
+  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: 'p2', now: () => 2000 }), null, 'another viewer never sees it');
+  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: null, now: () => 2000 }), null, 'a signed-out phone never sees a private view');
+  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: 'p1', now: () => 1000 + 8 * 24 * 3_600_000 }), null, 'old snapshots are ignored');
+  assert.equal(writeCachedSnapshot(storage, 'real', { nope: true }), false, 'garbage is never cached');
+  clearCachedSnapshot(storage, 'real');
+  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: 'p1' }), null);
+  // storage that throws (private mode) is harmless
+  const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+  assert.equal(readCachedSnapshot(broken, 'real'), null);
+  assert.equal(writeCachedSnapshot(broken, 'real', league), false);
+  assert.equal(readCachedSnapshot(undefined, 'real'), null);
+});
+
+test('hydrate paints a cached snapshot once, dated when it was saved, and yields to the first server read', async () => {
+  const seen = [];
+  const statuses = [];
+  const gate = deferred();
+  const loader = createLeagueLoader({ request: () => gate.promise, onSnapshot: (v, meta) => seen.push([v.id, meta.source]), onStatus: (st) => statuses.push({ ...st }), timeoutMs: 5000, now: () => 9000 });
+  const pending = loader.load();
+  assert.equal(loader.hydrate(snapshot('cached'), 5000), true);
+  assert.deepEqual(seen, [['cached', 'cache']]);
+  assert.equal(statuses.at(-1).lastSuccessAt, 5000, 'the pill shows the cache age, not now');
+  assert.equal(statuses.at(-1).loading, true, 'hydrating does not hide that a real read is in flight');
+  gate.resolve(snapshot('server'));
+  await pending;
+  assert.deepEqual(seen, [['cached', 'cache'], ['server', 'server']]);
+  assert.equal(statuses.at(-1).lastSuccessAt, 9000);
+  assert.equal(loader.hydrate(snapshot('late-cache'), 1), false, 'a cache never overwrites a real snapshot');
+  assert.equal(seen.length, 2);
+  assert.equal(loader.hydrate({ junk: true }, 1), false);
 });

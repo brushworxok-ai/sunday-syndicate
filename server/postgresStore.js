@@ -128,36 +128,46 @@ export class PostgresLeagueStore {
   }
 
   async migrate() {
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS app_config (
+    /* One round trip, not three: every cold serverless instance runs this
+       before it can answer its first request, so each extra query here is
+       latency a phone feels on open. */
+    const statements = [
+      `CREATE TABLE IF NOT EXISTS app_config (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `;
-    await this.sql`
-      CREATE TABLE IF NOT EXISTS league_states (
+      )`,
+      `CREATE TABLE IF NOT EXISTS league_states (
         league_id TEXT PRIMARY KEY,
         data JSONB NOT NULL,
         version BIGINT NOT NULL DEFAULT 1,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `;
-    await this.sql`CREATE INDEX IF NOT EXISTS idx_league_states_updated_at ON league_states(updated_at DESC)`;
+      )`,
+      'CREATE INDEX IF NOT EXISTS idx_league_states_updated_at ON league_states(updated_at DESC)',
+    ];
+    if (typeof this.sql.transaction === 'function') {
+      await this.sql.transaction(statements.map((text) => this.sql.query(text)));
+      return;
+    }
+    for (const text of statements) await this.sql.query(text);
   }
 
   async seedDemo({ force = false } = {}) {
-    const serialized = JSON.stringify(createDemoState());
+    const serialized = () => JSON.stringify(createDemoState());
     if (force) {
       await this.sql`
-        INSERT INTO league_states (league_id, data) VALUES (${DEMO_LEAGUE.id}, ${serialized}::jsonb)
+        INSERT INTO league_states (league_id, data) VALUES (${DEMO_LEAGUE.id}, ${serialized()}::jsonb)
         ON CONFLICT (league_id) DO UPDATE SET data = EXCLUDED.data, version = league_states.version + 1, updated_at = NOW()
       `;
       return true;
     }
+    // Cold start runs this every time. Don't ship the whole demo document to
+    // the database just to be told the league already exists.
+    const existing = await this.sql`SELECT 1 FROM league_states WHERE league_id = ${DEMO_LEAGUE.id}`;
+    if (existing.length) return false;
     const inserted = await this.sql`
-      INSERT INTO league_states (league_id, data) VALUES (${DEMO_LEAGUE.id}, ${serialized}::jsonb)
+      INSERT INTO league_states (league_id, data) VALUES (${DEMO_LEAGUE.id}, ${serialized()}::jsonb)
       ON CONFLICT (league_id) DO NOTHING
       RETURNING league_id
     `;

@@ -1,4 +1,4 @@
-import { createLeagueLoader, bindLeagueResume, bindLeaguePulse } from './leagueRefresh.js';
+import { createLeagueLoader, bindLeagueResume, bindLeaguePulse, readCachedSnapshot, writeCachedSnapshot } from './leagueRefresh.js';
 import { isRetiredCarryoverPromotion } from './carryoverDisplay.js';
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -349,8 +349,10 @@ function App() {
   const leagueLoader = useMemo(() => createLeagueLoader({
     request: (options) => apiRequest(`/api/leagues/${LEAGUE_ID}`, options),
     onStatus: (status) => { setLeagueRefresh(status); setServerError(status.error); },
-    onSnapshot: (league) => {
+    onSnapshot: (league, { source, savedAt } = {}) => {
       leagueVersionRef.current = league.version ?? null;
+      // Remember what the server sent so the next open paints instantly.
+      if (source === 'server') { try { writeCachedSnapshot(window.localStorage, LEAGUE_ID, league, savedAt); } catch { /* private mode */ } }
       setServerLeague(league);
       setSheets(league.sheets);
       setResults(league.results);
@@ -446,9 +448,19 @@ function App() {
       .then((data) => setAiStatus({ checked: true, configured: data.geminiConfigured, grokConfigured: data.grokConfigured, model: data.model, jackModel: data.jackModel || '', database: data.database, smsProvider: data.smsProvider, twilioConfigured: data.twilioConfigured }))
       .catch(() => setAiStatus({ checked: true, configured: false, grokConfigured: false, model: '', jackModel: '', database: '', smsProvider: 'offline', twilioConfigured: false }));
     apiRequest('/api/auth/status').then((status) => setIsComm(status.authenticated)).catch(() => {});
-    apiRequest('/api/auth/player/status').then(setPlayerSession).catch(() => {});
+    /* Instant open: as soon as we know who is looking, paint the snapshot this
+       phone saved last time (if it was built for the same viewer). The real
+       read is already in flight and replaces it the moment it lands. */
+    apiRequest('/api/auth/player/status')
+      .then((status) => {
+        setPlayerSession(status);
+        let cached = null;
+        try { cached = readCachedSnapshot(window.localStorage, LEAGUE_ID, { viewerId: status?.playerId ?? null }); } catch { /* private mode */ }
+        if (cached) leagueLoader.hydrate(cached.league, cached.savedAt);
+      })
+      .catch(() => {});
     loadLeague();
-  }, [loadLeague]);
+  }, [loadLeague, leagueLoader]);
 
   // When the last game of a week is final, the server advances the league
   // immediately. Move a player forward too, but never kick them out of an
@@ -470,17 +482,21 @@ function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // NFL Wire: injuries, statuses, team news (refreshes every 10 minutes)
+  // NFL Wire: injuries, statuses, team news (refreshes every 10 minutes).
+  // Waits for the league to be on screen first: at open, the standings are
+  // what the phone is waiting for, and the wire can follow a beat later.
+  const leagueOnScreen = Boolean(serverLeague);
   useEffect(() => {
+    if (!leagueOnScreen) return undefined;
     let cancelled = false;
     const load = () => {
       apiRequest('/api/nfl-news').then((data) => { if (!cancelled) setNflNews(data); }).catch(() => {});
       apiRequest('/api/nfl-injuries').then((data) => { if (!cancelled) setNflInjuries(data); }).catch(() => {});
     };
-    load();
+    const first = setTimeout(load, 1_500);
     const timer = setInterval(load, 600_000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+    return () => { cancelled = true; clearTimeout(first); clearInterval(timer); };
+  }, [leagueOnScreen]);
 
   // Deadline countdown ticker (30s)
   useEffect(() => {

@@ -591,19 +591,26 @@ async function maintainLeague(leagueId, actor = 'league-refresh') {
   return { stamp: after, changed: Boolean(before) && before.version !== after.version, found: true };
 }
 
-/* Tiny heartbeat: ~80 bytes, one indexed row, no league document. Phones poll
-   this every few seconds and only fetch the full league when `version` moves. */
+/* Heartbeat: phones poll this every few seconds and only fetch the full
+   league when `version` moves. It is also where the league's housekeeping
+   lives now — settlement, week advance, the traffic-driven auto-pilot — so
+   that the one request a phone is actually waiting on (the league read below)
+   never pays for it. The pulse client ignores latency; a slow heartbeat just
+   means the next one fires a little later. Everything here is throttled:
+   maintenance runs once per league version per instance, auto-pilot at most
+   every 10 minutes per instance. */
 app.get('/api/leagues/:leagueId/pulse', asyncRoute(async (request, response) => {
-  const stamp = await leagueStamp(request.params.leagueId);
-  if (!stamp) return response.status(404).json({ error: 'League not found.' });
+  const maintenance = await maintainLeague(request.params.leagueId, 'league-refresh');
+  if (!maintenance.found) return response.status(404).json({ error: 'League not found.' });
+  await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
+  const stamp = (await leagueStamp(request.params.leagueId)) ?? maintenance.stamp;
   response.set('Cache-Control', 'private, no-cache');
   return response.json({ version: stamp.version, updatedAt: stamp.updatedAt, week: stamp.week, now: new Date().toISOString() });
 }));
 
+/* The read a phone waits on at open. Nothing but reads happen here: one
+   small version row, one league document, one player row. */
 app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
-  const maintenance = await maintainLeague(request.params.leagueId, 'league-refresh');
-  if (!maintenance.found) return response.status(404).json({ error: 'League not found.' });
-  await maybeRunAutoPilot(); // serverless-safe: awaited so Vercel doesn't freeze it mid-run (throttled to once per 10 min)
   // Version first, document second: if a write lands in between, the client
   // holds an older version than the content and simply refetches on its next
   // pulse. The other order could leave a phone believing it is current when
@@ -617,6 +624,7 @@ app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   const view = buildLeagueView(league, { playerId: player?.leagueId === league.id ? player.id : null, isAdmin: auth.isAuthenticated(request) });
   view.version = stamp?.version ?? null;
   view.updatedAt = stamp?.updatedAt ?? null;
+  view.viewerId = player?.leagueId === league.id ? player.id : null;
 
   /* Phones poll this every few seconds. When nothing has changed since their
      last read, answer 304 with no body: a poll costs a few hundred bytes
