@@ -1,4 +1,4 @@
-import { createLeagueLoader, bindLeagueResume, bindLeaguePulse, readCachedSnapshot, writeCachedSnapshot } from './leagueRefresh.js';
+import { createLeagueLoader, bindLeagueResume, bindLeaguePulse, clearCachedSnapshot } from './leagueRefresh.js';
 import { isRetiredCarryoverPromotion } from './carryoverDisplay.js';
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -349,10 +349,8 @@ function App() {
   const leagueLoader = useMemo(() => createLeagueLoader({
     request: (options) => apiRequest(`/api/leagues/${LEAGUE_ID}`, options),
     onStatus: (status) => { setLeagueRefresh(status); setServerError(status.error); },
-    onSnapshot: (league, { source, savedAt } = {}) => {
+    onSnapshot: (league) => {
       leagueVersionRef.current = league.version ?? null;
-      // Remember what the server sent so the next open paints instantly.
-      if (source === 'server') { try { writeCachedSnapshot(window.localStorage, LEAGUE_ID, league, savedAt); } catch { /* private mode */ } }
       setServerLeague(league);
       setSheets(league.sheets);
       setResults(league.results);
@@ -448,17 +446,10 @@ function App() {
       .then((data) => setAiStatus({ checked: true, configured: data.geminiConfigured, grokConfigured: data.grokConfigured, model: data.model, jackModel: data.jackModel || '', database: data.database, smsProvider: data.smsProvider, twilioConfigured: data.twilioConfigured }))
       .catch(() => setAiStatus({ checked: true, configured: false, grokConfigured: false, model: '', jackModel: '', database: '', smsProvider: 'offline', twilioConfigured: false }));
     apiRequest('/api/auth/status').then((status) => setIsComm(status.authenticated)).catch(() => {});
-    /* Instant open: as soon as we know who is looking, paint the snapshot this
-       phone saved last time (if it was built for the same viewer). The real
-       read is already in flight and replaces it the moment it lands. */
-    apiRequest('/api/auth/player/status')
-      .then((status) => {
-        setPlayerSession(status);
-        let cached = null;
-        try { cached = readCachedSnapshot(window.localStorage, LEAGUE_ID, { viewerId: status?.playerId ?? null }); } catch { /* private mode */ }
-        if (cached) leagueLoader.hydrate(cached.league, cached.savedAt);
-      })
-      .catch(() => {});
+    // Full league responses may contain commissioner-only records. Retire the
+    // legacy cache before any response is rendered; player ID is not a role.
+    try { clearCachedSnapshot(window.localStorage, LEAGUE_ID); } catch { /* private mode */ }
+    apiRequest('/api/auth/player/status').then(setPlayerSession).catch(() => {});
     loadLeague();
   }, [loadLeague, leagueLoader]);
 

@@ -172,21 +172,19 @@ function memoryStorage() {
   return { getItem: (k) => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k), map };
 }
 
-test('snapshot cache round-trips, is scoped to the viewer, and expires', () => {
-  const storage = memoryStorage();
-  const league = { ...snapshot('real'), viewerId: 'p1', version: 7 };
-  assert.equal(writeCachedSnapshot(storage, 'real', league, 1000), true);
-  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: 'p1', now: () => 2000 })?.league.version, 7);
-  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: 'p2', now: () => 2000 }), null, 'another viewer never sees it');
-  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: null, now: () => 2000 }), null, 'a signed-out phone never sees a private view');
-  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: 'p1', now: () => 1000 + 8 * 24 * 3_600_000 }), null, 'old snapshots are ignored');
-  assert.equal(writeCachedSnapshot(storage, 'real', { nope: true }), false, 'garbage is never cached');
-  clearCachedSnapshot(storage, 'real');
-  assert.equal(readCachedSnapshot(storage, 'real', { viewerId: 'p1' }), null);
-  // storage that throws (private mode) is harmless
+test('retired snapshot cache never returns or stores commissioner, player, or anonymous data', () => {
+  for (const viewerId of [null, 'p1']) {
+    const storage = memoryStorage();
+    const league = { ...snapshot('real'), viewerId, players: [{ id: 'p2', phone: 'dummy-private-phone' }], auditLog: [{ id: 'dummy-private-audit' }] };
+    storage.setItem('league-snapshot:real', JSON.stringify({ league, savedAt: 1000 }));
+    assert.equal(readCachedSnapshot(storage, 'real', { viewerId, now: () => 2000 }), null);
+    assert.equal(storage.getItem('league-snapshot:real'), null, 'legacy data is purged');
+    assert.equal(writeCachedSnapshot(storage, 'real', league), false);
+    assert.equal(storage.getItem('league-snapshot:real'), null, 'sensitive responses are not persisted');
+  }
   const broken = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
   assert.equal(readCachedSnapshot(broken, 'real'), null);
-  assert.equal(writeCachedSnapshot(broken, 'real', league), false);
+  assert.equal(writeCachedSnapshot(broken, 'real', snapshot('real')), false);
   assert.equal(readCachedSnapshot(undefined, 'real'), null);
 });
 

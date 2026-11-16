@@ -121,37 +121,22 @@ export function bindLeaguePulse({ fetchPulse, load, getVersion, intervalMs = 10_
   return () => clearIntervalFn(timer);
 }
 
-/* Last-snapshot cache. A phone that reopens the app paints real standings
-   from this in a few milliseconds while the network catches up. Keyed by the
-   viewer the snapshot was built for, so one person's private view is never
-   painted for another on a shared phone. Storage can be absent, full or
-   throwing (private mode); every path fails quietly. */
+/* Retired full-snapshot cache. A player's identity does not describe the
+   commissioner's additional privileges. Never persist or hydrate these
+   responses; discard legacy copies even when a caller still uses this API.
+   A future cache must contain only a deliberately public projection. */
 const snapshotKey = (leagueId) => `league-snapshot:${leagueId}`;
 
-export function readCachedSnapshot(storage, leagueId, { viewerId = null, maxAgeMs = 7 * 24 * 3_600_000, now = Date.now } = {}) {
-  try {
-    const raw = storage?.getItem(snapshotKey(leagueId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!validLeagueSnapshot(parsed?.league) || !Number.isFinite(parsed.savedAt)) return null;
-    if (now() - parsed.savedAt > maxAgeMs) return null;
-    if ((parsed.league.viewerId ?? null) !== (viewerId ?? null)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+export function readCachedSnapshot(storage, leagueId) {
+  clearCachedSnapshot(storage, leagueId);
+  return null;
 }
 
-export function writeCachedSnapshot(storage, leagueId, league, savedAt = Date.now()) {
-  try {
-    if (!validLeagueSnapshot(league)) return false;
-    storage?.setItem(snapshotKey(leagueId), JSON.stringify({ savedAt, league }));
-    return true;
-  } catch {
-    return false;
-  }
+export function writeCachedSnapshot(storage, leagueId) {
+  clearCachedSnapshot(storage, leagueId);
+  return false;
 }
 
 export function clearCachedSnapshot(storage, leagueId) {
-  try { storage?.removeItem(snapshotKey(leagueId)); } catch { /* nothing to clear */ }
+  try { storage?.removeItem(snapshotKey(leagueId)); } catch { /* private mode */ }
 }
