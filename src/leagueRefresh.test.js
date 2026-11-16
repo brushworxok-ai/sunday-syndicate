@@ -139,3 +139,30 @@ test('pulse stays quiet while the tab is hidden', async () => {
   await tick();
   assert.equal(pulses, 1);
 });
+
+test('background refresh joins a slow initial read without aborting it', async () => {
+  const pending = deferred(); let calls = 0; let signal;
+  const h = harness(options => { calls++; signal = options.signal; return pending.promise; }, { timeoutMs: 1000 });
+  const first = h.load(); await Promise.resolve();
+  const background = h.load({ reuseInFlight: true });
+  assert.equal(background, first); assert.equal(calls, 1); assert.equal(signal.aborted, false);
+  pending.resolve(snapshot('initial')); await background;
+  assert.equal(h.state.snapshot.id, 'initial');
+});
+test('repeated background events do not extend the pending timeout', async () => {
+  let calls = 0;
+  const h = harness(() => { calls++; return new Promise(() => {}); });
+  const first = h.load();
+  const timer = setInterval(() => { assert.equal(h.load({ reuseInFlight: true }), first); }, 2);
+  try { assert.equal(await first, null); } finally { clearInterval(timer); }
+  assert.equal(calls, 1); assert.match(h.state.status.error, /timed out/);
+});
+test('explicit read supersedes pending background work and background retry recovers', async () => {
+  const old = deferred(); let calls = 0;
+  const h = harness(() => { calls++; return calls === 1 ? old.promise : snapshot('new'); });
+  const first = h.load({ reuseInFlight: true }); await Promise.resolve();
+  const next = h.load(); assert.notEqual(next, first); await next; await first;
+  old.resolve(snapshot('old')); await Promise.resolve();
+  assert.equal(h.state.snapshot.id, 'new');
+  await h.load({ reuseInFlight: true }); assert.equal(calls, 3);
+});

@@ -14,8 +14,9 @@ export function createLeagueLoader({ request, onSnapshot, onStatus, timeoutMs = 
   let cancel = () => {};
   let lastSuccessAt = null;
   const status = (loading, error = '') => onStatus({ loading, error, lastSuccessAt });
-  return {
-    async load() {
+  let inFlight = null;
+  const loader = {
+    async read() {
       const current = ++version;
       cancel();
       const controller = new AbortController();
@@ -44,7 +45,17 @@ export function createLeagueLoader({ request, onSnapshot, onStatus, timeoutMs = 
         if (current === version) cancel = () => {};
       }
     },
-    dispose() { ++version; cancel(); cancel = () => {}; },
+    dispose() { ++version; cancel(); cancel = () => {}; inFlight = null; },
+  };
+  return {
+    load({ reuseInFlight = false } = {}) {
+      if (reuseInFlight && inFlight) return inFlight;
+      const pending = loader.read();
+      inFlight = pending;
+      pending.finally(() => { if (inFlight === pending) inFlight = null; });
+      return pending;
+    },
+    dispose: loader.dispose,
   };
 }
 

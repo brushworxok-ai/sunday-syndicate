@@ -367,6 +367,7 @@ function App() {
     },
   }), []);
   const loadLeague = useCallback(() => leagueLoader.load(), [leagueLoader]);
+  const refreshLeagueInBackground = useCallback(() => leagueLoader.load({ reuseInFlight: true }), [leagueLoader]);
   useEffect(() => () => leagueLoader.dispose(), [leagueLoader]);
 
   const loadPaymentHistory = useCallback(async () => {
@@ -1219,13 +1220,13 @@ function App() {
   const pulseEveryMs = view === 'chat' ? 6_000 : 10_000;
   useEffect(() => bindLeaguePulse({
     fetchPulse: () => apiRequest(`/api/leagues/${LEAGUE_ID}/pulse`, { cache: 'no-store' }),
-    load: loadLeague,
+    load: refreshLeagueInBackground,
     getVersion: () => leagueVersionRef.current,
     intervalMs: pulseEveryMs,
     fallbackMs: 300_000,
-  }), [loadLeague, pulseEveryMs]);
+  }), [refreshLeagueInBackground, pulseEveryMs]);
 
-  useEffect(() => bindLeagueResume({ load: loadLeague }), [loadLeague]);
+  useEffect(() => bindLeagueResume({ load: refreshLeagueInBackground }), [refreshLeagueInBackground]);
 
   // Auto-scroll chat to bottom when messages change
   useEffect(() => {
