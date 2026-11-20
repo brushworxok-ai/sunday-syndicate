@@ -250,6 +250,10 @@ main { padding: 24px 0 40px; }
 .games-list { display: grid; gap: 10px; }
 .game-card { display: grid; grid-template-columns: 140px 1fr; gap: 16px; align-items: center; border: 1px solid var(--glass-border); background: var(--card); border-radius: 12px; padding: 14px 18px; transition: border .2s, box-shadow .2s; }
 .game-card.picked { border-color: rgba(57,255,20,.25); box-shadow: inset 3px 0 var(--neon); }
+.game-card.forfeited { opacity: .55; }
+.game-card.forfeited .team-buttons button { cursor: not-allowed; }
+.forfeit-badge { display: block; margin-top: 4px; color: var(--rust); font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.path-badge.late { background: rgba(255, 196, 0, .14); color: #ffc400; border: 1px solid rgba(255, 196, 0, .35); }
 .game-meta { display: grid; grid-template-columns: 28px 1fr; align-items: center; gap: 8px; }
 .game-meta > span { font-family: 'DM Mono'; font-size: 11px; color: var(--muted); }
 .game-meta p { margin: 0; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--ink); }

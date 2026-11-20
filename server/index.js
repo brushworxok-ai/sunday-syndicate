@@ -34,7 +34,7 @@ function validateAvatar(value) {
   if (text.length <= 8 && !/[<>"'&]/.test(text)) return { avatar: text };
   return { error: 'Invalid profile picture.' };
 }
-import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
+import { SCHEDULE, getGames, getCurrentWeek, getWeekDeadline, isWeekLocked, hasGameStarted, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SEASON, WEEK, TEAMS, ENTRY_FEE } from '../src/data.js';
 import { allTiedLeadersBusted, getTiebreakerActual, validateTiebreaker } from '../src/tiebreaker.js';
 import { createHash } from 'node:crypto';
 import { createLeagueStore } from './storeFactory.js';
@@ -637,6 +637,74 @@ app.get('/api/leagues/:leagueId', asyncRoute(async (request, response) => {
   if (request.headers['if-none-match'] === etag) return response.status(304).end();
   response.type('application/json');
   return response.send(body);
+}));
+
+/* ── Late sheet (commissioner override) ──
+   The deadline is the deadline, but a league of friends sometimes needs a
+   sheet filed after it. This keeps that honest instead of impossible:
+   - commissioner only, and only for a player who has NO sheet this week
+     (never a way to swap picks after lock);
+   - every game that has already kicked off is forfeited — it is stored with
+     no pick and grades as a miss, so seeing a score can't help;
+   - the sheet is flagged `late` with who filed it and when, it shows as LATE
+     on the board, and Jack announces it in chat so the whole league knows. */
+app.post('/api/leagues/:leagueId/entries/late', auth.requireAdmin, asyncRoute(async (request, response) => {
+  const input = request.body ?? {};
+  const league = await store.getLeague(request.params.leagueId);
+  if (!league) return response.status(404).json({ error: 'League not found.' });
+  const player = (league.players ?? []).find((candidate) => candidate.id === String(input.playerId ?? ''));
+  if (!player) return response.status(422).json({ error: 'Pick a registered player for the late sheet.' });
+  const week = Number(input.week) || Number(league.week) || getCurrentWeek();
+  const activeWeek = Number((await advanceWeekAfterFinal(league, 'late-entry'))?.week) || getCurrentWeek();
+  if (week !== activeWeek) return response.status(422).json({ error: `Late sheets can only be filed for the current week (Week ${activeWeek}).` });
+  const games = getGames(week);
+  if (!games.length) return response.status(422).json({ error: `No games found for Week ${week}.` });
+  if ((league.sheets ?? []).some((sheet) => sheet.playerId === player.id && sheet.week === week)) {
+    return response.status(409).json({ error: `${player.name} already has a Week ${week} sheet. Late filing never replaces picks that are in.` });
+  }
+  const tbVerdict = validateTiebreaker(input.tiebreaker, { max: 250 });
+  if (!tbVerdict.ok) return response.status(422).json({ error: tbVerdict.error });
+  const now = new Date();
+  const started = games.filter((game) => hasGameStarted(game, now));
+  if (started.length === games.length) return response.status(422).json({ error: `Every Week ${week} game has kicked off — there is nothing left to pick.` });
+  const open = games.filter((game) => !hasGameStarted(game, now));
+  const submitted = input.picks ?? {};
+  const picks = {};
+  for (const game of open) {
+    if (submitted[game.id] !== game.away && submitted[game.id] !== game.home) {
+      return response.status(422).json({ error: `Pick a winner for every game that hasn't started (${open.length} left). Missing: ${game.away} @ ${game.home}.` });
+    }
+    picks[game.id] = submitted[game.id];
+  }
+  const deadline = getWeekDeadline(week);
+  const minutesLate = deadline ? Math.max(0, Math.round((now.getTime() - deadline.getTime()) / 60_000)) : null;
+  const sheet = {
+    id: `sheet-${randomUUID()}`, playerId: player.id, name: player.name, handle: '', picks, tiebreaker: Number(input.tiebreaker), paid: false, week,
+    submittedAt: now.toISOString(),
+    late: true,
+    lateFiledBy: request.actor, lateFiledAt: now.toISOString(), minutesLate,
+    forfeitedGames: started.map((game) => game.id),
+  };
+  await store.createSheet(request.params.leagueId, sheet);
+  const entryFee = Number(league.settings?.entryFee) || ENTRY_FEE;
+  if (creditBalance(league.creditLedger ?? [], player.id) >= entryFee) {
+    const payment = await store.paySheetWithCredit(league.id, sheet.id, player.id, player.name, entryFee);
+    if (payment?.ok) {
+      sheet.paid = true;
+      sheet.paidVia = 'credit';
+      sheet.paymentReview = { status: 'confirmed', method: 'credit', note: 'Automatically paid from available account credit', reviewedAt: now.toISOString(), reviewedBy: 'system' };
+    }
+  }
+  const forfeitLine = started.length
+    ? ` ${started.map((game) => `${game.away}@${game.home}`).join(', ')} had already kicked off and count${started.length === 1 ? 's' : ''} as a miss.`
+    : '';
+  const lateLine = minutesLate != null ? `${minutesLate} min after the deadline` : 'after the deadline';
+  await store.addChatMessage(request.params.leagueId, {
+    id: `chat-late-sheet-${sheet.id}`, playerId: null, name: 'Jack 🤖',
+    msg: `📋 Commissioner filed a LATE Week ${week} sheet for ${player.name} — ${lateLine}.${forfeitLine} It's marked LATE on the board so everybody can see it.`,
+    time: now.toISOString(),
+  });
+  return response.status(201).json(sheet);
 }));
 
 /* Uploaded photos live here instead of inside every league poll. They are

@@ -17,7 +17,7 @@ class ErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import { EMOJIS, ENTRY_FEE, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, formatCountdown, TEAMS, TEAM_COLORS, getTeamLogoUrl } from './data.js';
+import { EMOJIS, ENTRY_FEE, DEADLINE_HOURS_BEFORE_KICKOFF, DEADLINE_LABEL, SCHEDULE, SEASON, WEEK, getGames, getWeek, getByeTeams, getCurrentWeek, getWeekDeadline, isWeekLocked, hasGameStarted, formatCountdown, TEAMS, TEAM_COLORS, getTeamLogoUrl } from './data.js';
 import { DEMO_CHAT, DEMO_LEAGUE } from './demoLeague.js';
 import JackControlStudio, { JackAvatar } from './JackExperience.jsx';
 import { buildWinningPaths } from './winningPaths.js';
@@ -1169,7 +1169,28 @@ function App() {
     });
   };
 
+  /* Commissioner late sheet: after lock, a commissioner who is also a player
+     with no sheet in can still file one. Started games are forfeited server-
+     side; the UI greys them out so the count matches what the server wants. */
+  const lateMode = Boolean(isComm && weekLocked && playerSession.authenticated && !mySheet && selectedWeek === getCurrentWeek());
+  const lateOpenGames = useMemo(() => (lateMode ? currentGames.filter((game) => !hasGameStarted(game, new Date(nowTick))) : currentGames), [lateMode, currentGames, nowTick]);
+  const submitLate = async () => {
+    const needed = lateOpenGames.filter((game) => !picks[game.id]);
+    if (needed.length) return notify(`Pick the ${needed.length} game${needed.length === 1 ? '' : 's'} that haven't kicked off yet.`);
+    const tbCheck = validateTiebreaker(tiebreaker, { max: 250 });
+    if (!tbCheck.ok) return notify(tbCheck.error);
+    setServerBusy('entry');
+    try {
+      const saved = await apiRequest(`/api/leagues/${LEAGUE_ID}/entries/late`, { method: 'POST', body: JSON.stringify({ playerId: playerSession.playerId, picks, tiebreaker: Number(tiebreaker), week: selectedWeek }) });
+      await loadLeague();
+      const forfeited = saved.forfeitedGames?.length ?? 0;
+      notify(`Late sheet filed${forfeited ? ` — ${forfeited} game${forfeited === 1 ? '' : 's'} forfeited` : ''}. Jack told the league.`);
+    } catch (error) { notify(error.message); }
+    finally { setServerBusy(''); }
+  };
+
   const submit = async () => {
+    if (lateMode) return submitLate();
     if (weekLocked) return notify(`${weekLabel} is locked — picks were due ${DEADLINE_LABEL} before the first game.`);
     if (selectedWeek !== getCurrentWeek()) return notify(`Picks are only open for Week ${getCurrentWeek()} right now — switch the week at the top to lock in.`);
     // Signed-in players are identified by their session — the server uses that,
@@ -2692,21 +2713,26 @@ function App() {
             <section className="content-column">
               <div className="page-title"><span className="eyebrow dark">{weekLabel.toUpperCase()}</span><h1>Make your picks</h1><p>Pick one winner in every matchup. Your choices stay private on this device until you lock them in.</p>{currentByeTeams.length > 0 && <p className="bye-notice"><strong>Bye teams:</strong> {currentByeTeams.map(t => TEAMS[t]).join(', ')}</p>}</div>
               <div className={`deadline-banner ${weekLocked ? 'locked' : ''}`}>
-                {weekLocked
+                {lateMode
+                  ? <><span className="deadline-icon">📋</span><div><strong>Commissioner late sheet for {weekLabel}.</strong><p>The deadline has passed. You can still file your own sheet: games that have kicked off are forfeited (count as misses), the sheet is marked LATE on the board, and Jack announces it in chat.</p></div></>
+                  : weekLocked
                   ? <><span className="deadline-icon">🔒</span><div><strong>Picks are locked for {weekLabel}.</strong><p>Deadline passed — {DEADLINE_LABEL} before the first kickoff. See you next week.</p></div></>
                   : <><span className="deadline-icon">⏱</span><div><strong>Picks lock in {deadlineCountdown || 'less than a minute'}.</strong><p>Deadline: {weekDeadline ? weekDeadline.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + ` ET (${DEADLINE_HOURS_BEFORE_KICKOFF}h before kickoff)` : `${DEADLINE_HOURS_BEFORE_KICKOFF}h before first kickoff`}.</p></div></>}
               </div>
               <div className="games-list">
-                {currentGames.map((game, index) => (
-                  <article className={`game-card ${picks[game.id] ? 'picked' : ''}`} key={game.id}>
-                    <div className="game-meta"><span>{String(index + 1).padStart(2, '0')}</span><p>{game.time}</p>{game.id === weekTiebreaker.game?.id && <b>★ Tiebreaker game — guess its total points, closest without going over</b>}{liveByGame[game.id]?.state === 'in' && <b className="live-badge">● LIVE {liveByGame[game.id].away} {liveByGame[game.id].awayScore}–{liveByGame[game.id].homeScore} {liveByGame[game.id].home} · {liveByGame[game.id].detail}</b>}</div>
+                {currentGames.map((game, index) => {
+                  const forfeited = lateMode && !lateOpenGames.includes(game);
+                  return (
+                  <article className={`game-card ${picks[game.id] ? 'picked' : ''} ${forfeited ? 'forfeited' : ''}`} key={game.id}>
+                    <div className="game-meta"><span>{String(index + 1).padStart(2, '0')}</span><p>{game.time}</p>{forfeited && <b className="forfeit-badge">Already kicked off — forfeited (counts as a miss)</b>}{game.id === weekTiebreaker.game?.id && <b>★ Tiebreaker game — guess its total points, closest without going over</b>}{liveByGame[game.id]?.state === 'in' && <b className="live-badge">● LIVE {liveByGame[game.id].away} {liveByGame[game.id].awayScore}–{liveByGame[game.id].homeScore} {liveByGame[game.id].home} · {liveByGame[game.id].detail}</b>}</div>
                     <div className="team-buttons">
-                      <button type="button" aria-label={`${game.awayFull}, away, ${liveByGame[game.id]?.awayRecord || 'season record pending'}`} className={picks[game.id] === game.away ? 'selected' : ''} style={{ '--team-color': TEAM_COLORS[game.away] }} onClick={() => choosePick(game.id, game.away)}><img className="team-logo" src={getTeamLogoUrl(game.away)} alt="" loading="lazy" /><small>{game.awayFull}</small><strong>{game.away}</strong><span>AWAY · {liveByGame[game.id]?.awayRecord || '—'}</span></button>
+                      <button type="button" disabled={forfeited} aria-label={`${game.awayFull}, away, ${liveByGame[game.id]?.awayRecord || 'season record pending'}`} className={picks[game.id] === game.away ? 'selected' : ''} style={{ '--team-color': TEAM_COLORS[game.away] }} onClick={() => choosePick(game.id, game.away)}><img className="team-logo" src={getTeamLogoUrl(game.away)} alt="" loading="lazy" /><small>{game.awayFull}</small><strong>{game.away}</strong><span>AWAY · {liveByGame[game.id]?.awayRecord || '—'}</span></button>
                       <i>at</i>
-                      <button type="button" aria-label={`${game.homeFull}, home, ${liveByGame[game.id]?.homeRecord || 'season record pending'}`} className={picks[game.id] === game.home ? 'selected' : ''} style={{ '--team-color': TEAM_COLORS[game.home] }} onClick={() => choosePick(game.id, game.home)}><img className="team-logo" src={getTeamLogoUrl(game.home)} alt="" loading="lazy" /><small>{game.homeFull}</small><strong>{game.home}</strong><span>HOME · {liveByGame[game.id]?.homeRecord || '—'}</span></button>
+                      <button type="button" disabled={forfeited} aria-label={`${game.homeFull}, home, ${liveByGame[game.id]?.homeRecord || 'season record pending'}`} className={picks[game.id] === game.home ? 'selected' : ''} style={{ '--team-color': TEAM_COLORS[game.home] }} onClick={() => choosePick(game.id, game.home)}><img className="team-logo" src={getTeamLogoUrl(game.home)} alt="" loading="lazy" /><small>{game.homeFull}</small><strong>{game.home}</strong><span>HOME · {liveByGame[game.id]?.homeRecord || '—'}</span></button>
                     </div>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             </section>
 
@@ -2717,8 +2743,8 @@ function App() {
                   <small>{weekLocked ? 'Locked — good luck.' : 'Change any pick below and tap Update anytime before lock.'}</small>
                 </div>
               )}
-              <div className="slip-progress"><span>YOUR PICKS</span><strong>{Object.keys(picks).length}<small> / {currentGames.length}</small></strong></div>
-              <div className="progress-track"><span style={{ width: `${(Object.keys(picks).length / currentGames.length) * 100}%` }} /></div>
+              <div className="slip-progress"><span>{lateMode ? 'LATE SHEET · PICKS' : 'YOUR PICKS'}</span><strong>{lateOpenGames.filter((game) => picks[game.id]).length}<small> / {lateOpenGames.length}</small></strong></div>
+              <div className="progress-track"><span style={{ width: `${(lateOpenGames.filter((game) => picks[game.id]).length / Math.max(1, lateOpenGames.length)) * 100}%` }} /></div>
               {playerSession.authenticated ? (
                 <div className="slip-identity"><PlayerAvatar player={currentPlayer} size={34} /><div><strong>Locking in as {playerSession.name}</strong><small>Pulled from your profile — just set your tiebreaker</small></div></div>
               ) : (
@@ -2753,7 +2779,7 @@ function App() {
                 );
               })()}
               {!mySheet?.paid && myCredit < ENTRY_FEE && <PayOptions settings={serverLeague?.settings} amount={ENTRY_FEE} note={`405 BadGuys ${weekLabel}`} picked={payMethodUsed} onPick={setPayMethodUsed} />}
-              <button ref={submitRef} className="button button-primary full" type="button" onClick={submit} disabled={weekLocked || serverBusy === 'entry'}>{weekLocked ? '🔒 Week locked' : serverBusy === 'entry' ? 'Saving…' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
+              <button ref={submitRef} className="button button-primary full" type="button" onClick={submit} disabled={(weekLocked && !lateMode) || serverBusy === 'entry'}>{serverBusy === 'entry' ? 'Saving…' : lateMode ? <>File late sheet (commissioner) <span>→</span></> : weekLocked ? '🔒 Week locked' : mySheet ? <>Update my picks <span>→</span></> : <>Lock in picks <span>→</span></>}</button>
               <button className="ai-mini-button" type="button" onClick={analyzePicks} disabled={aiLoading === 'picks'}><span>✦</span>{aiLoading === 'picks' ? 'Reviewing…' : 'Ask Jack to check my picks'}</button>
               {aiResult.picks && <div className="ai-slip-result">{aiResult.picks}</div>}
               {aiError && <p className="error-text">{aiError}</p>}
@@ -3507,7 +3533,7 @@ function App() {
                 const toggle = () => { if (readable) setOpenSheetId((id) => (id === entry.id ? '' : entry.id)); };
                 return <div className={`standing-row ${index === 0 && completedGames ? 'leader' : ''} ${readable ? 'readable' : ''} ${open ? 'open' : ''} ${path?.status === 'eliminated' ? 'is-out' : ''}`} key={entry.id} role={readable ? 'button' : undefined} tabIndex={readable ? 0 : undefined} onClick={toggle} onKeyDown={(e) => { if (readable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(); } }}>
                   <span>#{index + 1}</span>
-                  <strong>{entry.name}{index === 0 && completedGames ? '  ♛' : ''}{path && <i className={`path-badge ${path.status}`}>{{ clinched: 'CLINCHED', won: 'WINNER', alive: 'ALIVE', on_tiebreaker: 'TB DECIDES', eliminated: 'OUT' }[path.status]}</i>}{readable && <span className="entry-caret">{open ? '▾' : '▸'}</span>}</strong>
+                  <strong>{entry.name}{index === 0 && completedGames ? '  ♛' : ''}{entry.late && <i className="path-badge late" title={`Filed after the deadline${entry.forfeitedGames?.length ? ` · ${entry.forfeitedGames.length} game${entry.forfeitedGames.length === 1 ? '' : 's'} forfeited` : ''}`}>LATE</i>}{path && <i className={`path-badge ${path.status}`}>{{ clinched: 'CLINCHED', won: 'WINNER', alive: 'ALIVE', on_tiebreaker: 'TB DECIDES', eliminated: 'OUT' }[path.status]}</i>}{readable && <span className="entry-caret">{open ? '▾' : '▸'}</span>}</strong>
                   <span>{entry.tiebreaker}{entry.tiebreakerBusted && <em className="tb-busted"> BUST</em>}{!entry.tiebreakerBusted && weekTiebreaker.total != null && <em className="tb-actual">{weekTiebreaker.total - entry.tiebreaker === 0 ? ' ✓ NAILED IT' : ` (−${weekTiebreaker.total - entry.tiebreaker})`}</em>}</span>
                   <b>{entry.score}<small> / {completedGames || '—'}</small></b>
                   {path?.reason && <span className={`path-why ${path.status}`}>{path.reason}</span>}
